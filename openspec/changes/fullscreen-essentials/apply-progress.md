@@ -139,3 +139,38 @@ Test totals (nxg-core lib): 218 after S2, 256 after S3 (+38).
 - DECAWM off also stops the kitty cursor advance from setting a pending wrap (not in the spec; needed for the invariant).
 - Wrap-pending invariant checks the active screen only; a kept dormant screen may hold a stale flag that the next switch overwrites.
 - 3.7 and 3.15: see task notes. Open for later: IL/DL at a region with DECOM are by absolute row (correct per xterm); `advance_over_image` ignores autowrap only for the pending flag.
+
+## S4 (cursor key mode, DECCKM) - implemented
+
+Branch `feat/fullscreen-essentials-s4`, stacked on S3. Tasks 4.1 to 4.4 and 4.6 to 4.10
+done. 4.5 (manual arrow-key check in vim, less and the shell) is left to the orchestrator.
+
+### TDD cycle evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 4.1 | `terminal/modes.rs` | Unit | 256/256 core | compile error (`Modes`, `modes()`) | 262 pass | defaults, set/reset, combined `?1;25h`, global across `?1049`, `alt_screen` via `?1049` and `?47`, `ESC =`/`ESC >`, RIS | mutation check: removing the RIS reset fails the test |
+| 4.2 | `terminal/mod.rs` | - | - | nothing to change: `?1` was never in the ignored list | - | - | - |
+| 4.3 | `nxgterm/src/keys.rs` | Unit | 33/33 | compile error (4th argument) | pass | arrows and Home/End on, other keys unaffected, `alt_screen` alone changes nothing, normal mode unchanged | clean |
+| 4.4 | `nxgterm/src/app.rs` | - (composition root) | - | compile error covered by 4.3 | builds | manual check 4.5 | - |
+
+Test totals: nxg-core lib 256 after S3, 262 after S4 (+6); nxgterm 33 to 40 (+2 keys tests, plus the existing ones updated for the new signature).
+
+### Verification
+
+- `cargo fmt --all --check`: clean
+- `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets`: clean
+- `cargo test --workspace`: all pass
+- `cargo +1.85 check --workspace --all-targets`: clean
+
+### Size
+
+`git diff --shortstat feat/fullscreen-essentials-s3 -- . ':!openspec'`: 6 files, 191 insertions,
+11 deletions = 202 changed lines (budget 800).
+
+### Deviations
+
+- `Modes` is defined in `modes.rs` and re-exported from `terminal/mod.rs` and `lib.rs`.
+- `Modes` includes `alt_screen`, as the design says (D10); it is derived from `alt_active`.
+- DECKPAM/DECKPNM stay accepted and ignored (spec allows it; S1 behaviour unchanged, now guarded by a modes test).
+- Modifier combinations with arrows (e.g. Ctrl+Up) are out of scope and unchanged.
