@@ -46,6 +46,9 @@ pub fn draws(term: &Terminal, layout: Layout, above: bool) -> Vec<ImageDraw> {
     let (cx, cy) = (i64::from(cx), i64::from(cy));
     let (cx1, cy1) = (cx + i64::from(cw), cy + i64::from(ch));
     let store = term.images();
+    // Placements live on screen rows: a scrolled-back viewport pushes them
+    // down with their text. History rows carry no images.
+    let scrolled = term.display_offset() as i64 * i64::from(layout.cell.height);
     let mut out: Vec<ImageDraw> = store
         .placements()
         .iter()
@@ -54,7 +57,7 @@ pub fn draws(term: &Terminal, layout: Layout, above: bool) -> Vec<ImageDraw> {
             let rect = p.pixel_rect(cell);
             let dest = PixelRect {
                 x: rect.x + i64::from(layout.padding),
-                y: rect.y + i64::from(layout.padding),
+                y: rect.y + i64::from(layout.padding) + scrolled,
                 width: rect.width.min(MAX_DEST),
                 height: rect.height.min(MAX_DEST),
             };
@@ -263,5 +266,17 @@ pub(crate) mod tests {
         let green = rgb(0, 255, 0);
         // 2x6 px image clipped to the 4px tall grid.
         assert_eq!(pixels.iter().filter(|&&p| p == green).count(), 2 * 4);
+    }
+
+    #[test]
+    fn draws_move_down_with_the_scrolled_back_viewport() {
+        let mut t = term(4, 2);
+        t.advance(b"\r\n\r\n\r\n\x1b[H");
+        show(&mut t, 1, 1, [0; 4], "");
+        assert_eq!(draws(&t, LAYOUT, true)[0].dest.y, 1);
+        t.scroll_display(1);
+        assert_eq!(draws(&t, LAYOUT, true)[0].dest.y, 3, "one cell lower");
+        t.scroll_display(1);
+        assert!(draws(&t, LAYOUT, true).is_empty(), "pushed below the grid");
     }
 }
