@@ -19,6 +19,11 @@ impl Flags {
     pub const INVERSE: Self = Self(1 << 1);
     pub const UNDERLINE: Self = Self(1 << 2);
     pub const ITALIC: Self = Self(1 << 3);
+    /// Set on the last cell of a row that autowrap continued on the next
+    /// row (a soft wrap). It lives in the cell so that it moves with the
+    /// row through scrolling and into the history, and disappears when that
+    /// cell is rewritten or erased.
+    pub const WRAPLINE: Self = Self(1 << 4);
 
     pub fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
@@ -51,6 +56,12 @@ impl Default for Cell {
             flags: Flags::default(),
         }
     }
+}
+
+/// Whether `row` continues on the next row (see [`Flags::WRAPLINE`]).
+pub fn wraps(row: &[Cell]) -> bool {
+    row.last()
+        .is_some_and(|cell| cell.flags.contains(Flags::WRAPLINE))
 }
 
 #[cfg(test)]

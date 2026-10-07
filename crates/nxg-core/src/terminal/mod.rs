@@ -385,6 +385,10 @@ impl vte::Perform for State {
     fn print(&mut self, ch: char) {
         // TODO: wide (CJK/emoji) chars occupy two cells; treated as width 1.
         if self.screen.wrap_pending {
+            let row = self.screen.grid.row_mut(self.screen.row);
+            if let Some(last) = row.last_mut() {
+                last.flags.insert(Flags::WRAPLINE);
+            }
             self.screen.col = 0;
             self.index();
         }
@@ -580,6 +584,39 @@ mod tests {
         t.advance(b"abcde");
         assert_eq!(text(&t, 0), "cd");
         assert_eq!(text(&t, 1), "e");
+    }
+
+    fn wrapped(t: &Terminal, row: u16) -> bool {
+        crate::cell::wraps(t.row(row))
+    }
+
+    #[test]
+    fn autowrap_marks_the_row_it_leaves_as_soft_wrapped() {
+        let mut t = term(3, 3);
+        t.advance(b"abcd");
+        assert!(wrapped(&t, 0), "continued on the next row");
+        assert!(!wrapped(&t, 1));
+        t.advance(b"\r\nxyz\r\n");
+        assert!(!wrapped(&t, 1), "a full row ended by CRLF is a hard break");
+        assert!(!wrapped(&t, 2));
+    }
+
+    #[test]
+    fn rewriting_or_erasing_the_last_cell_forgets_the_wrap() {
+        let mut t = term(3, 2);
+        t.advance(b"abcd\x1b[1;3Hz");
+        assert!(!wrapped(&t, 0), "overwritten in place");
+        t.advance(b"\x1b[Habcd\x1b[1;1H\x1b[K");
+        assert!(!wrapped(&t, 0), "erased");
+    }
+
+    #[test]
+    fn the_wrap_flag_scrolls_into_the_history() {
+        let mut t = term(2, 1);
+        t.advance(b"abc");
+        assert_eq!(t.scrollback_len(), 1);
+        t.scroll_display(1);
+        assert!(crate::cell::wraps(t.display_row(0)));
     }
 
     #[test]
