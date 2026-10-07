@@ -7,6 +7,7 @@ use crate::kitty::{self, Graphics};
 use crate::sixel::{self, SixelDecoder};
 use crate::{CellPixels, TermSize};
 
+mod edit;
 mod modes;
 mod screen;
 #[cfg(test)]
@@ -163,62 +164,6 @@ impl State {
         Cell {
             bg: self.pen.bg,
             ..Cell::default()
-        }
-    }
-
-    fn goto(&mut self, col: u16, row: u16) {
-        self.screen.col = col.min(self.last_col());
-        self.screen.row = row.min(self.last_row());
-        self.screen.wrap_pending = false;
-    }
-
-    fn line_feed(&mut self) {
-        if self.screen.row == self.last_row() {
-            let blank = self.blank();
-            self.screen.grid.scroll_up(blank);
-            self.images.scroll_up(1, self.cell);
-        } else {
-            self.screen.row += 1;
-        }
-        self.screen.wrap_pending = false;
-    }
-
-    /// Fills `cols` of `row` with blanks.
-    fn erase(&mut self, row: u16, cols: std::ops::Range<u16>) {
-        let blank = self.blank();
-        self.screen.grid.row_mut(row)[usize::from(cols.start)..usize::from(cols.end)].fill(blank);
-    }
-
-    fn erase_display(&mut self, mode: u16) {
-        let (col, row) = (self.screen.col, self.screen.row);
-        let cols = self.screen.grid.size().cols();
-        let rows = self.screen.grid.size().rows();
-        match mode {
-            0 => {
-                self.erase(row, col..cols);
-                (row + 1..rows).for_each(|r| self.erase(r, 0..cols));
-            }
-            1 => {
-                (0..row).for_each(|r| self.erase(r, 0..cols));
-                self.erase(row, 0..col + 1);
-            }
-            2 | 3 => {
-                (0..rows).for_each(|r| self.erase(r, 0..cols));
-                // Like kitty, a full clear removes image placements.
-                self.images.clear_placements();
-            }
-            _ => {}
-        }
-    }
-
-    fn erase_line(&mut self, mode: u16) {
-        let (col, row) = (self.screen.col, self.screen.row);
-        let cols = self.screen.grid.size().cols();
-        match mode {
-            0 => self.erase(row, col..cols),
-            1 => self.erase(row, 0..col + 1),
-            2 => self.erase(row, 0..cols),
-            _ => {}
         }
     }
 
