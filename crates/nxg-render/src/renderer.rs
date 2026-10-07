@@ -108,6 +108,33 @@ mod tests {
     }
 
     #[test]
+    fn draws_a_glyph_missing_from_the_font_from_a_fallback_face() {
+        use crate::font::parse_face;
+        use crate::test_font::box_font;
+        const ICON: char = '\u{e5ff}';
+        let primary = || Font::from_bytes(box_font(&['M'], 600), 0, None, 20.0).unwrap();
+        let fallback = parse_face(box_font(&[ICON], 600), 0).unwrap();
+        let ink = |font: Font| {
+            let mut renderer = CpuRenderer::new(Style {
+                font,
+                palette: Palette::default(),
+                padding: 0,
+            });
+            let cell = renderer.cell_size();
+            let mut term = Terminal::new(TermSize::new(1, 1).unwrap());
+            term.advance("\x1b[?25l\u{e5ff}".as_bytes());
+            let mut pixels = vec![0; (cell.width * cell.height) as usize];
+            let mut frame = Frame::new(&mut pixels, cell.width, cell.height).unwrap();
+            renderer.render(&term, &mut frame);
+            let bg = Palette::default().background;
+            pixels.iter().filter(|&&pixel| pixel != bg).count()
+        };
+        assert_eq!(ink(primary()), 0, "the primary font has no icon");
+        let with_fallback = primary().with_fallbacks(vec![fallback].into());
+        assert!(ink(with_fallback) > 0, "the fallback face draws it");
+    }
+
+    #[test]
     fn padding_shifts_the_grid_and_keeps_the_border_blank() {
         let Some(style) = style(5) else { return };
         let mut renderer = CpuRenderer::new(style);

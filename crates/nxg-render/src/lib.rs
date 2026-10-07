@@ -20,6 +20,8 @@ pub mod paint;
 pub mod palette;
 pub mod renderer;
 pub mod style;
+#[cfg(test)]
+mod test_font;
 
 pub use cpu_window::CpuWindowRenderer;
 pub use font::{Font, FontError, FontFaces};
