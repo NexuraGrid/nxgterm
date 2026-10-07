@@ -131,19 +131,21 @@ Provenance, hashes and license: [`crates/nxg-pty/winpty`](crates/nxg-pty/winpty/
 
 ## Configuration
 
-nxgterm works without a config file. To customize it, create a TOML file at:
+nxgterm reads a TOML file at:
 
 | OS | Location |
 |---|---|
 | Linux, macOS | `$XDG_CONFIG_HOME/nxgterm/nxgterm.toml`, or `~/.config/nxgterm/nxgterm.toml` |
 | Windows | `%APPDATA%\nxgterm\nxgterm.toml` |
 
-`nxgterm --config <path>` or `NXGTERM_CONFIG=<path>` uses another file
-(`--config` wins). Start from the documented defaults:
+On the first run nxgterm writes the documented defaults there (every key
+commented or set to its default), so there is a file to edit. An existing
+file is never overwritten, and a location that cannot be written only
+prints a warning. `nxgterm --print-config` prints the same documented
+defaults.
 
-```sh
-nxgterm --print-config > ~/.config/nxgterm/nxgterm.toml
-```
+`nxgterm --config <path>` or `NXGTERM_CONFIG=<path>` uses another file
+(`--config` wins); such a file is never generated.
 
 Every key is optional:
 

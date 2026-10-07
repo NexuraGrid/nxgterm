@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Deserializer};
 
 pub use color::Rgb;
-pub use path::{Platform, config_path};
+pub use path::{Platform, config_path, has_env_override};
 pub use theme::{Colors, THEMES, Theme, ThemeName};
 
 /// Smallest and largest font size accepted, in points at scale 1.0.
@@ -280,6 +280,32 @@ impl Config {
     }
 }
 
+/// Writes [`DEFAULT_CONFIG_TOML`] to `path`, creating its directories,
+/// unless a file is already there. Returns whether it was written; an
+/// existing file is never touched.
+pub fn write_default(path: &Path) -> io::Result<bool> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    // `create_new` fails instead of truncating a file created meanwhile.
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if let Err(error) = io::Write::write_all(&mut file, DEFAULT_CONFIG_TOML.as_bytes()) {
+        // Do not leave a truncated file that would load as a broken config.
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(true)
+}
+
 /// Treats an empty or blank string as absent.
 fn non_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
     let value = Option::<String>::deserialize(deserializer)?;
@@ -509,6 +535,55 @@ mod tests {
         std::fs::write(&file, "[window]\npadding = \"x\"\n").unwrap();
         let error = Config::load(&file).unwrap_err().to_string();
         assert!(error.contains(&file.display().to_string()), "{error}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "nxg-config-test-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn write_default_creates_the_file_and_its_directories() {
+        let dir = scratch_dir("write-default");
+        let file = dir.join("nested").join("nxgterm.toml");
+
+        assert!(write_default(&file).unwrap(), "created");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(text, DEFAULT_CONFIG_TOML);
+        assert_eq!(Config::load(&file).unwrap(), Some(Config::default()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_default_never_overwrites() {
+        let dir = scratch_dir("no-overwrite");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("nxgterm.toml");
+        std::fs::write(&file, "[window]\npadding = 9\n").unwrap();
+
+        assert!(!write_default(&file).unwrap(), "already there");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(text, "[window]\npadding = 9\n");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_default_reports_unwritable_locations() {
+        let dir = scratch_dir("unwritable");
+        std::fs::create_dir_all(&dir).unwrap();
+        // A regular file where the parent directory should be.
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, "").unwrap();
+
+        assert!(write_default(&blocker.join("nxgterm.toml")).is_err());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

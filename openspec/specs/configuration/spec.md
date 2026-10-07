@@ -20,10 +20,27 @@ macOS the default SHALL be `$XDG_CONFIG_HOME/nxgterm/nxgterm.toml` when
 Windows it SHALL be `%APPDATA%\nxgterm\nxgterm.toml`. When no location can
 be derived, nxgterm MUST run with defaults and without live reload.
 
+When neither `--config` nor `NXGTERM_CONFIG` is in effect and the default
+file does not exist, nxgterm MUST create its directory and write the
+`--print-config` sample there at startup, logging
+`nxgterm: wrote the default config to <path>`. An existing file MUST NOT be
+overwritten. A failure to write MUST only be reported as a warning; the
+terminal MUST still open with the defaults.
+
 #### Scenario: Relative XDG_CONFIG_HOME is ignored
 - GIVEN `XDG_CONFIG_HOME=relative/dir` and `HOME=/home/u`
 - WHEN the path is resolved on Unix
 - THEN it is `/home/u/.config/nxgterm/nxgterm.toml`
+
+#### Scenario: First run generates the file
+- GIVEN no file at the default location and no override
+- WHEN nxgterm starts
+- THEN the documented sample is written there and parses to the defaults
+
+#### Scenario: Read-only config directory
+- GIVEN a default location that cannot be written
+- WHEN nxgterm starts
+- THEN stderr shows a warning and the window opens with defaults
 
 #### Scenario: CLI wins over environment
 - GIVEN `NXGTERM_CONFIG=/a.toml`
