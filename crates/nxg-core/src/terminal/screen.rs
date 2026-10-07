@@ -117,6 +117,7 @@ impl State {
         self.autowrap = true;
         self.app_cursor_keys = false;
         self.mouse = Default::default();
+        self.bracketed_paste = false;
         self.last_char = None;
         self.sixel = None;
         self.graphics = Graphics::new();

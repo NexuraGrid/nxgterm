@@ -80,6 +80,8 @@ struct State {
     scrollback: Scrollback,
     /// Mouse reporting and alternate scroll modes.
     mouse: MouseModes,
+    /// Bracketed paste (2004). Global like the mouse modes.
+    bracketed_paste: bool,
 }
 
 impl Terminal {
@@ -104,6 +106,7 @@ impl Terminal {
                 last_char: None,
                 scrollback: Scrollback::new(DEFAULT_SCROLLBACK),
                 mouse: MouseModes::default(),
+                bracketed_paste: false,
             },
         }
     }
