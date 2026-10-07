@@ -24,7 +24,7 @@ terminal always starts: ConPTY falls back to winpty, GPU falls back to CPU.
 ## Roadmap
 
 1. Workspace skeleton and CI ✅
-2. Window + PTY + text (CPU renderer)
+2. Window + PTY + text (CPU renderer) ✅
 3. GPU renderer with automatic fallback
 4. Configuration, themes, fonts
 5. Images: Kitty graphics protocol and Sixel
