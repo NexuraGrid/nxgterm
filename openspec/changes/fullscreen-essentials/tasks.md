@@ -176,30 +176,30 @@ Spec references: `TC` = `specs/terminal-core/spec.md`, `II` = `specs/inline-imag
 
 ### Phase 5.A: Replay harness
 
-- [ ] 5.1 RED: create `crates/nxg-core/tests/replay.rs` with a parser test over a tiny inline stream: splits on `ESC ] nxg-checkpoint ; <label> BEL`, parses `expect.txt` sections (`size`, `alt`, `cursor`, `row N: "text"` trimmed-end, unlisted rows unchecked), and fails on a deliberately wrong expectation. GREEN: implement the harness using only the public API (`advance`, `row`, `cursor`, `modes`)
-- [ ] 5.2 RED: add a hand-made fixture `tests/fixtures/mini/{stream.vt,expect.txt}` (shell lines, `?1049h`, draw, `?1049l`, `[end]` asserting shell lines restored). GREEN: harness passes it
-- [ ] 5.3 RED: guard tests in `replay.rs`: every fixture file under 64 KiB; none contains `/home/`, `/Users/`, `C:\Users`, the capture user or hostname. GREEN: add the scan (the scan must fail on a planted bad fixture in a unit test of the scanner itself)
+- [x] 5.1 RED: create `crates/nxg-core/tests/replay.rs` with a parser test over a tiny inline stream: splits on `ESC ] nxg-checkpoint ; <label> BEL`, parses `expect.txt` sections (`size`, `alt`, `cursor`, `row N: "text"` trimmed-end, unlisted rows unchecked), and fails on a deliberately wrong expectation. GREEN: implement the harness using only the public API (`advance`, `row`, `cursor`, `modes`)
+- [x] 5.2 RED: add a hand-made fixture `tests/fixtures/mini/{stream.vt,expect.txt}` (shell lines, `?1049h`, draw, `?1049l`, `[end]` asserting shell lines restored). GREEN: harness passes it
+- [x] 5.3 RED: guard tests in `replay.rs`: every fixture file under 64 KiB; none contains `/home/`, `/Users/`, `C:\Users`, the capture user or hostname. GREEN: add the scan (the scan must fail on a planted bad fixture in a unit test of the scanner itself)
 
 ### Phase 5.B: Capture tool
 
-- [ ] 5.4 Resolve the open question: confirm whether `nxg-pty` exposes env and size control; if not, use `portable-pty` directly inside the example (no new crate, builds on 1.85)
-- [ ] 5.5 RED: unit tests (inside the example, `#[cfg(test)]`) for the pure parts: script parsing (keystrokes, delays, `mark <label>`) and same-length scrubbing of `$HOME`, `$USER`, hostname and cwd (column positions preserved). GREEN: implement `crates/nxg-pty/examples/capture.rs` (spawns the developer-chosen program at 80x24 with `TERM=xterm-256color`, writes `stream.vt` with checkpoint markers). Dev-only, never built into the product
-- [ ] 5.6 Capture fixtures (manual, Linux): `vim -u NONE`, `less`, `yazi` with scripted keystrokes into `tests/fixtures/{vim,less,yazi}/{stream.vt,expect.txt}`; htop skipped (not installed). Review captured bytes for leaked paths or hostnames
-- [ ] 5.7 RED: replay tests for vim, less and yazi asserting mid-run checkpoints (alt true, cursor, listed rows) and `[end]` (main screen restored, alt false) (TC "Replay vim session"). GREEN: fix any terminal deviations found, each with a minimal regression test in the owning module; if a deviation is out of scope, record it instead
+- [x] 5.4 Resolve the open question: confirm whether `nxg-pty` exposes env and size control; if not, use `portable-pty` directly inside the example (no new crate, builds on 1.85) — nxg-pty fixes TERM/size inside its own spawn and exposes no env control; the example uses `portable-pty` directly
+- [x] 5.5 RED: unit tests (inside the example, `#[cfg(test)]`) for the pure parts: script parsing (keystrokes, delays, `mark <label>`) and same-length scrubbing of `$HOME`, `$USER`, hostname and cwd (column positions preserved). GREEN: implement `crates/nxg-pty/examples/capture.rs` (spawns the developer-chosen program at 80x24 with `TERM=xterm-256color`, writes `stream.vt` with checkpoint markers). Dev-only, never built into the product
+- [x] 5.6 Capture fixtures (manual, Linux): `vim -u NONE`, `less`, `yazi` with scripted keystrokes into `tests/fixtures/{vim,less,yazi}/{stream.vt,expect.txt}`; htop skipped (not installed). Review captured bytes for leaked paths or hostnames — vim, less and yazi captured (80x24, isolated HOME/config, dummy dir); htop not installed
+- [x] 5.7 RED: replay tests for vim, less and yazi asserting mid-run checkpoints (alt true, cursor, listed rows) and `[end]` (main screen restored, alt false) (TC "Replay vim session"). GREEN: fix any terminal deviations found, each with a minimal regression test in the owning module; if a deviation is out of scope, record it instead
 
 ### Phase 5.C: Specs record and vttest
 
-- [ ] 5.8 Run vttest menus 1 and 2 if available on the dev machine (installation is out of scope; if absent, record that and skip). Write results and known deviations into `openspec/changes/fullscreen-essentials/vttest-notes.md` (deviations are recorded, not blocking)
-- [ ] 5.9 Reconcile spec deltas with observed behaviour: adjust `specs/terminal-core/spec.md` and `specs/inline-images/spec.md` only where tests proved a difference (spec changes merge at archive)
+- [x] 5.8 Run vttest menus 1 and 2 if available on the dev machine (installation is out of scope; if absent, record that and skip). Write results and known deviations into `openspec/changes/fullscreen-essentials/vttest-notes.md` (deviations are recorded, not blocking) — vttest not available on the dev machine, not run; known deviations in `vttest-notes.md`
+- [x] 5.9 Reconcile spec deltas with observed behaviour: adjust `specs/terminal-core/spec.md` and `specs/inline-images/spec.md` only where tests proved a difference (spec changes merge at archive) — three clarifications in `specs/terminal-core/spec.md` (see apply-progress); inline-images unchanged
 
 ### Phase 5.D: Verification (S5)
 
-- [ ] 5.10 Run `cargo fmt --all --check`
-- [ ] 5.11 Run `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets` (includes the capture example)
-- [ ] 5.12 Run `cargo test --workspace`
-- [ ] 5.13 Run `cargo +1.85 check --workspace --all-targets`
-- [ ] 5.14 Manual real-window check on Linux (final): run `vim -u NONE`, `less` and `yazi` in nxgterm; render correctly, arrows work, and after quitting the previous shell lines and cursor are intact. Record the result in the PR description
-- [ ] 5.15 Confirm the S5 diff is under 800 changed lines excluding fixtures
+- [x] 5.10 Run `cargo fmt --all --check`
+- [x] 5.11 Run `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets` (includes the capture example)
+- [x] 5.12 Run `cargo test --workspace`
+- [x] 5.13 Run `cargo +1.85 check --workspace --all-targets`
+- [x] 5.14 Manual real-window check on Linux (final): run `vim -u NONE`, `less` and `yazi` in nxgterm; render correctly, arrows work, and after quitting the previous shell lines and cursor are intact. Record the result in the PR description — verified 2026-10-07 on KDE Plasma Wayland: vim, less and yazi render and restore the shell on exit; arrows verified by the user (S4); yazi icons render as missing glyphs (Recommendation #8, out of scope)
+- [x] 5.15 Confirm the S5 diff is under 800 changed lines excluding fixtures — 690 code lines (excluding openspec/ and fixtures)
 
 **PR boundary: S5 ends here.**
 

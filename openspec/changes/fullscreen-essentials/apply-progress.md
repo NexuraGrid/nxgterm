@@ -174,3 +174,77 @@ Test totals: nxg-core lib 256 after S3, 262 after S4 (+6); nxgterm 33 to 40 (+2 
 - `Modes` includes `alt_screen`, as the design says (D10); it is derived from `alt_active`.
 - DECKPAM/DECKPNM stay accepted and ignored (spec allows it; S1 behaviour unchanged, now guarded by a modes test).
 - Modifier combinations with arrows (e.g. Ctrl+Up) are out of scope and unchanged.
+
+## S5 (replay harness, capture tool, specs record, vttest) - implemented
+
+Branch `feat/fullscreen-essentials-s5`, stacked on S4. Tasks 5.1 to 5.13 and 5.15 done.
+5.14 (final manual real-window check of vim, less and yazi in nxgterm) is left to the
+orchestrator/user.
+
+### TDD cycle evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 5.1 | `nxg-core/tests/replay.rs` | Integration | N/A (new) | compile error (20 errors: `split_stream`, `parse_expect`, `replay`, ...) | 12 pass after fixing one wrong test expectation (cursor column on the alt screen) | markers (3 segments, none, unterminated), every directive, garbage input, matching vs 4 wrong expectations, unlisted rows, never-reached section, `[end]` tail | `if let && ...` rewritten to `differs()` because let chains need Rust 1.88 (caught by `cargo +1.85`) |
+| 5.1b | same | Integration | green | compile error (`visible` field) | pass | `visible` directive parsed and checked | - |
+| 5.2 | `tests/fixtures/mini` | Integration | green | fixture written before the harness existed (fails to compile) | pass | alt content, restored main rows, cursor | one fixture expectation corrected by hand (cursor 5,2 not 7,2) |
+| 5.3 | `replay.rs` | Guard | green | compile error (`find_forbidden`, `forbidden_needles`) | pass | planted `/home/`, `/Users/`, `C:\Users`, custom host, clean text; real fixtures scanned (>= 8 files so the guard cannot check nothing) | - |
+| 5.4 | - | - | - | resolved: `nxg-pty` has a fixed `CHILD_ENV` and no env/cwd/size parameter, so the example uses `portable-pty` directly | - | - | - |
+| 5.5 | `nxg-pty/examples/capture.rs` | Unit | N/A (new) | compile error (15 errors) | 5 pass after requiring exactly two hex digits in `\xNN` (test found it) | script directives, bad scripts, every escape, scrub length/longest-first/empty needles | later `tails()` helper added test-first (left-truncated paths) |
+| 5.6 | fixtures `vim`, `less`, `yazi` | Capture | - | - | captured | vim 3437 B, less 1884 B, yazi 2200 B | see leaks below |
+| 5.7 | `replay.rs` | Integration | green | 3 failures (missing `expect.txt`) | 16 pass | mid-run checkpoints plus `[end]` for each app | mutation check: removing `?1049l` from the vim stream makes `[end]` show `alt=true` (verified with a throwaway dump) |
+| 5.8, 5.9 | docs | - | - | - | - | - | - |
+
+Test totals: nxg-core integration `replay` 0 to 16; nxg-pty example `capture` 0 to 6.
+
+### Capture details
+
+- Programs ran through a tiny `sh` wrapper (printing two shell lines before and one after) so
+  `[end]` can assert the main screen is restored. Wrappers and dummy files live in the session
+  scratchpad, not in the repo.
+- vim: `-u NONE -N -n -i NONE`, HOME isolated. less: `LESS=` `LESSHISTFILE=-`, HOME isolated.
+  yazi 26.9.1: empty `YAZI_CONFIG_HOME`, XDG dirs and HOME in a temp dir, cwd a temp dir
+  with `alpha.txt`, `beta.md`, `gamma.rs` and `subdir`.
+- yazi did stall-free once the capture example answered its terminal queries with a real
+  `nxg_core::Terminal` (`take_responses`), so no fake replies were needed.
+- Leaks found and fixed in the tool: (1) the 3-letter hostname scrubbed inside ordinary text
+  ("development"), so names shorter than 4 bytes are skipped on both sides (the guard uses the
+  same threshold); (2) yazi truncates the cwd on the left (`...nre-Proyects-...`), so the scrubber
+  now also replaces every tail of HOME/cwd of 8+ bytes. Final scan: no `inre`, `/home`, `claude`,
+  `scratchpad` or `Proyects` in any fixture.
+- No terminal deviation was found by the three replays, so no core fix was needed.
+- The yazi fixture contains two private-use icon glyphs (U+F48A, U+E68B) in `expect.txt`.
+  They come from yazi's built-in nerd-font icons for `.md` and `.rs` files.
+
+### Spec adjustments (5.9), `specs/terminal-core/spec.md` only
+
+Only where S1 to S3 tests proved a difference or a detail the spec left open:
+1. Save/restore: `CSI s`/`CSI u` act only without params and intermediates; `CSI ? u`, `CSI > u`,
+   `CSI 1 s` are ignored (task 1.8 tests). DECRC does not restore a pending wrap while DECAWM is
+   reset (S3 invariant-fuzz bug, regression test in `screen.rs`).
+2. Repeat: REP is capped at one screenful and is a no-op after any control/CSI/ESC (task 3.4 tests).
+3. Printing: with DECAWM reset there is no pending wrap even when a kitty image advances the
+   cursor (S3 regression test in `mod.rs`).
+`inline-images/spec.md`: no change; the replay and unit tests agree with it.
+
+### Verification
+
+- `cargo fmt --all --check`: clean
+- `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets`: clean (includes the example)
+- `cargo test --workspace`: all pass (nxg-core 262 lib + 16 replay, nxg-pty example 6, nxgterm 40)
+- `cargo +1.85 check --workspace --all-targets`: clean after removing let chains from `replay.rs`
+
+### Size
+
+`git diff --shortstat feat/fullscreen-essentials-s4 -- . ':!openspec' ':!crates/nxg-core/tests/fixtures'`:
+5 insertions (`nxg-pty/Cargo.toml`) plus untracked `replay.rs` 396 and `capture.rs` 289 = 690 changed
+lines of code (budget 800). Fixtures: 9292 bytes total, each file under 3.5 KiB.
+
+### Deviations
+
+- `replay.rs` adds a `visible` directive (cursor visibility) beyond the design's list, because a
+  restored cursor after the app exits is part of what these fixtures prove.
+- The `[end]` checkpoint is the tail of the stream (after the last marker), not a marker.
+- `capture.rs` is declared as an `[[example]]` with `test = true` so its pure parts run in
+  `cargo test --workspace`.
+- The `vttest` run was skipped (not installed); see `vttest-notes.md`.

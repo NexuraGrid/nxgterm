@@ -35,7 +35,10 @@ Main-screen content MUST be untouched while the alternate screen is active.
 DECSC (`ESC 7`, `CSI s`) MUST save, per screen, column, row, pen (SGR
 attributes), pending-wrap flag and origin mode. DECRC (`ESC 8`, `CSI u`)
 MUST restore them. DECRC without a prior save MUST move to home with the
-default pen and reset origin mode.
+default pen and reset origin mode. `CSI s` and `CSI u` act only with no
+parameters and no intermediates; `CSI ? u`, `CSI > u` (kitty keyboard) and
+`CSI 1 s` MUST be ignored. DECRC MUST NOT restore a pending wrap while DECAWM
+is reset.
 
 #### Scenario: Pen is restored
 - GIVEN bold red text, then `ESC 7`, then `CSI 0 m` and `CSI 5;5 H`
@@ -86,7 +89,9 @@ cells at the cursor within the line, filling with blanks that keep the pen
 background. IL (`CSI L`) and DL (`CSI M`) MUST insert or delete lines at the
 cursor row within the region and move the cursor to column 0; they MUST do
 nothing when the cursor is outside the region. REP (`CSI b`) MUST repeat the
-last printed character n times.
+last printed character n times, capped at one screenful (columns x rows) so
+a hostile count cannot stall the terminal; it does nothing when no character
+was printed since the last control or escape sequence.
 
 #### Scenario: Insert characters
 - GIVEN `abcd` on a 5-column row, cursor at column 1
@@ -169,7 +174,8 @@ Printable characters MUST be written at the cursor with the current pen
 (colors and flags). With DECAWM (`CSI ? 7 h/l`, default set), printing in
 the last column MUST leave the cursor there with a pending wrap; the next
 print wraps to column 0 of the next line. With DECAWM reset, there is no
-wrap: the last column is overwritten. `CR` MUST move to column 0 and cancel
+wrap and no pending wrap (including after an image advances the cursor): the
+last column is overwritten. `CR` MUST move to column 0 and cancel
 a pending wrap. `LF`, `VT` and `FF` MUST move down one row keeping the
 column; at the bottom margin they MUST scroll only the scroll region (the
 whole grid when no region is set), filling the new row with blanks that keep
