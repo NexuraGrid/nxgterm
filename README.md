@@ -205,19 +205,29 @@ the defaults are used instead.
 | `Ctrl+Shift+T` / `Ctrl+Shift+W` | `new_tab` / `close_tab` |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | `next_tab` / `previous_tab` |
 | `Alt+1` ... `Alt+9` | `goto_tab_1` ... `goto_tab_9` |
-| `Ctrl+Shift+P` | `command_palette` |
+| `Ctrl+Shift+P` | `command_palette`: list and run every action |
 | (unbound) | `reload_config` |
 
 Bound keys are handled by the terminal and never reach the shell (the
 scrolling keys still do in full-screen programs, which have no history).
-The command palette is not implemented yet; its key is reserved. Change
-them in `[keybindings]` with `"chord" = "action"`: a chord
+Change them in `[keybindings]` with `"chord" = "action"`: a chord
 is modifiers (`ctrl`, `alt`, `shift`, `super`/`cmd`) and one key joined
 with `+` in any order and case, where the key is a character, `f1`-`f24`,
 `tab`, `enter`, `escape`, `space`, `backspace`, `delete`, `insert`, `home`,
 `end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`, `plus`, `minus`
 or `equal`. Map a default chord to `"none"` to unbind it. Invalid chords and
 unknown actions are reported like any other config error.
+
+### Command palette
+
+`Ctrl+Shift+P` opens a box over the terminal listing every action with its
+current shortcut (from the defaults and `[keybindings]`), so it doubles as
+an index of the key bindings. Type to filter by title, category or action
+name (fuzzy, case-insensitive); `Up`/`Down` (or `Ctrl+P`/`Ctrl+N`),
+`PageUp`/`PageDown`, `Home`/`End` and the mouse wheel move the selection;
+`Enter` or a click runs it. `Escape`, `Ctrl+Shift+P` again or a click
+outside the box closes it. While it is open, keys and the mouse do not
+reach the shell; its output keeps showing underneath.
 
 ### Tabs
 
