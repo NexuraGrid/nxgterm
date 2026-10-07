@@ -96,6 +96,7 @@ impl Screen {
 
 impl State {
     pub fn resize(&mut self, size: TermSize) {
+        self.selection = None;
         self.scrollback.offset = 0;
         self.screen.resize(size);
         if let Some(dormant) = &mut self.dormant {
@@ -118,6 +119,7 @@ impl State {
         self.app_cursor_keys = false;
         self.mouse = Default::default();
         self.bracketed_paste = false;
+        self.selection = None;
         self.last_char = None;
         self.sixel = None;
         self.graphics = Graphics::new();
@@ -147,6 +149,7 @@ impl State {
         }
         // The alternate screen has no history to look at.
         self.scrollback.offset = 0;
+        self.selection = None;
         let mut alt = match self.dormant.take() {
             Some(kept) if !fresh => kept,
             _ => Box::new(Screen::new(self.screen.grid.size())),
@@ -173,6 +176,7 @@ impl State {
             return;
         };
         main.carry_cursor_from(&self.screen);
+        self.selection = None;
         std::mem::swap(&mut self.screen, &mut *main);
         self.dormant = keep.then_some(main);
         self.alt_active = false;

@@ -20,6 +20,9 @@ pub(super) struct Scrollback {
     /// screen; a resize does not rewrap it.
     lines: VecDeque<Box<[Cell]>>,
     limit: usize,
+    /// Lines ever dropped from the front (or never kept, with a zero
+    /// limit); the absolute number of the oldest line kept.
+    pub dropped: u64,
     /// Rows the viewport is scrolled back; 0 shows the live screen. Never
     /// more than `lines.len()`.
     pub offset: usize,
@@ -30,6 +33,7 @@ impl Scrollback {
         Self {
             lines: VecDeque::new(),
             limit,
+            dropped: 0,
             offset: 0,
         }
     }
@@ -45,10 +49,12 @@ impl Scrollback {
 
     pub fn push(&mut self, line: &[Cell]) {
         if self.limit == 0 {
+            self.dropped += 1;
             return;
         }
         if self.lines.len() == self.limit {
             self.lines.pop_front();
+            self.dropped += 1;
         }
         self.lines.push_back(line.into());
     }
@@ -57,11 +63,13 @@ impl Scrollback {
         self.limit = limit;
         let excess = self.lines.len().saturating_sub(limit);
         self.lines.drain(..excess);
+        self.dropped += excess as u64;
         self.offset = self.offset.min(self.lines.len());
     }
 
     /// Forgets every line (ED 3, RIS); the limit stays.
     pub fn clear(&mut self) {
+        self.dropped += self.lines.len() as u64;
         self.lines.clear();
         self.offset = 0;
     }
@@ -128,14 +136,23 @@ impl State {
     /// Scrolls like [`State::scroll_up`], first saving the rows that leave
     /// the top of the main screen. Only IND/LF and SU save, as in xterm; DL
     /// discards.
+    ///
+    /// Saved rows keep their absolute line numbers, so a selection over
+    /// them stays; rows below a partial region do not move but their
+    /// numbers do, so then a selection on the screen is cleared.
     pub(super) fn scroll_up_saving(&mut self, top: u16, bottom: u16, n: u16) {
-        if top == 0 && !self.alt_active {
-            let n = n.min(bottom - top + 1);
-            for row in 0..n {
-                self.scrollback.push(self.screen.grid.row(row));
-            }
+        if top != 0 || self.alt_active {
+            self.scroll_up(top, bottom, n);
+            return;
         }
-        self.scroll_up(top, bottom, n);
+        if bottom != self.last_row() {
+            self.damage(0, self.last_row());
+        }
+        let n = n.min(bottom - top + 1);
+        for row in 0..n {
+            self.scrollback.push(self.screen.grid.row(row));
+        }
+        self.move_rows_up(top, bottom, n);
     }
 }
 

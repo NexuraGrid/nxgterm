@@ -58,6 +58,13 @@ impl State {
     /// one entry point for scrolling; [`State::scroll_up_saving`] wraps it
     /// for the operations that feed the scrollback.
     pub(super) fn scroll_up(&mut self, top: u16, bottom: u16, n: u16) {
+        self.damage(top, bottom);
+        self.move_rows_up(top, bottom, n);
+    }
+
+    /// [`State::scroll_up`] without touching the selection, for scrolls
+    /// that keep every line's absolute number.
+    pub(super) fn move_rows_up(&mut self, top: u16, bottom: u16, n: u16) {
         let n = n.min(bottom - top + 1);
         let blank = self.blank();
         self.screen.grid.scroll_up_in(top, bottom, n, blank);
@@ -72,6 +79,7 @@ impl State {
 
     /// Mirror of [`State::scroll_up`].
     pub(super) fn scroll_down(&mut self, top: u16, bottom: u16, n: u16) {
+        self.damage(top, bottom);
         let n = n.min(bottom - top + 1);
         let blank = self.blank();
         self.screen.grid.scroll_down_in(top, bottom, n, blank);
@@ -160,6 +168,7 @@ impl State {
     pub(super) fn insert_chars(&mut self, n: u16) {
         let blank = self.blank();
         let (col, row) = (self.screen.col, self.screen.row);
+        self.damage(row, row);
         self.screen.grid.insert_cells(row, col, n, blank);
         self.screen.wrap_pending = false;
     }
@@ -168,6 +177,7 @@ impl State {
     pub(super) fn delete_chars(&mut self, n: u16) {
         let blank = self.blank();
         let (col, row) = (self.screen.col, self.screen.row);
+        self.damage(row, row);
         self.screen.grid.delete_cells(row, col, n, blank);
         self.screen.wrap_pending = false;
     }
@@ -177,6 +187,7 @@ impl State {
         let blank = self.blank();
         let (col, row) = (self.screen.col, self.screen.row);
         let cols = col..col.saturating_add(n);
+        self.damage(row, row);
         self.screen.grid.erase_cells(row, cols.clone(), blank);
         self.images.remove_sixels_over(row, cols, self.cell);
         self.screen.wrap_pending = false;
@@ -216,6 +227,7 @@ impl State {
 
     /// Fills `cols` of `row` with blanks, removing the sixels under them.
     pub(super) fn erase(&mut self, row: u16, cols: std::ops::Range<u16>) {
+        self.damage(row, row);
         let blank = self.blank();
         self.screen.grid.row_mut(row)[usize::from(cols.start)..usize::from(cols.end)].fill(blank);
         self.images.remove_sixels_over(row, cols, self.cell);
@@ -239,6 +251,7 @@ impl State {
                 // Like kitty, a full clear removes image placements.
                 self.images.clear_placements();
                 if mode == 3 {
+                    self.selection = None;
                     self.scrollback.clear();
                 }
             }

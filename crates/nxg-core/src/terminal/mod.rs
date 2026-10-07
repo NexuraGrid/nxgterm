@@ -11,6 +11,7 @@ mod edit;
 mod modes;
 mod screen;
 mod scrollback;
+mod selection;
 #[cfg(test)]
 mod testing;
 
@@ -82,6 +83,8 @@ struct State {
     mouse: MouseModes,
     /// Bracketed paste (2004). Global like the mouse modes.
     bracketed_paste: bool,
+    /// The text selection, in absolute lines; see the `selection` module.
+    selection: Option<selection::Selected>,
 }
 
 impl Terminal {
@@ -107,6 +110,7 @@ impl Terminal {
                 scrollback: Scrollback::new(DEFAULT_SCROLLBACK),
                 mouse: MouseModes::default(),
                 bracketed_paste: false,
+                selection: None,
             },
         }
     }
@@ -393,6 +397,7 @@ impl vte::Perform for State {
             self.index();
         }
         let (col, row) = (self.screen.col, self.screen.row);
+        self.damage(row, row);
         self.screen.grid.row_mut(row)[usize::from(col)] = Cell { ch, ..self.pen };
         self.images.remove_sixels_over(row, col..col + 1, self.cell);
         self.last_char = Some(ch);

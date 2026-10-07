@@ -11,6 +11,7 @@ pub mod image;
 pub mod kitty;
 pub mod mouse;
 pub mod ports;
+pub mod selection;
 pub mod sixel;
 pub mod size;
 pub mod terminal;
