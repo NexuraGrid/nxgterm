@@ -3,6 +3,32 @@
 use crate::TermSize;
 use crate::cell::Cell;
 
+/// An inclusive range of rows (a scroll region). Valid regions keep
+/// `top < bottom < rows`; anything else means the whole screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Region {
+    pub top: u16,
+    pub bottom: u16,
+}
+
+impl Region {
+    /// The region covering all `rows` rows.
+    pub fn full(rows: u16) -> Self {
+        Self {
+            top: 0,
+            bottom: rows.saturating_sub(1),
+        }
+    }
+
+    pub fn is_full(self, rows: u16) -> bool {
+        self == Self::full(rows)
+    }
+
+    pub fn contains(self, row: u16) -> bool {
+        (self.top..=self.bottom).contains(&row)
+    }
+}
+
 /// A `cols x rows` grid stored row-major.
 #[derive(Debug, Clone)]
 pub struct Grid {
@@ -69,6 +95,25 @@ mod tests {
 
     fn put(grid: &mut Grid, col: u16, row: u16, ch: char) {
         grid.row_mut(row)[col as usize].ch = ch;
+    }
+
+    #[test]
+    fn full_region_spans_every_row() {
+        let region = Region::full(5);
+        assert_eq!((region.top, region.bottom), (0, 4));
+        assert!(region.is_full(5));
+        assert!(
+            !region.is_full(6),
+            "a stale region is not full after growth"
+        );
+        assert!(!Region { top: 1, bottom: 4 }.is_full(5));
+    }
+
+    #[test]
+    fn region_contains_is_inclusive() {
+        let region = Region { top: 1, bottom: 3 };
+        let inside: Vec<u16> = (0..5).filter(|&r| region.contains(r)).collect();
+        assert_eq!(inside, [1, 2, 3]);
     }
 
     #[test]

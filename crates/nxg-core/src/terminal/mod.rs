@@ -2,11 +2,17 @@
 
 use crate::apc::{ApcFilter, Event};
 use crate::cell::{Cell, Color, Flags};
-use crate::grid::Grid;
 use crate::image::{ImageStore, Placement, SrcRect};
 use crate::kitty::{self, Graphics};
 use crate::sixel::{self, SixelDecoder};
 use crate::{CellPixels, TermSize};
+
+mod modes;
+mod screen;
+#[cfg(test)]
+mod testing;
+
+use screen::Screen;
 
 /// Cursor position (zero-based) and visibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,11 +42,16 @@ impl std::fmt::Debug for Terminal {
 /// Everything the parser mutates; split from the parser to satisfy borrows.
 #[derive(Debug)]
 struct State {
-    grid: Grid,
-    cursor: Cursor,
+    /// The screen being shown and driven.
+    screen: Screen,
+    /// The other screen: the main one while the alternate is active, else
+    /// the alternate kept by `?47` (if any).
+    dormant: Option<Box<Screen>>,
+    alt_active: bool,
+    /// Global like in xterm: a full-screen app hiding the cursor must not
+    /// leave the shell's hidden after it exits.
+    cursor_visible: bool,
     pen: Cell,
-    /// Set after printing in the last column; the next print wraps first.
-    wrap_pending: bool,
     /// Replies to queries, waiting to be written to the child.
     responses: Vec<u8>,
     /// Pixel size of a cell, for image geometry and size reports.
@@ -59,14 +70,11 @@ impl Terminal {
             filter: ApcFilter::new(),
             parser: vte::Parser::new(),
             state: State {
-                grid: Grid::new(size),
-                cursor: Cursor {
-                    col: 0,
-                    row: 0,
-                    visible: true,
-                },
+                screen: Screen::new(size),
+                dormant: None,
+                alt_active: false,
+                cursor_visible: true,
                 pen: Cell::default(),
-                wrap_pending: false,
                 responses: Vec::new(),
                 cell: CellPixels::default(),
                 images: ImageStore::default(),
@@ -96,19 +104,20 @@ impl Terminal {
     }
 
     pub fn resize(&mut self, size: TermSize) {
-        let state = &mut self.state;
-        state.grid.resize(size);
-        state.cursor.col = state.cursor.col.min(size.cols() - 1);
-        state.cursor.row = state.cursor.row.min(size.rows() - 1);
-        state.wrap_pending = false;
+        self.state.resize(size);
     }
 
     pub fn size(&self) -> TermSize {
-        self.state.grid.size()
+        self.state.screen.grid.size()
     }
 
     pub fn cursor(&self) -> Cursor {
-        self.state.cursor
+        let screen = &self.state.screen;
+        Cursor {
+            col: screen.col,
+            row: screen.row,
+            visible: self.state.cursor_visible,
+        }
     }
 
     /// Bytes the terminal must send back to the child (e.g. replies to
@@ -119,7 +128,7 @@ impl Terminal {
 
     /// The cells of `row`. Panics if `row` is out of bounds.
     pub fn row(&self, row: u16) -> &[Cell] {
-        self.state.grid.row(row)
+        self.state.screen.grid.row(row)
     }
 
     /// Sets the pixel size of a cell; the app calls this whenever the
@@ -142,11 +151,11 @@ const TAB_WIDTH: u16 = 8;
 
 impl State {
     fn last_col(&self) -> u16 {
-        self.grid.size().cols() - 1
+        self.screen.grid.size().cols() - 1
     }
 
     fn last_row(&self) -> u16 {
-        self.grid.size().rows() - 1
+        self.screen.grid.size().rows() - 1
     }
 
     /// Blank cell used by erase operations (keeps the pen background).
@@ -158,32 +167,32 @@ impl State {
     }
 
     fn goto(&mut self, col: u16, row: u16) {
-        self.cursor.col = col.min(self.last_col());
-        self.cursor.row = row.min(self.last_row());
-        self.wrap_pending = false;
+        self.screen.col = col.min(self.last_col());
+        self.screen.row = row.min(self.last_row());
+        self.screen.wrap_pending = false;
     }
 
     fn line_feed(&mut self) {
-        if self.cursor.row == self.last_row() {
+        if self.screen.row == self.last_row() {
             let blank = self.blank();
-            self.grid.scroll_up(blank);
+            self.screen.grid.scroll_up(blank);
             self.images.scroll_up(1, self.cell);
         } else {
-            self.cursor.row += 1;
+            self.screen.row += 1;
         }
-        self.wrap_pending = false;
+        self.screen.wrap_pending = false;
     }
 
     /// Fills `cols` of `row` with blanks.
     fn erase(&mut self, row: u16, cols: std::ops::Range<u16>) {
         let blank = self.blank();
-        self.grid.row_mut(row)[usize::from(cols.start)..usize::from(cols.end)].fill(blank);
+        self.screen.grid.row_mut(row)[usize::from(cols.start)..usize::from(cols.end)].fill(blank);
     }
 
     fn erase_display(&mut self, mode: u16) {
-        let Cursor { col, row, .. } = self.cursor;
-        let cols = self.grid.size().cols();
-        let rows = self.grid.size().rows();
+        let (col, row) = (self.screen.col, self.screen.row);
+        let cols = self.screen.grid.size().cols();
+        let rows = self.screen.grid.size().rows();
         match mode {
             0 => {
                 self.erase(row, col..cols);
@@ -203,8 +212,8 @@ impl State {
     }
 
     fn erase_line(&mut self, mode: u16) {
-        let Cursor { col, row, .. } = self.cursor;
-        let cols = self.grid.size().cols();
+        let (col, row) = (self.screen.col, self.screen.row);
+        let cols = self.screen.grid.size().cols();
         match mode {
             0 => self.erase(row, col..cols),
             1 => self.erase(row, 0..col + 1),
@@ -220,7 +229,7 @@ impl State {
         };
         let mut ctx = kitty::Context {
             store: &mut self.images,
-            cursor: (u32::from(self.cursor.col), i32::from(self.cursor.row)),
+            cursor: (u32::from(self.screen.col), i32::from(self.screen.row)),
             cell: self.cell,
         };
         let outcome = self.graphics.handle(body, &mut ctx);
@@ -236,17 +245,17 @@ impl State {
     /// `rows - 1` (scrolling as needed). Past the right edge the cursor
     /// waits in the last column to wrap on the next print.
     fn advance_over_image(&mut self, cols: u32, rows: u32) {
-        let rows = rows.min(u32::from(self.grid.size().rows()));
+        let rows = rows.min(u32::from(self.screen.grid.size().rows()));
         for _ in 1..rows {
             self.line_feed();
         }
-        let col = u32::from(self.cursor.col).saturating_add(cols);
+        let col = u32::from(self.screen.col).saturating_add(cols);
         if col > u32::from(self.last_col()) {
-            self.cursor.col = self.last_col();
-            self.wrap_pending = true;
+            self.screen.col = self.last_col();
+            self.screen.wrap_pending = true;
         } else {
-            self.cursor.col = col as u16;
-            self.wrap_pending = false;
+            self.screen.col = col as u16;
+            self.screen.wrap_pending = false;
         }
     }
 
@@ -263,7 +272,7 @@ impl State {
             return;
         };
         let (col, row) = if self.sixel_scrolling {
-            (self.cursor.col, self.cursor.row)
+            (self.screen.col, self.screen.row)
         } else {
             (0, 0)
         };
@@ -286,7 +295,7 @@ impl State {
         });
         if self.sixel_scrolling {
             let rows = self.cell.rows_for(height);
-            for _ in 0..rows.min(u32::from(self.grid.size().rows())) {
+            for _ in 0..rows.min(u32::from(self.screen.grid.size().rows())) {
                 self.line_feed();
             }
         }
@@ -294,7 +303,7 @@ impl State {
 
     /// XTWINOPS size reports (`CSI 14/16/18 t`).
     fn window_report(&mut self, what: u16) {
-        let size = self.grid.size();
+        let size = self.screen.grid.size();
         let (width, height) = self.cell.text_area(size);
         let reply = match what {
             14 => format!("\x1b[4;{height};{width}t"),
@@ -311,7 +320,7 @@ impl State {
         let reply = match item {
             1 => "\x1b[?1;0;256S".to_owned(),
             2 => {
-                let (w, h) = self.cell.text_area(self.grid.size());
+                let (w, h) = self.cell.text_area(self.screen.grid.size());
                 let (w, h) = (w.min(sixel::MAX_SIZE), h.min(sixel::MAX_SIZE));
                 format!("\x1b[?2;0;{w};{h}S")
             }
@@ -400,27 +409,27 @@ fn byte(value: u16) -> u8 {
 impl vte::Perform for State {
     fn print(&mut self, ch: char) {
         // TODO: wide (CJK/emoji) chars occupy two cells; treated as width 1.
-        if self.wrap_pending {
-            self.cursor.col = 0;
+        if self.screen.wrap_pending {
+            self.screen.col = 0;
             self.line_feed();
         }
-        let Cursor { col, row, .. } = self.cursor;
-        self.grid.row_mut(row)[usize::from(col)] = Cell { ch, ..self.pen };
+        let (col, row) = (self.screen.col, self.screen.row);
+        self.screen.grid.row_mut(row)[usize::from(col)] = Cell { ch, ..self.pen };
         if col == self.last_col() {
-            self.wrap_pending = true;
+            self.screen.wrap_pending = true;
         } else {
-            self.cursor.col += 1;
+            self.screen.col += 1;
         }
     }
 
     fn execute(&mut self, byte: u8) {
         match byte {
-            b'\r' => self.goto(0, self.cursor.row),
+            b'\r' => self.goto(0, self.screen.row),
             b'\n' | 0x0b | 0x0c => self.line_feed(),
-            0x08 => self.goto(self.cursor.col.saturating_sub(1), self.cursor.row),
+            0x08 => self.goto(self.screen.col.saturating_sub(1), self.screen.row),
             b'\t' => {
-                let next = (self.cursor.col / TAB_WIDTH + 1) * TAB_WIDTH;
-                self.goto(next, self.cursor.row);
+                let next = (self.screen.col / TAB_WIDTH + 1) * TAB_WIDTH;
+                self.goto(next, self.screen.row);
             }
             _ => {} // BEL and other controls are ignored.
         }
@@ -446,6 +455,18 @@ impl vte::Perform for State {
         }
     }
 
+    fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
+        if ignore || !intermediates.is_empty() {
+            return;
+        }
+        match byte {
+            b'7' => self.save_cursor(),
+            b'8' => self.restore_cursor(),
+            // DECKPAM/DECKPNM: nothing here depends on the keypad mode.
+            _ => {}
+        }
+    }
+
     fn csi_dispatch(
         &mut self,
         params: &vte::Params,
@@ -464,16 +485,14 @@ impl vte::Perform for State {
         let second = params.iter().nth(1).map_or(0, |p| p[0]);
         // Movement counts and positions treat 0 as 1.
         let n = first.max(1);
-        let Cursor { col, row, .. } = self.cursor;
+        // `CSI s` / `CSI u` act as DECSC/DECRC only without parameters; vte
+        // reports a missing parameter as a single 0.
+        let bare = params.len() <= 1 && first == 0;
+        let (col, row) = (self.screen.col, self.screen.row);
         match (private, action) {
             (true, 'h' | 'l') => {
                 for p in params.iter() {
-                    match p[0] {
-                        25 => self.cursor.visible = action == 'h',
-                        // DECSDM: set disables sixel scrolling.
-                        80 => self.sixel_scrolling = action == 'l',
-                        _ => {}
-                    }
+                    self.set_private_mode(p[0], action == 'h');
                 }
             }
             (true, 'S') => self.graphics_attributes(first),
@@ -487,6 +506,8 @@ impl vte::Perform for State {
             (false, 'd') => self.goto(col, n - 1),
             (false, 'J') => self.erase_display(first),
             (false, 'K') => self.erase_line(first),
+            (false, 's') if bare => self.save_cursor(),
+            (false, 'u') if bare => self.restore_cursor(),
             (false, 'm') => self.sgr(params),
             // DSR. ConPTY blocks at startup until it gets the CPR reply.
             (false, 'n') if first == 5 => self.responses.extend_from_slice(b"\x1b[0n"),
@@ -504,21 +525,8 @@ impl vte::Perform for State {
 
 #[cfg(test)]
 mod tests {
+    use super::testing::*;
     use super::*;
-
-    fn term(cols: u16, rows: u16) -> Terminal {
-        Terminal::new(TermSize::new(cols, rows).unwrap())
-    }
-
-    fn text(term: &Terminal, row: u16) -> String {
-        let line: String = term.row(row).iter().map(|c| c.ch).collect();
-        line.trim_end().to_owned()
-    }
-
-    fn pos(term: &Terminal) -> (u16, u16) {
-        let c = term.cursor();
-        (c.col, c.row)
-    }
 
     #[test]
     fn prints_text_and_handles_crlf() {
@@ -746,10 +754,98 @@ mod tests {
     #[test]
     fn unknown_and_malformed_sequences_are_ignored() {
         let mut t = term(5, 2);
-        t.advance(b"\x1b[?1049h\x1b]0;title\x07\x1b[38;5m\x1b[38;2;1m\x1b[99999;99999H");
+        t.advance(b"\x1b[?9999h\x1b[1!z\x1b]0;title\x07\x1b[38;5m\x1b[38;2;1m\x1b[99999;99999H");
         t.advance(b"\x1b[5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5;5m");
-        t.advance(b"\x1b(B\x1bPdcs\x1b\\\x1b[>c\x1b[Z\x1b[2;1Hok");
+        t.advance(b"\x1b(B\x1b#7\x1bPdcs\x1b\\\x1b[>c\x1b[Z\x1b[2;1Hok");
         assert_eq!(text(&t, 1), "ok");
+        assert!(
+            !t.state.alt_active,
+            "nothing in the stream switches screens"
+        );
+        assert!(t.state.screen.saved.is_none(), "nor saves the cursor");
+    }
+
+    #[test]
+    fn cursor_reports_position_and_visibility() {
+        let mut t = term(10, 5);
+        t.advance(b"\x1b[2;3H\x1b[?25l");
+        assert_eq!(
+            t.cursor(),
+            Cursor {
+                col: 2,
+                row: 1,
+                visible: false
+            }
+        );
+    }
+
+    #[test]
+    fn decsc_and_decrc_save_and_restore_the_position() {
+        let mut t = term(10, 5);
+        t.advance(b"ab\x1b7\x1b[4;4H");
+        assert_eq!(pos(&t), (3, 3));
+        t.advance(b"\x1b8");
+        assert_eq!(pos(&t), (2, 0));
+    }
+
+    #[test]
+    fn decrc_restores_the_pen() {
+        let mut t = term(10, 5);
+        t.advance(b"ab\x1b[1;31m\x1b7\x1b[0m\x1b[5;5H\x1b8x");
+        let cell = t.row(0)[2];
+        assert_eq!(cell.ch, 'x');
+        assert_eq!(cell.fg, Color::Indexed(1));
+        assert!(cell.flags.contains(Flags::BOLD));
+    }
+
+    #[test]
+    fn decrc_without_save_goes_home_with_the_default_pen() {
+        let mut t = term(10, 5);
+        t.advance(b"\x1b[5;5H\x1b[31m\x1b8x");
+        assert_eq!(t.row(0)[0].ch, 'x');
+        assert_eq!(t.row(0)[0].fg, Color::Default);
+        assert_eq!(pos(&t), (1, 0));
+    }
+
+    #[test]
+    fn decsc_keeps_a_pending_wrap() {
+        let mut t = term(3, 2);
+        t.advance(b"abc\x1b7\x1b[2;1H\x1b8d");
+        assert_eq!(text(&t, 0), "abc");
+        assert_eq!(text(&t, 1), "d", "the restored cursor still wraps first");
+    }
+
+    #[test]
+    fn keypad_mode_escapes_are_accepted_and_ignored() {
+        let mut t = term(5, 2);
+        t.advance(b"a\x1b=b\x1b>c");
+        assert_eq!(text(&t, 0), "abc");
+        assert_eq!(pos(&t), (3, 0));
+    }
+
+    #[test]
+    fn esc_with_intermediates_or_unknown_finals_is_ignored() {
+        let mut t = term(5, 4);
+        t.advance(b"\x1b[4;4H\x1b(7\x1b[1;1H\x1b8");
+        assert_eq!(pos(&t), (0, 0), "ESC ( 7 saves nothing");
+        t.advance(b"\x1b9\x1b[Qz\x1b%Gy");
+        assert_eq!(text(&t, 0), "zy");
+    }
+
+    #[test]
+    fn csi_s_and_u_without_parameters_act_as_decsc_and_decrc() {
+        let mut t = term(10, 5);
+        t.advance(b"ab\x1b[s\x1b[3;1H\x1b[u");
+        assert_eq!(pos(&t), (2, 0));
+    }
+
+    #[test]
+    fn csi_s_and_u_variants_with_parameters_or_intermediates_are_ignored() {
+        let mut t = term(10, 5);
+        t.advance(b"ab\x1b[s\x1b[3;1H\x1b[?u\x1b[>u");
+        assert_eq!(pos(&t), (0, 2), "kitty keyboard forms do not restore");
+        t.advance(b"\x1b[1s\x1b[5;5H\x1b[u");
+        assert_eq!(pos(&t), (2, 0), "CSI 1 s did not overwrite the save");
     }
 
     #[test]
@@ -805,17 +901,6 @@ mod tests {
         t.advance(b"\x1b[6n");
         t.take_responses();
         assert!(t.take_responses().is_empty());
-    }
-
-    fn kitty_rgba(id: u32, w: u32, h: u32, extra: &str) -> Vec<u8> {
-        let data = crate::image::decode::tests::encode_base64(&[255; 4].repeat((w * h) as usize));
-        format!("\x1b_Ga=T,f=32,s={w},v={h},i={id}{extra};{data}\x1b\\").into_bytes()
-    }
-
-    fn sized(cols: u16, rows: u16) -> Terminal {
-        let mut t = term(cols, rows);
-        t.set_cell_pixels(10, 20);
-        t
     }
 
     #[test]
