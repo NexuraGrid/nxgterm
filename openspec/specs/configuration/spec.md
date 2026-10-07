@@ -38,6 +38,7 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | Key | Type | Default |
 |---|---|---|
 | `font.family` | string; blank = unset | system monospace |
+| `font.fallback` | list of family names searched per missing glyph; blank names dropped | `[]` (built-in defaults still apply) |
 | `font.size` | integer or float points, clamped to 6-72; non-finite = 14 | `14.0` |
 | `window.padding` | u16 logical pixels | `4` |
 | `window.columns`, `window.rows` | non-zero u16 initial cells | `100`, `30` |

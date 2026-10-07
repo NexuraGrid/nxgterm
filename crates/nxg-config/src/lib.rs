@@ -40,6 +40,12 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# nxgterm configuration.
 [font]
 # Font family. When unset or not installed, the system monospace font is used.
 # family = "JetBrains Mono"
+# Families searched, in order, for characters the font above lacks, such as
+# the Nerd Font icons printed by eza or yazi. After this list, installed
+# "Symbols Nerd Font Mono", "Symbols Nerd Font", any other Nerd Font,
+# "Noto Sans Symbols 2", "Noto Sans Symbols" and "DejaVu Sans" are tried.
+# Only monochrome outline glyphs are drawn (no color emoji).
+# fallback = ["Symbols Nerd Font Mono"]
 # Size in points at 100% display scale (clamped to 6-72).
 size = 14.0
 
@@ -99,6 +105,10 @@ pub struct FontConfig {
     /// Preferred family; `None` means the system monospace font.
     #[serde(deserialize_with = "non_empty")]
     pub family: Option<String>,
+    /// Families searched, in order, for glyphs the primary font lacks
+    /// (e.g. Nerd Font icons); blank names are dropped.
+    #[serde(deserialize_with = "names")]
+    pub fallback: Vec<String>,
     /// Points at scale 1.0, already clamped with [`clamp_font_size`].
     #[serde(deserialize_with = "font_size")]
     pub size: f32,
@@ -108,6 +118,7 @@ impl Default for FontConfig {
     fn default() -> Self {
         Self {
             family: None,
+            fallback: Vec::new(),
             size: DEFAULT_FONT_SIZE,
         }
     }
@@ -275,6 +286,16 @@ fn non_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String
     Ok(value.filter(|s| !s.trim().is_empty()))
 }
 
+/// Trims each name and drops the blank ones.
+fn names<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    let names = Vec::<String>::deserialize(deserializer)?;
+    Ok(names
+        .into_iter()
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .collect())
+}
+
 /// Accepts integers or floats and clamps them.
 fn font_size<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
     #[derive(Deserialize)]
@@ -316,6 +337,7 @@ mod tests {
     fn defaults_match_the_documentation() {
         let config = Config::default();
         assert_eq!(config.font.family, None);
+        assert!(config.font.fallback.is_empty());
         assert_eq!(config.font.size, 14.0);
         assert_eq!(config.window.padding, 4);
         assert_eq!(
@@ -326,6 +348,18 @@ mod tests {
         assert_eq!(config.shell, ShellConfig::default());
         assert_eq!(config.renderer.backend, Backend::Auto);
         assert_eq!(config.scrollback.lines, 10_000);
+    }
+
+    #[test]
+    fn font_fallback_keeps_order_and_drops_blank_names() {
+        let config = parse(
+            "[font]\nfallback = [\" Symbols Nerd Font Mono \", \"\", \"Noto Sans Symbols 2\"]",
+        )
+        .unwrap();
+        assert_eq!(
+            config.font.fallback,
+            ["Symbols Nerd Font Mono", "Noto Sans Symbols 2"]
+        );
     }
 
     #[test]

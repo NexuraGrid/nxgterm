@@ -150,6 +150,7 @@ Every key is optional:
 ```toml
 [font]
 family = "JetBrains Mono"   # falls back to the system monospace font
+fallback = ["Symbols Nerd Font Mono"]  # for glyphs the family lacks, e.g. icons
 size = 14.0                 # points at 100% scale, clamped to 6-72
 
 [window]
