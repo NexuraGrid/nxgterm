@@ -1,0 +1,62 @@
+change: nxgterm-v0-1-0
+status: archived
+archived_at: "2026-10-07"
+retroactive: true
+artifact_store: openspec
+description: >
+  Retroactive record of nxgterm v0.1.0: all seven roadmap phases implemented
+  on main (ef7ff76..353e771) and documented after the fact.
+phases:
+  explore: skipped
+  research: skipped
+  propose: done
+  spec: done      # merged directly into openspec/specs/{domain}/spec.md
+  design: done
+  tasks: done
+  apply: done
+  verify: done
+  archive: done
+roadmap:
+  - id: 1
+    name: Workspace skeleton and CI
+    status: done
+    commits: [ef7ff76]
+  - id: 2
+    name: Window + PTY + text (CPU renderer)
+    status: done
+    commits: [0056df1, 82f20c2, 6c87523, 0c860f4]
+  - id: 3
+    name: GPU renderer with automatic fallback
+    status: done
+    commits: [f763706]
+  - id: 4
+    name: Configuration, themes, fonts
+    status: done
+    commits: [49ec86f]
+  - id: 5
+    name: "Images: Kitty graphics protocol and Sixel"
+    status: done
+    commits: [e59953e]
+  - id: 6
+    name: winpty fallback for Windows Server 2016
+    status: done
+    commits: [e5d8369]
+  - id: 7
+    name: Packages and the tools profile
+    status: done
+    commits: [353e771]
+specs:
+  - terminal-core
+  - pty
+  - rendering
+  - configuration
+  - inline-images
+  - packaging
+  - tools-profile
+verification:
+  tests_passed: 310
+  tests_failed: 0
+  ci_run: 37617191671
+  release_run: 37617197352
+  verdict: pass_with_open_manual_validation
+follow_up: openspec/RECOMMENDATIONS.md
