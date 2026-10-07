@@ -1,5 +1,6 @@
 change: fullscreen-essentials
-status: applying
+status: archived
+archive: done
 artifact_store: openspec
 description: >
   Recommendation #3 (P0): alternate screen, scroll regions and full-screen
@@ -10,9 +11,9 @@ phases:
   spec: done
   design: done
   tasks: done
-  apply: in-progress (S1 size:exception, S2 split into S2a/S2b)
-  verify: pending
-  archive: pending
+  apply: done (S1 size:exception, S2 split into S2a/S2b)
+  verify: done (PASS WITH WARNINGS)
+  archive: done
 delivery:
   strategy: ask-on-risk
   review_budget_lines: 800

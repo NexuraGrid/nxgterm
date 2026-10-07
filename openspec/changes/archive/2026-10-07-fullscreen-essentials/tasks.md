@@ -4,7 +4,7 @@ Addresses Recommendation #3 (P0). Strict TDD: in every task the RED test is
 written and seen failing first, then the code that turns it GREEN. Test command:
 `cargo test --workspace`. Each slice (S1..S5) is one PR boundary, under 800
 changed lines (fixtures and other data files are excluded from the count).
-The chain strategy (stacked branches vs feature branch) is not chosen yet.
+The chain strategy is stacked-to-main; S2 split into S2a/S2b.
 
 Spec references: `TC` = `specs/terminal-core/spec.md`, `II` = `specs/inline-images/spec.md`,
 `D#` = design decision number in `design.md`.
