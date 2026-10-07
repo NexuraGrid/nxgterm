@@ -91,8 +91,9 @@ where
 
     let mut instances = Vec::new();
     for row in 0..rows {
+        let selected = term.selected_cols(row);
         for (col, c) in term.display_row(row).iter().enumerate() {
-            let (_, bg) = paint::cell_colors(c, palette);
+            let (_, bg) = paint::shown_colors(c, paint::is_selected(&selected, col), palette);
             if opaque || bg != palette.background {
                 instances.push(solid(cell_pos(col, row), bg));
             }
@@ -109,6 +110,7 @@ where
     }
 
     for row in 0..rows {
+        let selected = term.selected_cols(row);
         for (col, c) in term.display_row(row).iter().enumerate() {
             if c.ch == ' ' {
                 continue;
@@ -116,7 +118,8 @@ where
             let Some(slot) = glyph(c.ch, c.flags.contains(Flags::BOLD))? else {
                 continue;
             };
-            let (mut fg, bg) = paint::cell_colors(c, palette);
+            let selected = paint::is_selected(&selected, col);
+            let (mut fg, bg) = paint::shown_colors(c, selected, palette);
             if cursor.visible && (usize::from(cursor.col), cursor.row) == (col, row) {
                 fg = bg;
             }
@@ -299,6 +302,30 @@ mod tests {
             .instances;
         assert_eq!(instances[0], solid(0, 0, palette.foreground));
         assert_eq!(instances[1].color, palette.background);
+    }
+
+    #[test]
+    fn selected_cells_get_selection_colors() {
+        let palette = Palette {
+            selection_background: Some(rgb(9, 9, 9)),
+            ..Palette::default()
+        };
+        let mut term = term(3, 1, b"\x1b[?25lab");
+        term.start_selection(
+            nxg_core::selection::SelectionKind::Simple,
+            term.point_at(1, 0),
+        );
+        let instances = build(&term, &palette, FLUSH, BASELINE, false, slot)
+            .unwrap()
+            .instances;
+        assert_eq!(instances[0], solid(10, 0, rgb(9, 9, 9)));
+        assert_eq!(instances[1].color, palette.foreground, "a");
+        assert_eq!(instances[2].color, palette.foreground, "b");
+        let swapped = build(&term, &Palette::default(), FLUSH, BASELINE, false, slot)
+            .unwrap()
+            .instances;
+        assert_eq!(swapped[0], solid(10, 0, palette.foreground));
+        assert_eq!(swapped[2].color, palette.background, "b is inverted");
     }
 
     #[test]

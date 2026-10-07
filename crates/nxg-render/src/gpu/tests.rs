@@ -139,6 +139,13 @@ fn gpu_output_matches_cpu_renderer() {
     let cell = cpu.cell_size();
     term.set_cell_pixels(cell.width, cell.height);
     add_images(&mut term);
+    // A selection across two rows, drawn inverted.
+    term.start_selection(
+        nxg_core::selection::SelectionKind::Simple,
+        term.point_at(5, 0),
+    );
+    term.extend_selection(term.point_at(1, 1));
+    assert!(term.selection().is_some());
     // A header row (like the tab bar) checks that both push the grid and
     // its images down the same way.
     let mut header = Terminal::new(TermSize::new(8, 1).unwrap());

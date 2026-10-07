@@ -75,6 +75,9 @@ theme = "nxg-dark"
 #   "#15161e", "#f7768e", "#9ece6a", "#e0af68", "#7aa2f7", "#bb9af7", "#7dcfff", "#a9b1d6",
 #   "#414868", "#f7768e", "#9ece6a", "#e0af68", "#7aa2f7", "#bb9af7", "#7dcfff", "#c0caf5",
 # ]
+# Selected text. Unset, selected cells are drawn with their colors swapped.
+# selection_foreground = "#c0caf5"
+# selection_background = "#33467c"
 
 [shell]
 # Program to run instead of the platform default ($SHELL on Unix; PowerShell 7,
@@ -207,6 +210,8 @@ pub struct ColorsConfig {
     pub background: Option<Rgb>,
     pub cursor: Option<Rgb>,
     pub ansi: Option<[Rgb; 16]>,
+    pub selection_foreground: Option<Rgb>,
+    pub selection_background: Option<Rgb>,
 }
 
 impl ColorsConfig {
@@ -218,6 +223,8 @@ impl ColorsConfig {
             background: self.background.unwrap_or(theme.background),
             cursor: self.cursor.unwrap_or(theme.cursor),
             ansi: self.ansi.unwrap_or(theme.ansi),
+            selection_foreground: self.selection_foreground.or(theme.selection_foreground),
+            selection_background: self.selection_background.or(theme.selection_background),
         }
     }
 }
@@ -625,6 +632,19 @@ mod tests {
         assert_eq!(colors.cursor, Rgb::new(255, 255, 255));
         assert_eq!(colors.ansi[0], Rgb::hex(0));
         assert_eq!(colors.ansi[15], Rgb::hex(0x0f));
+    }
+
+    #[test]
+    fn selection_colors_are_unset_unless_configured() {
+        let colors = parse("[colors]\nselection_background = \"#334455\"")
+            .unwrap()
+            .colors
+            .resolve();
+        assert_eq!(colors.selection_background, Some(Rgb::hex(0x334455)));
+        assert_eq!(colors.selection_foreground, None);
+        for theme in THEMES {
+            assert_eq!(theme.colors.selection_background, None, "{}", theme.name);
+        }
     }
 
     #[test]
