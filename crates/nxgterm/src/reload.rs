@@ -9,8 +9,8 @@ pub struct Changes {
     pub font_faces: bool,
     /// Configured font size changed: drop any zoom and use the new size.
     pub font_size: bool,
-    /// Font, colors or padding changed: give the renderer a new style and
-    /// recompute the grid size.
+    /// Font, colors, padding or the tab bar mode changed: give the renderer
+    /// a new style and recompute the grid size.
     pub restyle: bool,
     /// The scrollback limit changed: apply it to the terminal.
     pub scrollback: bool,
@@ -26,7 +26,8 @@ pub fn diff(old: &Config, new: &Config) -> Changes {
     let font_size = old.font.size != new.font.size;
     let restyle = old.font != new.font
         || old.colors != new.colors
-        || old.window.padding != new.window.padding;
+        || old.window.padding != new.window.padding
+        || old.window.tab_bar != new.window.tab_bar;
     let scrollback = old.scrollback != new.scrollback;
     let keybindings = old.keybindings != new.keybindings;
     let mut on_restart = Vec::new();
@@ -80,6 +81,10 @@ mod tests {
             expected
         );
         assert_eq!(with(|c| c.window.padding = 9), expected);
+        assert_eq!(
+            with(|c| c.window.tab_bar = nxg_config::TabBar::Never),
+            expected
+        );
     }
 
     #[test]
