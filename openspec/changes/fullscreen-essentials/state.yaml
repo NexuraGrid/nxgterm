@@ -10,7 +10,7 @@ phases:
   spec: done
   design: done
   tasks: done
-  apply: in-progress (S1 done, size:exception)
+  apply: in-progress (S1 size:exception, S2 split into S2a/S2b)
   verify: pending
   archive: pending
 delivery:
