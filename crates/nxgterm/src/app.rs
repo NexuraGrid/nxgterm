@@ -180,7 +180,7 @@ impl App {
             eprintln!("nxgterm: {what} changes apply on restart");
         }
         if let Some(session) = &mut self.session {
-            if changes.font_family {
+            if changes.font_faces {
                 match load_faces(&new.font) {
                     Ok(faces) => session.faces = faces,
                     Err(error) => eprintln!("nxgterm: {error}; keeping the previous font"),

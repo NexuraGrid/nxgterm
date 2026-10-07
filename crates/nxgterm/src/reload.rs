@@ -5,8 +5,8 @@ use nxg_config::Config;
 /// The effect of replacing one config with another.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Changes {
-    /// Font family changed: reload the font files.
-    pub font_family: bool,
+    /// Font family or fallback families changed: reload the font files.
+    pub font_faces: bool,
     /// Configured font size changed: drop any zoom and use the new size.
     pub font_size: bool,
     /// Font, colors or padding changed: give the renderer a new style and
@@ -20,7 +20,7 @@ pub struct Changes {
 
 /// Compares `old` with `new`.
 pub fn diff(old: &Config, new: &Config) -> Changes {
-    let font_family = old.font.family != new.font.family;
+    let font_faces = old.font.family != new.font.family || old.font.fallback != new.font.fallback;
     let font_size = old.font.size != new.font.size;
     let restyle = old.font != new.font
         || old.colors != new.colors
@@ -37,7 +37,7 @@ pub fn diff(old: &Config, new: &Config) -> Changes {
         on_restart.push("window size");
     }
     Changes {
-        font_family,
+        font_faces,
         font_size,
         restyle,
         scrollback,
@@ -81,9 +81,11 @@ mod tests {
     #[test]
     fn font_changes_restyle_and_say_what_to_reload() {
         let family = with(|c| c.font.family = Some("Iosevka".into()));
-        assert!(family.restyle && family.font_family && !family.font_size);
+        assert!(family.restyle && family.font_faces && !family.font_size);
         let size = with(|c| c.font.size = 20.0);
-        assert!(size.restyle && size.font_size && !size.font_family);
+        assert!(size.restyle && size.font_size && !size.font_faces);
+        let fallback = with(|c| c.font.fallback = vec!["Symbols Nerd Font Mono".into()]);
+        assert!(fallback.restyle && fallback.font_faces && !fallback.font_size);
     }
 
     #[test]

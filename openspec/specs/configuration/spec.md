@@ -100,7 +100,7 @@ running settings MUST stay unchanged.
 The parent directory of the config file MUST be watched (so editors that
 save by rename are handled), events for other files, reads and access-time
 updates MUST be ignored, and bursts MUST be debounced to one reload after
-200 ms of quiet. Font family, font size, colors and padding MUST apply
+200 ms of quiet. Font family, fallback families, font size, colors and padding MUST apply
 immediately (restyle and refit the grid); `scrollback.lines` MUST apply
 immediately, dropping the oldest lines beyond a lower limit. Changes to `[shell]`,
 `[renderer]` and `window.columns`/`rows` MUST be reported as
