@@ -348,7 +348,7 @@ A selection MUST be kept in absolute line coordinates: line `n` is the `n`th
 line that ever entered the history (lines dropped from a full or disabled
 history still count), so it survives viewport scrolling and lines moving
 into the history. Kinds: simple (cells in reading order), word (separators
-are whitespace and ``()[]{}<>'"`,;:│``; words continue across soft wraps),
+are whitespace and ``()[]{}<>'"`,;│``, so URLs select whole; words continue across soft wraps),
 line (the whole logical line, soft wraps included) and block (the same
 columns of every line). Its text MUST trim the trailing blanks of each row
 and join rows with `\n`, except that a soft-wrapped row joins the next one

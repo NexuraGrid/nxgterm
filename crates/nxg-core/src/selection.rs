@@ -169,8 +169,8 @@ impl Selection {
 }
 
 /// Characters that end a word besides whitespace. Slashes, dots, dashes
-/// and the like are not here, so paths and most of a URL select whole.
-pub const WORD_SEPARATORS: &str = "()[]{}<>'\"`,;:│";
+/// colons and the like are not here, so paths and URLs select whole.
+pub const WORD_SEPARATORS: &str = "()[]{}<>'\"`,;│";
 
 /// Whether `ch` belongs to a word for double-click selection.
 pub fn is_word_char(ch: char) -> bool {
@@ -420,12 +420,12 @@ mod tests {
     #[test]
     fn word_chars_keep_paths_and_urls_whole() {
         for ch in [
-            'a', 'Z', '0', '/', '.', '-', '_', '~', '@', '=', '?', '&', '%', 'é',
+            'a', 'Z', '0', '/', '.', '-', '_', '~', '@', '=', '?', '&', '%', ':', 'é',
         ] {
             assert!(is_word_char(ch), "{ch:?}");
         }
         for ch in [
-            ' ', '\t', '(', ')', '[', ']', '{', '}', '<', '>', '\'', '"', '`', ',', ';', ':', '│',
+            ' ', '\t', '(', ')', '[', ']', '{', '}', '<', '>', '\'', '"', '`', ',', ';', '│',
         ] {
             assert!(!is_word_char(ch), "{ch:?}");
         }
@@ -437,6 +437,13 @@ mod tests {
         let (span, text) = select(SelectionKind::Word, p(0, 8), p(0, 8), &src);
         assert_eq!(text, "~/src/nxg-term.rs");
         assert_eq!((span.start, span.end), (p(0, 4), p(0, 20)));
+    }
+
+    #[test]
+    fn a_double_click_selects_a_whole_url() {
+        let src = lines(40, 0, &["see <https://x.dev/a?b=1> now"]);
+        let (_, text) = select(SelectionKind::Word, p(0, 9), p(0, 9), &src);
+        assert_eq!(text, "https://x.dev/a?b=1");
     }
 
     #[test]
@@ -459,9 +466,9 @@ mod tests {
     fn words_continue_across_a_soft_wrap() {
         let src = lines(4, 0, &["a ht\\", "tp:/\\", "/x y"]);
         let (_, text) = select(SelectionKind::Word, p(1, 1), p(1, 1), &src);
-        assert_eq!(text, "http", "the colon ends it");
+        assert_eq!(text, "http://x");
         let (_, text) = select(SelectionKind::Word, p(2, 1), p(2, 1), &src);
-        assert_eq!(text, "//x");
+        assert_eq!(text, "http://x");
     }
 
     #[test]
