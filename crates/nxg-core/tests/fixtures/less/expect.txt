@@ -1,0 +1,24 @@
+# less on a 60 line file: open, one page forward, quit
+[less-open]
+size 80 24
+alt true
+cursor 8,23
+row 0: "dummy line 1 of the less test file"
+row 22: "dummy line 23 of the less test file"
+row 23: "less.txt"
+
+[less-page2]
+alt true
+cursor 1,23
+row 0: "dummy line 24 of the less test file"
+row 22: "dummy line 46 of the less test file"
+row 23: ":"
+
+[end]
+alt false
+visible true
+cursor 0,3
+row 0: "shell line one"
+row 1: "shell line two"
+row 2: "after less"
+row 3: ""

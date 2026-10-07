@@ -1,0 +1,25 @@
+# vim -u NONE -N: open, type two lines, quit with :q!
+[vim-open]
+size 80 24
+alt true
+visible true
+cursor 0,0
+row 0: ""
+row 1: "~"
+row 22: "~"
+
+[vim-edit]
+alt true
+cursor 10,1
+row 0: "hello vim"
+row 1: "second line"
+row 2: "~"
+
+[end]
+alt false
+visible true
+cursor 0,3
+row 0: "shell line one"
+row 1: "shell line two"
+row 2: "after vim"
+row 3: ""

@@ -1,0 +1,49 @@
+shell line one
+shell line two
+[?1049h[22;0;0t[24;1H[?1h=dummy line 1 of the less test file
+dummy line 2 of the less test file
+dummy line 3 of the less test file
+dummy line 4 of the less test file
+dummy line 5 of the less test file
+dummy line 6 of the less test file
+dummy line 7 of the less test file
+dummy line 8 of the less test file
+dummy line 9 of the less test file
+dummy line 10 of the less test file
+dummy line 11 of the less test file
+dummy line 12 of the less test file
+dummy line 13 of the less test file
+dummy line 14 of the less test file
+dummy line 15 of the less test file
+dummy line 16 of the less test file
+dummy line 17 of the less test file
+dummy line 18 of the less test file
+dummy line 19 of the less test file
+dummy line 20 of the less test file
+dummy line 21 of the less test file
+dummy line 22 of the less test file
+dummy line 23 of the less test file
+[7mless.txt[27m[K]nxg-checkpoint;less-open[Kdummy line 24 of the less test file
+dummy line 25 of the less test file
+dummy line 26 of the less test file
+dummy line 27 of the less test file
+dummy line 28 of the less test file
+dummy line 29 of the less test file
+dummy line 30 of the less test file
+dummy line 31 of the less test file
+dummy line 32 of the less test file
+dummy line 33 of the less test file
+dummy line 34 of the less test file
+dummy line 35 of the less test file
+dummy line 36 of the less test file
+dummy line 37 of the less test file
+dummy line 38 of the less test file
+dummy line 39 of the less test file
+dummy line 40 of the less test file
+dummy line 41 of the less test file
+dummy line 42 of the less test file
+dummy line 43 of the less test file
+dummy line 44 of the less test file
+dummy line 45 of the less test file
+dummy line 46 of the less test file
+:[K]nxg-checkpoint;less-page2[K[K[?1l>[?1049l[23;0;0tafter less

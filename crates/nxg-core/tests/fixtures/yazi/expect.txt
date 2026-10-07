@@ -1,0 +1,23 @@
+# yazi on a directory with a subdir and three files: open, move down, quit
+[yazi-open]
+size 80 24
+alt true
+visible false
+cursor 79,23
+row 3: "          │  beta.md                            │"
+row 4: "          │  gamma.rs                           │"
+
+[yazi-move]
+alt true
+visible false
+row 3: "          │  beta.md                            │"
+row 4: "          │  gamma.rs                           │"
+
+[end]
+alt false
+visible true
+cursor 0,3
+row 0: "shell line one"
+row 1: "shell line two"
+row 2: "after yazi"
+row 3: ""
