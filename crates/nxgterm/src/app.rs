@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
-use nxg_config::{Backend, Config};
+use nxg_config::{Backend, Config, FontConfig};
 use nxg_core::fallback::{self, Init};
 use nxg_core::mouse::{MouseAction, MouseButton, MouseEvent};
 use nxg_core::ports::{ChildProcess, PtyControl, RenderError, Renderer};
@@ -99,7 +99,7 @@ impl App {
         let attributes = Window::default_attributes().with_title("nxgterm");
         let window = Arc::new(event_loop.create_window(attributes)?);
         let scale = window.scale_factor();
-        let faces = load_faces(config.font.family.as_deref())?;
+        let faces = load_faces(&config.font)?;
         let style = build_style(&faces, config, config.font.size, scale)?;
 
         let initial = TermSize::new(config.window.columns.get(), config.window.rows.get())?;
@@ -180,8 +180,8 @@ impl App {
             eprintln!("nxgterm: {what} changes apply on restart");
         }
         if let Some(session) = &mut self.session {
-            if changes.font_family {
-                match load_faces(new.font.family.as_deref()) {
+            if changes.font_faces {
+                match load_faces(&new.font) {
                     Ok(faces) => session.faces = faces,
                     Err(error) => eprintln!("nxgterm: {error}; keeping the previous font"),
                 }
@@ -473,16 +473,27 @@ fn layout(renderer: &dyn WindowRenderer, padding: u32) -> Layout {
     }
 }
 
-/// Font files for `family`, reporting when it is not installed.
-fn load_faces(family: Option<&str>) -> Result<FontFaces, FontError> {
-    let faces = FontFaces::system(family)?;
-    if let Some(family) = family {
+/// Font files for the configured family and fallbacks, reporting the
+/// ones that are not installed and the fallback faces in use.
+fn load_faces(font: &FontConfig) -> Result<FontFaces, FontError> {
+    let faces = FontFaces::system(font.family.as_deref(), &font.fallback)?;
+    if let Some(family) = &font.family {
         if !faces.is_family(family) {
             eprintln!(
                 "nxgterm: font family `{family}` not found; using `{}`",
                 faces.family()
             );
         }
+    }
+    let found = faces.fallback_families();
+    for family in &font.fallback {
+        let used = faces.is_family(family) || found.iter().any(|f| f.eq_ignore_ascii_case(family));
+        if !used {
+            eprintln!("nxgterm: fallback font family `{family}` not found");
+        }
+    }
+    if !found.is_empty() {
+        eprintln!("nxgterm: fallback fonts {}", found.join(", "));
     }
     Ok(faces)
 }
