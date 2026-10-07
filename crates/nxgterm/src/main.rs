@@ -12,6 +12,7 @@ mod cli;
 mod keys;
 mod mouse;
 mod reload;
+mod tabs;
 mod watch;
 
 use std::env;

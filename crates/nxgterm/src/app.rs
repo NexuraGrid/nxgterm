@@ -26,17 +26,24 @@ use winit::window::{Window, WindowId};
 
 use crate::bindings::Action;
 use crate::mouse::{ViewportScroll, Wheel, WheelAction};
+use crate::tabs::{TabId, Tabs};
 use crate::{appearance, bindings, choice, keys, mouse, reload};
 
 /// Events posted to the event loop from background threads.
 #[derive(Debug)]
 pub enum UserEvent {
-    /// A chunk of child output.
-    Output(Vec<u8>),
-    /// The child exited or its output stream closed.
-    Exited,
+    /// A chunk of output from the child of a tab.
+    Output(TabId, Vec<u8>),
+    /// The child of a tab exited or its output stream closed.
+    Exited(TabId),
     /// The config file changed on disk.
     ConfigChanged,
+}
+
+/// One tab: a child process on its own pty and the terminal it draws.
+struct Tab {
+    terminal: Terminal,
+    pty: Box<dyn PtyControl>,
 }
 
 /// Everything that exists once the window is up.
@@ -51,8 +58,9 @@ struct Session {
     scale: f64,
     /// Padding of the current style, in physical pixels.
     padding: u32,
-    terminal: Terminal,
-    pty: Box<dyn PtyControl>,
+    /// Every tab has its own shell; only the active one is drawn and gets
+    /// input, the others keep reading their output.
+    tabs: Tabs<Tab>,
     /// Consecutive skipped frames; bounds retries so a surface that keeps
     /// failing (e.g. occluded) does not spin the event loop.
     skipped_frames: u8,
@@ -122,45 +130,32 @@ impl App {
         let mut renderer = select_renderer(&window, &style, config.renderer.backend)?;
         let pixels = window.inner_size();
         renderer.resize(pixels.width, pixels.height);
-        let layout = layout(renderer.as_ref(), padding);
-        let size = layout.grid_size(pixels.width, pixels.height);
-        let cell = CellPixels::new(layout.cell.width, layout.cell.height);
-
-        let shell = config.shell.program.clone().map(|program| ShellCommand {
-            program,
-            args: config.shell.args.clone(),
-        });
-        let win_size = WinSize {
-            cells: size,
-            cell: Some(cell),
-        };
-        let backends = nxg_pty::backends_from_env(env::var(nxg_pty::ENV_VAR).ok().as_deref());
-        let pty = nxg_pty::spawn_shell_with(win_size, shell.as_ref(), backends)?;
-        for attempt in &pty.skipped {
-            eprintln!("nxgterm: skipped {}: {}", attempt.name, attempt.error);
-        }
-        eprintln!("nxgterm: pty {}", pty.name);
-        let pty = pty.backend;
-        spawn_reader(pty.reader, self.proxy.clone());
-        spawn_waiter(pty.child, self.proxy.clone());
-
-        let mut terminal = Terminal::new(size);
-        terminal.set_cell_pixels(cell.width, cell.height);
-        terminal.set_scrollback_limit(config.scrollback.lines);
-        Ok(Session {
+        let mut session = Session {
             window,
             renderer,
             faces,
             font_size: config.font.size,
             scale,
             padding,
-            terminal,
+            tabs: Tabs::new(),
             skipped_frames: 0,
-            pty: pty.control,
             wheel: Wheel::default(),
             pointer: (0, 0),
             held: None,
-        })
+        };
+        session.open_tab(config, &self.proxy)?;
+        Ok(session)
+    }
+
+    /// Opens a tab running the configured shell next to the active one.
+    fn new_tab(&mut self) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        match session.open_tab(&self.config, &self.proxy) {
+            Ok(_) => session.window.request_redraw(),
+            Err(error) => eprintln!("nxgterm: cannot open a tab: {error}"),
+        }
     }
 
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: Box<dyn Error>) {
@@ -179,7 +174,10 @@ impl App {
         let Some(session) = &mut self.session else {
             return;
         };
-        let modes = session.terminal.modes();
+        let Some(tab) = session.tabs.active_mut() else {
+            return;
+        };
+        let modes = tab.terminal.modes();
         let bytes = keys::encode(
             &event.logical_key,
             event.text.as_deref(),
@@ -197,9 +195,16 @@ impl App {
     /// the key should go to the pty instead (scrolling on the alternate
     /// screen, which has no history).
     fn perform(&mut self, action: Action) -> bool {
-        if action == Action::ReloadConfig {
-            self.reload_config();
-            return true;
+        match action {
+            Action::ReloadConfig => {
+                self.reload_config();
+                return true;
+            }
+            Action::NewTab => {
+                self.new_tab();
+                return true;
+            }
+            _ => {}
         }
         let config = &self.config;
         let Some(session) = &mut self.session else {
@@ -210,8 +215,30 @@ impl App {
             session.restyle(config);
             return true;
         }
-        let modes = session.terminal.modes();
-        let rows = session.terminal.size().rows();
+        let tabs = &mut session.tabs;
+        match action {
+            Action::CloseTab => {
+                let index = tabs.active_index();
+                session.close_tab(index);
+                return true;
+            }
+            Action::NextTab => tabs.next(),
+            Action::PreviousTab => tabs.previous(),
+            Action::GotoTab(n) => tabs.goto(n),
+            _ => {}
+        }
+        if matches!(
+            action,
+            Action::NextTab | Action::PreviousTab | Action::GotoTab(_)
+        ) {
+            session.tab_switched();
+            return true;
+        }
+        let Some(tab) = session.tabs.active() else {
+            return true;
+        };
+        let modes = tab.terminal.modes();
+        let rows = tab.terminal.size().rows();
         if let Some(scroll) = mouse::viewport_scroll(action, modes, rows) {
             session.scroll_viewport(scroll);
             return true;
@@ -221,17 +248,20 @@ impl App {
             | Action::ScrollPageDown
             | Action::ScrollToTop
             | Action::ScrollToBottom => false,
-            // Tabs and the command palette are not built yet. Their keys
-            // are still consumed so the bindings behave the same once they
-            // are, and never leak to the shell in the meantime.
-            Action::NewTab
+            // The command palette is not built yet. Its key is still
+            // consumed so the binding behaves the same once it is, and
+            // never leaks to the shell in the meantime.
+            Action::CommandPalette => true,
+            // Handled above.
+            Action::ZoomIn
+            | Action::ZoomOut
+            | Action::ResetZoom
+            | Action::ReloadConfig
+            | Action::NewTab
             | Action::CloseTab
             | Action::NextTab
             | Action::PreviousTab
-            | Action::GotoTab(_)
-            | Action::CommandPalette => true,
-            // Handled above.
-            Action::ZoomIn | Action::ZoomOut | Action::ResetZoom | Action::ReloadConfig => true,
+            | Action::GotoTab(_) => true,
         }
     }
 
@@ -273,7 +303,9 @@ impl App {
                 session.restyle(&new);
             }
             if changes.scrollback {
-                session.terminal.set_scrollback_limit(new.scrollback.lines);
+                for tab in session.tabs.iter_mut() {
+                    tab.terminal.set_scrollback_limit(new.scrollback.lines);
+                }
                 session.window.request_redraw();
             }
         }
@@ -295,19 +327,21 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::Output(bytes) => {
+            UserEvent::Output(id, bytes) => {
                 if let Some(session) = &mut self.session {
-                    session.terminal.advance(&bytes);
-                    let responses = session.terminal.take_responses();
-                    if !responses.is_empty() {
-                        if let Err(error) = session.pty.write_all(&responses) {
-                            eprintln!("nxgterm: pty write failed: {error}");
-                        }
-                    }
-                    session.window.request_redraw();
+                    session.output(id, &bytes);
                 }
             }
-            UserEvent::Exited => event_loop.exit(),
+            UserEvent::Exited(id) => {
+                if let Some(session) = &mut self.session {
+                    if let Some(index) = session.tabs.index_of(id) {
+                        session.close_tab(index);
+                    }
+                    if session.tabs.is_empty() {
+                        event_loop.exit();
+                    }
+                }
+            }
             UserEvent::ConfigChanged => self.reload_config(),
         }
     }
@@ -316,6 +350,10 @@ impl ApplicationHandler<UserEvent> for App {
         if let WindowEvent::KeyboardInput { event, .. } = &event {
             if event.state == ElementState::Pressed {
                 self.key_pressed(event);
+            }
+            // The last tab may have been closed by a key.
+            if self.session.as_ref().is_some_and(|s| s.tabs.is_empty()) {
+                event_loop.exit();
             }
             return;
         }
@@ -340,7 +378,10 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::MouseWheel { delta, .. } => {
                 let cell = layout(session.renderer.as_ref(), session.padding).cell;
                 let lines = session.wheel.lines(delta, cell.height);
-                let modes = session.terminal.modes();
+                let Some(tab) = session.tabs.active_mut() else {
+                    return;
+                };
+                let modes = tab.terminal.modes();
                 match mouse::wheel_action(modes, self.modifiers.shift_key(), lines) {
                     Some(WheelAction::Report { button, count }) => {
                         let (col, row) = session.pointer;
@@ -352,10 +393,10 @@ impl ApplicationHandler<UserEvent> for App {
                             mods: mouse::mouse_mods(self.modifiers),
                         };
                         if let Some(bytes) = nxg_core::mouse::encode(event, modes.mouse_encoding) {
-                            session.send(&bytes.repeat(count as usize));
+                            tab.send(&bytes.repeat(count as usize));
                         }
                     }
-                    Some(WheelAction::Keys(bytes)) => session.send(&bytes),
+                    Some(WheelAction::Keys(bytes)) => tab.send(&bytes),
                     Some(WheelAction::Scroll(lines)) => {
                         session.scroll_viewport(ViewportScroll::Lines(lines));
                     }
@@ -363,8 +404,11 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let layout = layout(session.renderer.as_ref(), session.padding);
-                let size = session.terminal.size();
+                let layout = session.grid_layout();
+                let Some(tab) = session.tabs.active_mut() else {
+                    return;
+                };
+                let size = tab.terminal.size();
                 let cell = mouse::cell_at(layout, size, position.x, position.y);
                 if cell == session.pointer {
                     return;
@@ -377,11 +421,11 @@ impl ApplicationHandler<UserEvent> for App {
                     row: cell.1,
                     mods: mouse::mouse_mods(self.modifiers),
                 };
-                let modes = session.terminal.modes();
+                let modes = tab.terminal.modes();
                 let shift = self.modifiers.shift_key();
                 let held = session.held.is_some();
                 if let Some(bytes) = mouse::button_report(modes, shift, event, held) {
-                    session.send(&bytes);
+                    tab.send(&bytes);
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -398,10 +442,13 @@ impl ApplicationHandler<UserEvent> for App {
                     row,
                     mods: mouse::mouse_mods(self.modifiers),
                 };
-                let modes = session.terminal.modes();
+                let Some(tab) = session.tabs.active_mut() else {
+                    return;
+                };
+                let modes = tab.terminal.modes();
                 let shift = self.modifiers.shift_key();
                 if let Some(bytes) = mouse::button_report(modes, shift, event, false) {
-                    session.send(&bytes);
+                    tab.send(&bytes);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -416,29 +463,103 @@ impl ApplicationHandler<UserEvent> for App {
 
 const MAX_FRAME_RETRIES: u8 = 3;
 
-impl Session {
+impl Tab {
     /// Writes input for the child.
     fn send(&mut self, bytes: &[u8]) {
         if let Err(error) = self.pty.write_all(bytes) {
             eprintln!("nxgterm: pty write failed: {error}");
         }
     }
+}
 
-    /// Moves the scrollback viewport, redrawing when it changed.
-    fn scroll_viewport(&mut self, scroll: ViewportScroll) {
-        let before = self.terminal.display_offset();
-        match scroll {
-            ViewportScroll::Lines(lines) => self.terminal.scroll_display(lines),
-            ViewportScroll::Top => self.terminal.scroll_display(i32::MAX),
-            ViewportScroll::Bottom => self.terminal.scroll_display_to_bottom(),
+impl Session {
+    /// Writes input for the child of the active tab.
+    fn send(&mut self, bytes: &[u8]) {
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.send(bytes);
         }
-        if self.terminal.display_offset() != before {
+    }
+
+    /// Spawns the configured shell in a new tab next to the active one,
+    /// sized to the grid, and activates it.
+    fn open_tab(
+        &mut self,
+        config: &Config,
+        proxy: &EventLoopProxy<UserEvent>,
+    ) -> Result<TabId, Box<dyn Error>> {
+        let pixels = self.window.inner_size();
+        let layout = self.grid_layout();
+        let win_size = WinSize {
+            cells: layout.grid_size(pixels.width, pixels.height),
+            cell: Some(CellPixels::new(layout.cell.width, layout.cell.height)),
+        };
+        let id = self
+            .tabs
+            .add_with(|id| spawn_tab(id, config, win_size, proxy))?;
+        self.tab_switched();
+        Ok(id)
+    }
+
+    /// Closes the tab at `index`, ending its child. With no tab left the
+    /// caller exits.
+    fn close_tab(&mut self, index: usize) {
+        if self.tabs.close(index).is_some() {
+            self.tab_switched();
+        }
+    }
+
+    /// Feeds output to the tab `id` (ignored once it is closed), answering
+    /// the queries in it; only the active tab is redrawn.
+    fn output(&mut self, id: TabId, bytes: &[u8]) {
+        let active = self.tabs.index_of(id) == Some(self.tabs.active_index());
+        let Some(tab) = self.tabs.get_mut(id) else {
+            return;
+        };
+        tab.terminal.advance(bytes);
+        let responses = tab.terminal.take_responses();
+        if !responses.is_empty() {
+            tab.send(&responses);
+        }
+        if active {
             self.window.request_redraw();
         }
     }
 
+    /// After the active tab or the number of tabs changed: forgets the
+    /// held button, refits the grid and redraws.
+    fn tab_switched(&mut self) {
+        self.held = None;
+        self.sync_grid_size();
+        self.window.request_redraw();
+    }
+
+    /// Moves the scrollback viewport, redrawing when it changed.
+    fn scroll_viewport(&mut self, scroll: ViewportScroll) {
+        let Some(tab) = self.tabs.active_mut() else {
+            return;
+        };
+        let terminal = &mut tab.terminal;
+        let before = terminal.display_offset();
+        match scroll {
+            ViewportScroll::Lines(lines) => terminal.scroll_display(lines),
+            ViewportScroll::Top => terminal.scroll_display(i32::MAX),
+            ViewportScroll::Bottom => terminal.scroll_display_to_bottom(),
+        }
+        if terminal.display_offset() != before {
+            self.window.request_redraw();
+        }
+    }
+
+    /// Where the grid sits in the window.
+    fn grid_layout(&self) -> Layout {
+        layout(self.renderer.as_ref(), self.padding)
+    }
+
     fn redraw(&mut self, config: &Config) -> Result<(), Box<dyn Error>> {
-        match self.renderer.draw(&self.terminal) {
+        let Some(tab) = self.tabs.active() else {
+            return Ok(());
+        };
+        match self.renderer.draw(&tab.terminal) {
             Ok(()) => {
                 self.skipped_frames = 0;
                 Ok(())
@@ -497,14 +618,24 @@ impl Session {
         }
     }
 
-    /// Resizes the terminal and the pty to what fits the window with the
-    /// active renderer's cell size and the padding, and tells both the
-    /// cell size in pixels (images and size reports depend on it).
+    /// Resizes the terminals and ptys of every tab to what fits the
+    /// window with the active renderer's cell size and the padding, and
+    /// tells them the cell size in pixels (images and size reports depend
+    /// on it).
     fn sync_grid_size(&mut self) {
         let pixels = self.window.inner_size();
-        let layout = layout(self.renderer.as_ref(), self.padding);
+        let layout = self.grid_layout();
         let size = layout.grid_size(pixels.width, pixels.height);
         let cell = CellPixels::new(layout.cell.width, layout.cell.height);
+        for tab in self.tabs.iter_mut() {
+            tab.fit(size, cell);
+        }
+    }
+}
+
+impl Tab {
+    /// Resizes the terminal and the pty to `size` cells of `cell` pixels.
+    fn fit(&mut self, size: TermSize, cell: CellPixels) {
         if size == self.terminal.size() && cell == self.terminal.cell_pixels() {
             return;
         }
@@ -520,6 +651,40 @@ impl Session {
             eprintln!("nxgterm: pty resize failed: {error}");
         }
     }
+}
+
+/// Starts the configured shell (or the platform default) on a new pty of
+/// `win_size` for tab `id`, with threads that post its output and exit.
+/// Every tab starts in the working directory nxgterm was started in.
+fn spawn_tab(
+    id: TabId,
+    config: &Config,
+    win_size: WinSize,
+    proxy: &EventLoopProxy<UserEvent>,
+) -> Result<Tab, Box<dyn Error>> {
+    let shell = config.shell.program.clone().map(|program| ShellCommand {
+        program,
+        args: config.shell.args.clone(),
+    });
+    let backends = nxg_pty::backends_from_env(env::var(nxg_pty::ENV_VAR).ok().as_deref());
+    let pty = nxg_pty::spawn_shell_with(win_size, shell.as_ref(), backends)?;
+    for attempt in &pty.skipped {
+        eprintln!("nxgterm: skipped {}: {}", attempt.name, attempt.error);
+    }
+    eprintln!("nxgterm: pty {}", pty.name);
+    let pty = pty.backend;
+    spawn_reader(id, pty.reader, proxy.clone());
+    spawn_waiter(id, pty.child, proxy.clone());
+
+    let mut terminal = Terminal::new(win_size.cells);
+    if let Some(cell) = win_size.cell {
+        terminal.set_cell_pixels(cell.width, cell.height);
+    }
+    terminal.set_scrollback_limit(config.scrollback.lines);
+    Ok(Tab {
+        terminal,
+        pty: pty.control,
+    })
 }
 
 /// The renderer's cells inset by `padding` pixels. Takes the subtrait\n/// object directly: upcasting to `&dyn Renderer` needs Rust 1.86.
@@ -661,8 +826,9 @@ impl WindowRenderer for Detached {
     }
 }
 
-/// Drains child output on a background thread until EOF or error.
-fn spawn_reader(mut reader: Box<dyn Read + Send>, proxy: EventLoopProxy<UserEvent>) {
+/// Drains the output of tab `id` on a background thread until EOF or
+/// error.
+fn spawn_reader(id: TabId, mut reader: Box<dyn Read + Send>, proxy: EventLoopProxy<UserEvent>) {
     thread::spawn(move || {
         let mut buf = vec![0u8; 64 * 1024];
         loop {
@@ -670,7 +836,7 @@ fn spawn_reader(mut reader: Box<dyn Read + Send>, proxy: EventLoopProxy<UserEven
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     if proxy
-                        .send_event(UserEvent::Output(buf[..n].to_vec()))
+                        .send_event(UserEvent::Output(id, buf[..n].to_vec()))
                         .is_err()
                     {
                         return; // Event loop is gone.
@@ -678,14 +844,15 @@ fn spawn_reader(mut reader: Box<dyn Read + Send>, proxy: EventLoopProxy<UserEven
                 }
             }
         }
-        let _ = proxy.send_event(UserEvent::Exited);
+        let _ = proxy.send_event(UserEvent::Exited(id));
     });
 }
 
-/// Reports child exit; needed where the reader never sees EOF (ConPTY).
-fn spawn_waiter(mut child: Box<dyn ChildProcess>, proxy: EventLoopProxy<UserEvent>) {
+/// Reports the exit of the child of tab `id`; needed where the reader
+/// never sees EOF (ConPTY).
+fn spawn_waiter(id: TabId, mut child: Box<dyn ChildProcess>, proxy: EventLoopProxy<UserEvent>) {
     thread::spawn(move || {
         let _ = child.wait();
-        let _ = proxy.send_event(UserEvent::Exited);
+        let _ = proxy.send_event(UserEvent::Exited(id));
     });
 }
