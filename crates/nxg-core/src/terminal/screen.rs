@@ -96,6 +96,7 @@ impl Screen {
 
 impl State {
     pub fn resize(&mut self, size: TermSize) {
+        self.scrollback.offset = 0;
         self.screen.resize(size);
         if let Some(dormant) = &mut self.dormant {
             dormant.resize(size);
@@ -119,6 +120,7 @@ impl State {
         self.sixel = None;
         self.graphics = Graphics::new();
         self.images.reset_placements();
+        self.scrollback.clear();
     }
 
     /// DECSC.
@@ -141,6 +143,8 @@ impl State {
         if self.alt_active {
             return;
         }
+        // The alternate screen has no history to look at.
+        self.scrollback.offset = 0;
         let mut alt = match self.dormant.take() {
             Some(kept) if !fresh => kept,
             _ => Box::new(Screen::new(self.screen.grid.size())),

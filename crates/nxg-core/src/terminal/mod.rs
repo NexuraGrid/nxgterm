@@ -10,11 +10,14 @@ use crate::{CellPixels, TermSize};
 mod edit;
 mod modes;
 mod screen;
+mod scrollback;
 #[cfg(test)]
 mod testing;
 
 pub use modes::Modes;
 use screen::Screen;
+pub use scrollback::DEFAULT_SCROLLBACK;
+use scrollback::Scrollback;
 
 /// Cursor position (zero-based) and visibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +75,8 @@ struct State {
     app_cursor_keys: bool,
     /// The last printed character, for REP. Anything but another REP clears it.
     last_char: Option<char>,
+    /// Lines scrolled off the main screen and the viewport over them.
+    scrollback: Scrollback,
 }
 
 impl Terminal {
@@ -94,12 +99,17 @@ impl Terminal {
                 autowrap: true,
                 app_cursor_keys: false,
                 last_char: None,
+                scrollback: Scrollback::new(DEFAULT_SCROLLBACK),
             },
         }
     }
 
-    /// Feeds raw child output.
+    /// Feeds raw child output. Any output brings the viewport back to the
+    /// live screen.
     pub fn advance(&mut self, bytes: &[u8]) {
+        if !bytes.is_empty() {
+            self.scroll_display_to_bottom();
+        }
         let Self {
             filter,
             parser,
