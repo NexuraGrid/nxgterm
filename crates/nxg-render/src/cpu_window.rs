@@ -9,7 +9,7 @@ use softbuffer::{Context, SoftBufferError, Surface};
 
 use crate::frame::Frame;
 use crate::renderer::CpuRenderer;
-use crate::style::{Style, WindowRenderer};
+use crate::style::{Overlay, Style, WindowRenderer};
 
 /// [`CpuRenderer`] plus a softbuffer surface; works everywhere.
 pub struct CpuWindowRenderer<W: HasDisplayHandle + HasWindowHandle> {
@@ -59,7 +59,7 @@ impl<W: HasDisplayHandle + HasWindowHandle> Renderer for CpuWindowRenderer<W> {
     }
 
     fn draw(&mut self, terminal: &Terminal) -> Result<(), RenderError> {
-        self.draw_with_header(None, terminal)
+        self.draw_layers(None, terminal, None)
     }
 }
 
@@ -68,10 +68,11 @@ impl<W: HasDisplayHandle + HasWindowHandle> WindowRenderer for CpuWindowRenderer
         self.renderer.set_style(style);
     }
 
-    fn draw_with_header(
+    fn draw_layers(
         &mut self,
         header: Option<&Terminal>,
         terminal: &Terminal,
+        overlay: Option<Overlay<'_>>,
     ) -> Result<(), RenderError> {
         let (Some(width), Some(height)) =
             (NonZeroU32::new(self.width), NonZeroU32::new(self.height))
@@ -84,7 +85,7 @@ impl<W: HasDisplayHandle + HasWindowHandle> WindowRenderer for CpuWindowRenderer
         let mut frame = Frame::new(&mut buffer, width.get(), height.get())
             .ok_or_else(|| RenderError::Fatal("surface buffer smaller than the window".into()))?;
         self.renderer
-            .render_with_header(header, terminal, &mut frame);
+            .render_layers(header, terminal, overlay, &mut frame);
         buffer.present().map_err(fatal)
     }
 }

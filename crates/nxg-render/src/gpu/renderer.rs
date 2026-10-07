@@ -7,7 +7,7 @@ use super::GpuError;
 use super::device::Gpu;
 use super::format;
 use super::painter::Painter;
-use crate::style::{Style, WindowRenderer};
+use crate::style::{Overlay, Style, WindowRenderer};
 
 /// GPU renderer presenting to a window surface.
 #[derive(Debug)]
@@ -100,7 +100,7 @@ impl Renderer for GpuRenderer {
     }
 
     fn draw(&mut self, terminal: &Terminal) -> Result<(), RenderError> {
-        self.draw_with_header(None, terminal)
+        self.draw_layers(None, terminal, None)
     }
 }
 
@@ -109,10 +109,11 @@ impl WindowRenderer for GpuRenderer {
         self.painter.set_style(style);
     }
 
-    fn draw_with_header(
+    fn draw_layers(
         &mut self,
         header: Option<&Terminal>,
         terminal: &Terminal,
+        overlay: Option<Overlay<'_>>,
     ) -> Result<(), RenderError> {
         if let Some(failure) = self.gpu.failure() {
             return Err(RenderError::Fatal(failure));
@@ -136,7 +137,7 @@ impl WindowRenderer for GpuRenderer {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let (width, height) = (self.config.width, self.config.height);
         self.painter
-            .render(&self.gpu, &view, width, height, header, terminal);
+            .render(&self.gpu, &view, width, height, header, terminal, overlay);
         let suboptimal = frame.suboptimal;
         frame.present();
         if suboptimal {

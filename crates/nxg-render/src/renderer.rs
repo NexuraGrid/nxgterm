@@ -5,7 +5,7 @@ use nxg_core::{Flags, Terminal};
 use crate::frame::Frame;
 use crate::images;
 use crate::paint::{self, CellSize, Layout};
-use crate::style::Style;
+use crate::style::{Overlay, Style};
 
 /// Software renderer for the terminal grid.
 #[derive(Debug)]
@@ -33,26 +33,30 @@ impl CpuRenderer {
     /// Draws `term` into `frame`; pixels outside the grid (the padding
     /// included) get the background.
     pub fn render(&mut self, term: &Terminal, frame: &mut Frame<'_>) {
-        self.render_with_header(None, term, frame);
+        self.render_layers(None, term, None, frame);
     }
 
-    /// Draws the rows of `header` at the top of the grid area and `term`
-    /// below them; see [`Layout::below`]. The header's cursor is drawn like
-    /// any other, so callers hide it.
-    pub fn render_with_header(
+    /// Draws the rows of `header` at the top of the grid area, `term`
+    /// below them (see [`Layout::below`]) and `overlay` over the grid (see
+    /// [`Layout::at`]). The cursors of the header and the overlay are drawn
+    /// like any other.
+    pub fn render_layers(
         &mut self,
         header: Option<&Terminal>,
         term: &Terminal,
+        overlay: Option<Overlay<'_>>,
         frame: &mut Frame<'_>,
     ) {
-        let layout = self.layout();
+        let mut layout = self.layout();
         frame.clear(self.style.palette.background);
-        let Some(header) = header else {
-            self.paint(term, frame, layout);
-            return;
-        };
-        self.paint(header, frame, layout);
-        self.paint(term, frame, layout.below(header.size().rows()));
+        if let Some(header) = header {
+            self.paint(header, frame, layout);
+            layout = layout.below(header.size().rows());
+        }
+        self.paint(term, frame, layout);
+        if let Some(overlay) = overlay {
+            self.paint(overlay.terminal, frame, layout.at(overlay.col, overlay.row));
+        }
     }
 
     /// Paints `term` at `layout` over what `frame` holds. Order: cell
@@ -192,7 +196,7 @@ mod tests {
         assert_eq!(h, 2 * cell.height + 2);
         let mut pixels = vec![0; (w * h) as usize];
         let mut frame = Frame::new(&mut pixels, w, h).unwrap();
-        renderer.render_with_header(Some(&header), &term, &mut frame);
+        renderer.render_layers(Some(&header), &term, None, &mut frame);
         let palette = Palette::default();
         assert_eq!(frame.pixel(1, 1), Some(palette.ansi[1]), "header row");
         assert_eq!(
@@ -201,6 +205,38 @@ mod tests {
             "grid below the header"
         );
         assert_eq!(frame.pixel(0, 0), Some(palette.background), "padding");
+    }
+
+    #[test]
+    fn an_overlay_covers_the_grid_at_its_cell_with_opaque_backgrounds() {
+        let Some(style) = style(1) else { return };
+        let mut renderer = CpuRenderer::new(style);
+        let mut header = Terminal::new(TermSize::new(3, 1).unwrap());
+        header.advance(b"\x1b[?25l");
+        let mut term = Terminal::new(TermSize::new(3, 2).unwrap());
+        term.advance(b"\x1b[?25l\x1b[44m      \x1b[0m");
+        // Default background on the left, red on the right.
+        let mut overlay = Terminal::new(TermSize::new(2, 1).unwrap());
+        overlay.advance(b"\x1b[?25l \x1b[41m \x1b[0m");
+        let layout = renderer.layout().below(1);
+        let (w, h) = layout.window_size(term.size());
+        let mut pixels = vec![0; (w * h) as usize];
+        let mut frame = Frame::new(&mut pixels, w, h).unwrap();
+        let overlay = Overlay {
+            terminal: &overlay,
+            col: 1,
+            row: 1,
+        };
+        renderer.render_layers(Some(&header), &term, Some(overlay), &mut frame);
+        let palette = Palette::default();
+        let at = |col: u32, row: u32| {
+            let (x, y) = layout.origin(col, row);
+            frame.pixel(x, y)
+        };
+        assert_eq!(at(0, 1), Some(palette.ansi[4]), "grid left of the overlay");
+        assert_eq!(at(1, 0), Some(palette.ansi[4]), "grid above the overlay");
+        assert_eq!(at(1, 1), Some(palette.background), "opaque default cell");
+        assert_eq!(at(2, 1), Some(palette.ansi[1]), "overlay colors");
     }
 
     #[test]

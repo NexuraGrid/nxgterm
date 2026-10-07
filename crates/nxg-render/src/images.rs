@@ -157,6 +157,7 @@ pub(crate) mod tests {
             height: 2,
         },
         padding: 1,
+        left: 0,
         top: 0,
     };
 

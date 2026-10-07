@@ -15,7 +15,8 @@ use nxg_core::ports::{ChildProcess, PtyControl, RenderError, Renderer};
 use nxg_core::{CellPixels, TermSize, Terminal, WinSize};
 use nxg_pty::ShellCommand;
 use nxg_render::{
-    CellSize, CpuWindowRenderer, FontError, FontFaces, GpuRenderer, Layout, Style, WindowRenderer,
+    CellSize, CpuWindowRenderer, FontError, FontFaces, GpuRenderer, Layout, Overlay, Style,
+    WindowRenderer,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -631,7 +632,7 @@ impl Session {
             let cols = tab.terminal.size().cols();
             tab_bar::render(&self.bar_labels(cols), cols)
         });
-        match self.renderer.draw_with_header(bar.as_ref(), &tab.terminal) {
+        match self.renderer.draw_layers(bar.as_ref(), &tab.terminal, None) {
             Ok(()) => {
                 self.skipped_frames = 0;
                 Ok(())
@@ -771,6 +772,7 @@ fn layout(renderer: &dyn WindowRenderer, padding: u32) -> Layout {
     Layout {
         cell: CellSize { width, height },
         padding,
+        left: 0,
         top: 0,
     }
 }
@@ -895,10 +897,11 @@ impl Renderer for Detached {
 impl WindowRenderer for Detached {
     fn set_style(&mut self, _style: Style) {}
 
-    fn draw_with_header(
+    fn draw_layers(
         &mut self,
         _header: Option<&Terminal>,
         terminal: &Terminal,
+        _overlay: Option<Overlay<'_>>,
     ) -> Result<(), RenderError> {
         self.draw(terminal)
     }

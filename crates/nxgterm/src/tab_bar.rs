@@ -197,6 +197,7 @@ mod tests {
                 height: 20,
             },
             padding: 5,
+            left: 0,
             top: 0,
         };
         assert_eq!(column_at(layout, 8, 0.0, 0.0), Some(0));

@@ -302,6 +302,7 @@ mod tests {
                 height: 20,
             },
             padding: 5,
+            left: 0,
             top: 0,
         };
         let size = TermSize::new(4, 3).unwrap();
