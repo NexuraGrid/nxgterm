@@ -35,6 +35,8 @@ struct State {
     pen: Cell,
     /// Set after printing in the last column; the next print wraps first.
     wrap_pending: bool,
+    /// Replies to queries, waiting to be written to the child.
+    responses: Vec<u8>,
 }
 
 impl Terminal {
@@ -50,6 +52,7 @@ impl Terminal {
                 },
                 pen: Cell::default(),
                 wrap_pending: false,
+                responses: Vec::new(),
             },
         }
     }
@@ -73,6 +76,12 @@ impl Terminal {
 
     pub fn cursor(&self) -> Cursor {
         self.state.cursor
+    }
+
+    /// Bytes the terminal must send back to the child (e.g. replies to
+    /// cursor position and device attribute queries). Drains the buffer.
+    pub fn take_responses(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.state.responses)
     }
 
     /// The cells of `row`. Panics if `row` is out of bounds.
@@ -293,6 +302,14 @@ impl vte::Perform for State {
             (false, 'J') => self.erase_display(first),
             (false, 'K') => self.erase_line(first),
             (false, 'm') => self.sgr(params),
+            // DSR. ConPTY blocks at startup until it gets the CPR reply.
+            (false, 'n') if first == 5 => self.responses.extend_from_slice(b"\x1b[0n"),
+            (false, 'n') if first == 6 => {
+                let reply = format!("\x1b[{};{}R", row + 1, col + 1);
+                self.responses.extend_from_slice(reply.as_bytes());
+            }
+            // DA1: identify as a VT100 with advanced video option.
+            (false, 'c') if first == 0 => self.responses.extend_from_slice(b"\x1b[?1;2c"),
             _ => {}
         }
     }
@@ -565,5 +582,41 @@ mod tests {
         assert_eq!(pos(&t), (2, 1));
         t.advance(b"\r\nxy");
         assert_eq!(text(&t, 1), "xy");
+    }
+
+    #[test]
+    fn has_no_responses_by_default() {
+        let mut t = term(10, 3);
+        t.advance(b"hello");
+        assert!(t.take_responses().is_empty());
+    }
+
+    #[test]
+    fn replies_to_cursor_position_report_one_based() {
+        let mut t = term(10, 5);
+        t.advance(b"\x1b[3;4H\x1b[6n");
+        assert_eq!(t.take_responses(), b"\x1b[3;4R");
+    }
+
+    #[test]
+    fn replies_to_device_status_report() {
+        let mut t = term(10, 3);
+        t.advance(b"\x1b[5n");
+        assert_eq!(t.take_responses(), b"\x1b[0n");
+    }
+
+    #[test]
+    fn replies_to_primary_device_attributes() {
+        let mut t = term(10, 3);
+        t.advance(b"\x1b[c\x1b[0c");
+        assert_eq!(t.take_responses(), b"\x1b[?1;2c\x1b[?1;2c");
+    }
+
+    #[test]
+    fn take_responses_drains_the_buffer() {
+        let mut t = term(10, 3);
+        t.advance(b"\x1b[6n");
+        t.take_responses();
+        assert!(t.take_responses().is_empty());
     }
 }

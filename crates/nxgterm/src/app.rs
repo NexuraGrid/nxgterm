@@ -106,6 +106,12 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Output(bytes) => {
                 if let Some(session) = &mut self.session {
                     session.terminal.advance(&bytes);
+                    let responses = session.terminal.take_responses();
+                    if !responses.is_empty() {
+                        if let Err(error) = session.pty.write_all(&responses) {
+                            eprintln!("nxgterm: pty write failed: {error}");
+                        }
+                    }
                     session.window.request_redraw();
                 }
             }
