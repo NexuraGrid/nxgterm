@@ -19,3 +19,8 @@ windows-sys = { workspace = true, features = [
 
 [lints]
 workspace = true
+
+# Dev-only fixture capture tool; test = true so its pure parts run in `cargo test`.
+[[example]]
+name = "capture"
+test = true

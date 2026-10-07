@@ -1,0 +1,22 @@
+# Hand-made flow: shell lines, enter the alternate screen, draw, leave.
+[shell]
+size 80 24
+alt false
+cursor 5,2
+row 0: "$ one"
+row 1: "$ two"
+row 2: "$ ver"
+
+[alt]
+alt true
+cursor 6,4
+row 0: "alt screen"
+row 4: "  deep"
+
+[end]
+alt false
+cursor 5,2
+row 0: "$ one"
+row 1: "$ two"
+row 2: "$ ver"
+row 3: ""

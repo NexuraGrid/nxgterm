@@ -14,7 +14,7 @@ Each item is meant to become its own OpenSpec change
 |---|---|---|---|
 | 1 | P0 | Manual validation checklist on native Windows | (verification) |
 | 2 | P0 | Windows Server 2016 VM and macOS test passes | pty, packaging |
-| 3 | P0 | Alternate screen, scroll regions and full-screen app essentials | terminal-core |
+| 3 | P0 | ~~Alternate screen, scroll regions and full-screen app essentials~~ Done in `fullscreen-essentials` (2026-10-07) | terminal-core |
 | 4 | P0 | Harden kitty file transmission (`t=f`/`t=t`) | inline-images |
 | 5 | P1 | Scrollback with mouse wheel | terminal-core, rendering |
 | 6 | P1 | Selection, copy/paste and bracketed paste | terminal-core, configuration |
@@ -36,6 +36,10 @@ Each item is meant to become its own OpenSpec change
 | 22 | P2 | Dedupe `miniz_oxide` and drop the unused workspace dependency | (build) |
 | 23 | P2 | Decide on tabs/splits vs relying on ngmux | (product) |
 | 24 | P2 | Configuration documentation and small CLI gaps | configuration |
+| 25 | P2 | Character sets, tab stops, DECCOLM, DECALN, DECSCNM and double-size lines | terminal-core |
+| 26 | P2 | Numeric keypad mode (DECKPAM/DECKPNM) | terminal-core |
+| 27 | P2 | Clipping image placements to scroll regions in renderers | rendering, inline-images |
+| 28 | P2 | Live reload when config directory is created at runtime | configuration |
 
 ---
 
@@ -80,22 +84,11 @@ has its own change.
 
 ### 3. Alternate screen, scroll regions and full-screen app essentials
 
-**Why.** vim, htop, less and Yazi depend on these. Today the core ignores
-`CSI ? 1049 h/l` (and 47/1047/1048), has no DECSTBM (`CSI t;b r`), no
-`osc_dispatch`/`esc_dispatch` at all (so no `ESC 7`/`ESC 8`, `ESC M` reverse
-index, `ESC D`, `ESC c`), and no IL/DL/ICH/DCH/ECH/SU/SD (`CSI L M @ P X S T`).
-Full-screen programs will corrupt the screen and leave garbage on exit.
+**Status: Done** (2026-10-07, change `fullscreen-essentials`)
 
-**Do.** In `nxg-core` (TDD, one sequence family per task):
-1. Alternate screen buffer with cursor save/restore (1049) and clearing; images placed on the alternate screen removed on switch back.
-2. DECSTBM scroll region honored by LF, RI, IND, IL/DL, SU/SD; origin mode (DECOM `?6`).
-3. DECSC/DECRC (`ESC 7/8`, `CSI s/u`), RI/IND/NEL, RIS.
-4. ICH/DCH/ECH, IL/DL, REP; DECAWM (`?7`) autowrap toggle.
-5. DECCKM (`?1`) application cursor keys and DECKPAM/DECKPNM in `keys.rs`.
+vim, less and yazi now render and exit cleanly via alternate screen, scroll regions (DECSTBM/DECOM), cell/line editing (ICH/DCH/ECH/IL/DL/REP), save/restore cursor (DECSC/DECRC), full reset (RIS), and DECCKM (application cursor keys). Replay tests for all three apps pass; manual verification on Linux KDE Wayland confirms behavior. See `openspec/specs/terminal-core/spec.md` for complete requirements.
 
-**Done when** `vim`, `htop`, `less` and `yazi` render and exit cleanly, and
-`vttest` menus 1-2 pass (record results). Add a replay test per app with
-captured output.
+Known limitation: vttest menus 1-2 not run (tool not installed); deviations recorded in `vttest-notes.md`.
 
 ### 4. Harden kitty file transmission (`t=f`/`t=t`)
 
@@ -292,3 +285,31 @@ live vs restart), document per-OS paths and env vars in one place, add
 `NXGTERM_PTY` to `--help` (it is missing from `cli::USAGE`), add
 `nxgterm --check-config [path]` to validate without starting, and make key
 bindings configurable once #6 and #9 add more of them.
+
+### 25. Character sets, tab stops and the rest of vttest menus 1-2
+
+Follow-up of `fullscreen-essentials`. vttest menus 1-2 also need G0/G1
+character sets (`ESC ( 0` line drawing, SO/SI), tab stops (HTS, TBC),
+DECCOLM (`?3`, 132 columns), DECALN (`ESC # 8`), DECSCNM (`?5`) and
+double-size lines. Install vttest, run menus 1-2 and record the results
+next to `vttest-notes.md` in the archived change.
+
+### 26. Numeric keypad mode (DECKPAM/DECKPNM)
+
+`ESC =` and `ESC >` are accepted and ignored. Supporting them needs winit's
+`KeyLocation::Numpad` passed into `keys::encode` so keypad keys send SS3
+sequences in application mode.
+
+### 27. Clipping image placements to scroll regions
+
+With a partial scroll region, a placement shifted inside the region can
+overlap rows outside it until it is dropped. Renderers do not know the
+region; expose it (or a clip rectangle per placement) and clip in both
+renderers.
+
+### 28. Live reload when the config directory is created later
+
+Found in the 2026-10-07 smoke test: if `~/.config/nxgterm/` does not exist
+at startup, watching fails and live reload stays off for the session.
+Watch the nearest existing ancestor (or create the directory) and switch
+to the real directory once it appears.

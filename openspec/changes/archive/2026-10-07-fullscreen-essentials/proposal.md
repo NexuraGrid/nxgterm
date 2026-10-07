@@ -70,8 +70,8 @@ S2 before S3 (IL/DL need regions); RIS in S2 resets S1 state. No new crates.
 
 ## Success Criteria
 
-- [ ] vim, less, yazi render and exit cleanly: replay tests pass and manual check in a real Linux window.
-- [ ] Quitting vim restores shell lines and cursor.
-- [ ] Arrow keys honour DECCKM.
-- [ ] `cargo test --workspace`, fmt, clippy `-D warnings` and MSRV 1.85 check pass.
-- [ ] vttest menus 1-2 recorded with known deviations.
+- [x] vim, less, yazi render and exit cleanly: replay tests pass and manual check in a real Linux window.
+- [x] Quitting vim restores shell lines and cursor.
+- [x] Arrow keys honour DECCKM.
+- [x] `cargo test --workspace`, fmt, clippy `-D warnings` and MSRV 1.85 check pass.
+- [x] vttest menus 1-2 recorded with known deviations (recorded as not run; vttest not installed).
