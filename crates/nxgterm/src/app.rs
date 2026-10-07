@@ -15,7 +15,8 @@ use nxg_core::ports::{ChildProcess, PtyControl, RenderError, Renderer};
 use nxg_core::{CellPixels, TermSize, Terminal, WinSize};
 use nxg_pty::ShellCommand;
 use nxg_render::{
-    CellSize, CpuWindowRenderer, FontError, FontFaces, GpuRenderer, Layout, Style, WindowRenderer,
+    CellSize, CpuWindowRenderer, FontError, FontFaces, GpuRenderer, Layout, Overlay, Style,
+    WindowRenderer,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -25,6 +26,7 @@ use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
 use crate::bindings::Action;
+use crate::command_palette::{self, CommandPalette, Outcome};
 use crate::mouse::{ViewportScroll, Wheel, WheelAction};
 use crate::tabs::{TabId, Tabs};
 use crate::{appearance, bindings, choice, keys, mouse, reload, tab_bar};
@@ -77,6 +79,9 @@ struct Session {
     bar_pointer: Option<u16>,
     /// The button held down, for drag reports.
     held: Option<MouseButton>,
+    /// The command palette, while it is open: it takes the keys and the
+    /// clicks, and is drawn over the grid.
+    palette: Option<CommandPalette>,
 }
 
 pub struct App {
@@ -151,6 +156,7 @@ impl App {
             pointer: (0, 0),
             bar_pointer: None,
             held: None,
+            palette: None,
         };
         session.open_tab(config, &self.proxy)?;
         Ok(session)
@@ -172,8 +178,109 @@ impl App {
         event_loop.exit();
     }
 
+    /// Opens the command palette, or closes it when it is open.
+    fn toggle_palette(&mut self) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        session.palette = match session.palette {
+            Some(_) => None,
+            None => Some(CommandPalette::new(self.bindings.shortcuts())),
+        };
+        // A drag in progress ends here: the palette takes the mouse.
+        session.held = None;
+        session.window.request_redraw();
+    }
+
+    /// Applies what the palette asked for after a key or a click.
+    fn palette_done(&mut self, outcome: Outcome) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        match outcome {
+            Outcome::Ignore => {}
+            Outcome::Redraw => session.window.request_redraw(),
+            Outcome::Close => {
+                session.palette = None;
+                session.window.request_redraw();
+            }
+            Outcome::Run(action) => {
+                session.palette = None;
+                session.window.request_redraw();
+                self.perform(action);
+            }
+        }
+    }
+
+    /// Handles a key press while the palette is open: nothing reaches the
+    /// pty. Its own binding closes it.
+    fn palette_key(&mut self, event: &KeyEvent) {
+        let action = bindings::resolve(&self.bindings, &event.logical_key, self.modifiers);
+        if action == Some(Action::CommandPalette) {
+            self.toggle_palette();
+            return;
+        }
+        let input =
+            command_palette::input(&event.logical_key, event.text.as_deref(), self.modifiers);
+        let Some(input) = input else {
+            return;
+        };
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        let rows = session.palette_rect().map_or(0, |rect| rect.list_rows());
+        let Some(palette) = &mut session.palette else {
+            return;
+        };
+        let outcome = palette.handle(input, rows);
+        self.palette_done(outcome);
+    }
+
+    /// Handles a mouse event while the palette is open, so it does not
+    /// reach the terminal: the wheel moves the selection, a left click on
+    /// a row runs it and one outside the box closes it. `None` when the
+    /// palette is closed or the event is not a mouse event.
+    fn palette_mouse(&mut self, event: &WindowEvent) -> Option<Outcome> {
+        let session = self.session.as_mut()?;
+        session.palette.as_ref()?;
+        let rect = session.palette_rect()?;
+        let outcome = match *event {
+            WindowEvent::MouseWheel { delta, .. } => {
+                let cell = layout(session.renderer.as_ref(), session.padding).cell;
+                let lines = session.wheel.lines(delta, cell.height);
+                let palette = session.palette.as_mut()?;
+                // Positive lines scroll back: up the list.
+                palette.scroll_by(-lines, rect.list_rows())
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                session.track_pointer(position.x, position.y);
+                Outcome::Ignore
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => {
+                let (col, row) = session.pointer;
+                let palette = session.palette.as_mut()?;
+                if session.bar_pointer.is_some() {
+                    Outcome::Close
+                } else {
+                    palette.click(rect, col, row)
+                }
+            }
+            WindowEvent::MouseInput { .. } => Outcome::Ignore,
+            _ => return None,
+        };
+        Some(outcome)
+    }
+
     /// Handles a key press: a bound action, or bytes for the pty.
     fn key_pressed(&mut self, event: &KeyEvent) {
+        if self.session.as_ref().is_some_and(|s| s.palette.is_some()) {
+            self.palette_key(event);
+            return;
+        }
         let action = bindings::resolve(&self.bindings, &event.logical_key, self.modifiers);
         if let Some(action) = action {
             if self.perform(action) {
@@ -211,6 +318,10 @@ impl App {
             }
             Action::NewTab => {
                 self.new_tab();
+                return true;
+            }
+            Action::CommandPalette => {
+                self.toggle_palette();
                 return true;
             }
             _ => {}
@@ -257,12 +368,9 @@ impl App {
             | Action::ScrollPageDown
             | Action::ScrollToTop
             | Action::ScrollToBottom => false,
-            // The command palette is not built yet. Its key is still
-            // consumed so the binding behaves the same once it is, and
-            // never leaks to the shell in the meantime.
-            Action::CommandPalette => true,
             // Handled above.
-            Action::ZoomIn
+            Action::CommandPalette
+            | Action::ZoomIn
             | Action::ZoomOut
             | Action::ResetZoom
             | Action::ReloadConfig
@@ -367,6 +475,10 @@ impl ApplicationHandler<UserEvent> for App {
             }
             return;
         }
+        if let Some(outcome) = self.palette_mouse(&event) {
+            self.palette_done(outcome);
+            return;
+        }
         let config = &self.config;
         let Some(session) = &mut self.session else {
             return;
@@ -414,21 +526,13 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                session.bar_pointer = session.bar_column_at(position.x, position.y);
-                if session.bar_pointer.is_some() {
-                    // The bar is not part of the terminal: no reports.
+                if !session.track_pointer(position.x, position.y) {
                     return;
                 }
-                let layout = session.grid_layout();
+                let cell = session.pointer;
                 let Some(tab) = session.tabs.active_mut() else {
                     return;
                 };
-                let size = tab.terminal.size();
-                let cell = mouse::cell_at(layout, size, position.x, position.y);
-                if cell == session.pointer {
-                    return;
-                }
-                session.pointer = cell;
                 let event = MouseEvent {
                     button: session.held.unwrap_or(MouseButton::None),
                     action: MouseAction::Motion,
@@ -460,6 +564,11 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     // A drag from the grid ends over the bar: report the
                     // release at the last grid cell.
+                }
+                if action == MouseAction::Release && session.held.is_none() {
+                    // Released after a press the terminal never saw, such
+                    // as the click that closed the command palette.
+                    return;
                 }
                 session.held = (action == MouseAction::Press).then_some(button);
                 let (col, row) = session.pointer;
@@ -594,6 +703,33 @@ impl Session {
         layout(self.renderer.as_ref(), self.padding).below(bar)
     }
 
+    /// Follows the pointer at window pixel `x`, `y` over the tab bar and
+    /// the grid. Returns whether it moved to another grid cell (motion to
+    /// report).
+    fn track_pointer(&mut self, x: f64, y: f64) -> bool {
+        self.bar_pointer = self.bar_column_at(x, y);
+        if self.bar_pointer.is_some() {
+            // The bar is not part of the terminal: no reports.
+            return false;
+        }
+        let layout = self.grid_layout();
+        let Some(tab) = self.tabs.active() else {
+            return false;
+        };
+        let cell = mouse::cell_at(layout, tab.terminal.size(), x, y);
+        if cell == self.pointer {
+            return false;
+        }
+        self.pointer = cell;
+        true
+    }
+
+    /// Where the open palette sits on the active tab's grid.
+    fn palette_rect(&self) -> Option<command_palette::Rect> {
+        let size = self.tabs.active()?.terminal.size();
+        Some(self.palette.as_ref()?.rect(size))
+    }
+
     /// The tab bar labels for a bar `cols` columns wide.
     fn bar_labels(&self, cols: u16) -> Vec<tab_bar::Label> {
         let titles: Vec<&str> = self.tabs.iter().map(|tab| tab.title.as_str()).collect();
@@ -631,7 +767,21 @@ impl Session {
             let cols = tab.terminal.size().cols();
             tab_bar::render(&self.bar_labels(cols), cols)
         });
-        match self.renderer.draw_with_header(bar.as_ref(), &tab.terminal) {
+        let palette = self.palette.as_ref().map(|palette| {
+            let rect = palette.rect(tab.terminal.size());
+            let theme = appearance::palette(&config.colors.resolve());
+            let surface = command_palette::surface(theme.background, theme.foreground);
+            (palette.render(rect, surface), rect)
+        });
+        let overlay = palette.as_ref().map(|(terminal, rect)| Overlay {
+            terminal,
+            col: rect.col,
+            row: rect.row,
+        });
+        match self
+            .renderer
+            .draw_layers(bar.as_ref(), &tab.terminal, overlay)
+        {
             Ok(()) => {
                 self.skipped_frames = 0;
                 Ok(())
@@ -771,6 +921,7 @@ fn layout(renderer: &dyn WindowRenderer, padding: u32) -> Layout {
     Layout {
         cell: CellSize { width, height },
         padding,
+        left: 0,
         top: 0,
     }
 }
@@ -895,10 +1046,11 @@ impl Renderer for Detached {
 impl WindowRenderer for Detached {
     fn set_style(&mut self, _style: Style) {}
 
-    fn draw_with_header(
+    fn draw_layers(
         &mut self,
         _header: Option<&Terminal>,
         terminal: &Terminal,
+        _overlay: Option<Overlay<'_>>,
     ) -> Result<(), RenderError> {
         self.draw(terminal)
     }

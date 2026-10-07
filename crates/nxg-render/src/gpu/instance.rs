@@ -56,7 +56,9 @@ pub struct Quads {
 
 /// Builds the quads for one frame, in draw order: cell backgrounds, the
 /// cursor, then glyphs, offset by the layout's padding. Mirrors [`crate::CpuRenderer::render`] pixel for
-/// pixel; the default background comes from the clear color instead.
+/// pixel; the default background comes from the clear color instead,
+/// unless `opaque` (an overlay, drawn over other quads) asks for a quad
+/// behind every cell.
 ///
 /// `glyph` returns the atlas slot for `(char, bold)`, `None` for glyphs
 /// without ink, or [`AtlasFull`].
@@ -65,6 +67,7 @@ pub fn build<F>(
     palette: &Palette,
     layout: Layout,
     baseline: i32,
+    opaque: bool,
     glyph: F,
 ) -> Result<Quads, AtlasFull>
 where
@@ -90,7 +93,7 @@ where
     for row in 0..rows {
         for (col, c) in term.display_row(row).iter().enumerate() {
             let (_, bg) = paint::cell_colors(c, palette);
-            if bg != palette.background {
+            if opaque || bg != palette.background {
                 instances.push(solid(cell_pos(col, row), bg));
             }
         }
@@ -169,6 +172,7 @@ mod tests {
     const FLUSH: Layout = Layout {
         cell: CELL,
         padding: 0,
+        left: 0,
         top: 0,
     };
 
@@ -202,7 +206,7 @@ mod tests {
     #[test]
     fn blank_default_screen_with_hidden_cursor_is_empty() {
         let term = term(3, 2, b"\x1b[?25l");
-        let instances = build(&term, &Palette::default(), FLUSH, BASELINE, slot)
+        let instances = build(&term, &Palette::default(), FLUSH, BASELINE, false, slot)
             .unwrap()
             .instances;
         assert!(instances.is_empty());
@@ -212,7 +216,7 @@ mod tests {
     fn non_default_backgrounds_and_cursor_become_solid_quads() {
         let palette = Palette::default();
         let term = term(3, 2, b"\x1b[41m \x1b[0m\r\n");
-        let instances = build(&term, &palette, FLUSH, BASELINE, slot)
+        let instances = build(&term, &palette, FLUSH, BASELINE, false, slot)
             .unwrap()
             .instances;
         assert_eq!(
@@ -225,7 +229,7 @@ mod tests {
     fn glyphs_are_placed_like_the_cpu_renderer() {
         let palette = Palette::default();
         let term = term(3, 2, b"\x1b[?25l\r\n xy");
-        let instances = build(&term, &palette, FLUSH, BASELINE, slot)
+        let instances = build(&term, &palette, FLUSH, BASELINE, false, slot)
             .unwrap()
             .instances;
         // top = y + baseline - ymin - height = 20 + 15 - 2 - 6
@@ -240,15 +244,32 @@ mod tests {
     }
 
     #[test]
+    fn opaque_terminals_get_a_quad_behind_every_cell() {
+        let palette = Palette::default();
+        let term = term(2, 1, b"\x1b[?25l\x1b[41m \x1b[0m");
+        let instances = build(&term, &palette, FLUSH, BASELINE, true, slot)
+            .unwrap()
+            .instances;
+        assert_eq!(
+            instances,
+            [
+                solid(0, 0, palette.ansi[1]),
+                solid(10, 0, palette.background)
+            ]
+        );
+    }
+
+    #[test]
     fn padding_offsets_every_quad() {
         let palette = Palette::default();
         let term = term(2, 1, b"\x1b[41mx");
         let layout = Layout {
             cell: CELL,
             padding: 5,
+            left: 0,
             top: 0,
         };
-        let instances = build(&term, &palette, layout, BASELINE, slot)
+        let instances = build(&term, &palette, layout, BASELINE, false, slot)
             .unwrap()
             .instances;
         assert_eq!(instances[0], solid(5, 5, palette.ansi[1]));
@@ -261,7 +282,7 @@ mod tests {
     fn bold_uses_bold_face_and_bright_color() {
         let palette = Palette::default();
         let term = term(2, 1, b"\x1b[?25l\x1b[1;31mB");
-        let instances = build(&term, &palette, FLUSH, BASELINE, slot)
+        let instances = build(&term, &palette, FLUSH, BASELINE, false, slot)
             .unwrap()
             .instances;
         assert_eq!(instances.len(), 1);
@@ -273,7 +294,7 @@ mod tests {
     fn inverse_swaps_colors() {
         let palette = Palette::default();
         let term = term(2, 1, b"\x1b[?25l\x1b[7mI");
-        let instances = build(&term, &palette, FLUSH, BASELINE, slot)
+        let instances = build(&term, &palette, FLUSH, BASELINE, false, slot)
             .unwrap()
             .instances;
         assert_eq!(instances[0], solid(0, 0, palette.foreground));
@@ -284,7 +305,7 @@ mod tests {
     fn glyph_under_cursor_takes_cell_background_after_cursor_quad() {
         let palette = Palette::default();
         let term = term(2, 1, b"C\x1b[D");
-        let instances = build(&term, &palette, FLUSH, BASELINE, slot)
+        let instances = build(&term, &palette, FLUSH, BASELINE, false, slot)
             .unwrap()
             .instances;
         assert_eq!(instances[0], solid(0, 0, palette.cursor));
@@ -296,10 +317,17 @@ mod tests {
     fn skips_spaces_and_inkless_glyphs() {
         let mut asked = Vec::new();
         let term = term(3, 1, b"\x1b[?25la b");
-        let instances = build(&term, &Palette::default(), FLUSH, BASELINE, |ch, _| {
-            asked.push(ch);
-            Ok(None)
-        })
+        let instances = build(
+            &term,
+            &Palette::default(),
+            FLUSH,
+            BASELINE,
+            false,
+            |ch, _| {
+                asked.push(ch);
+                Ok(None)
+            },
+        )
         .unwrap()
         .instances;
         assert!(instances.is_empty());
@@ -309,9 +337,14 @@ mod tests {
     #[test]
     fn propagates_atlas_full() {
         let term = term(2, 1, b"ab");
-        let result = build(&term, &Palette::default(), FLUSH, BASELINE, |_, _| {
-            Err(AtlasFull)
-        });
+        let result = build(
+            &term,
+            &Palette::default(),
+            FLUSH,
+            BASELINE,
+            false,
+            |_, _| Err(AtlasFull),
+        );
         assert_eq!(result, Err(AtlasFull));
     }
 
@@ -319,7 +352,7 @@ mod tests {
     fn counts_background_quads_before_cursor_and_glyphs() {
         let palette = Palette::default();
         let term = term(3, 1, b"\x1b[41mab\x1b[0m");
-        let quads = build(&term, &palette, FLUSH, BASELINE, slot).unwrap();
+        let quads = build(&term, &palette, FLUSH, BASELINE, false, slot).unwrap();
         assert_eq!(quads.backgrounds, 2);
         assert_eq!(quads.instances[2], solid(20, 0, palette.cursor));
     }
@@ -345,7 +378,7 @@ mod tests {
     fn scrolled_back_viewport_draws_history_rows_and_no_cursor() {
         let mut term = term(3, 2, b"a\r\nb\r\nc");
         term.scroll_display(1);
-        let instances = build(&term, &Palette::default(), FLUSH, BASELINE, slot)
+        let instances = build(&term, &Palette::default(), FLUSH, BASELINE, false, slot)
             .unwrap()
             .instances;
         let chars: Vec<(char, i32)> = instances

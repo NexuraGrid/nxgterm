@@ -30,4 +30,4 @@ pub use gpu::{GpuError, GpuRenderer};
 pub use paint::{CellSize, Layout};
 pub use palette::Palette;
 pub use renderer::CpuRenderer;
-pub use style::{Style, WindowRenderer};
+pub use style::{Overlay, Style, WindowRenderer};

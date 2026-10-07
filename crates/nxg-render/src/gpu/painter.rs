@@ -9,7 +9,7 @@ use super::image::{self, IMAGE_INSTANCE_SIZE, ImageInstance, ImageTextures};
 use super::instance::{self, AtlasFull, GlyphSlot, INSTANCE_SIZE, Quads};
 use crate::images::{self as placements, ImageDraw};
 use crate::paint::{CellSize, Layout};
-use crate::style::Style;
+use crate::style::{Overlay, Style};
 
 /// Instance capacity of the first vertex buffer; it grows on demand.
 const INITIAL_INSTANCES: u64 = 4096;
@@ -154,8 +154,10 @@ impl Painter {
     }
 
     /// Draws `term` into `target` (`width x height` pixels) and submits,
-    /// with the rows of `header` at the top of the grid area and `term`
-    /// below them (see [`Layout::below`]).
+    /// with the rows of `header` at the top of the grid area, `term` below
+    /// them (see [`Layout::below`]) and `overlay` over the grid (see
+    /// [`Layout::at`]).
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         gpu: &Gpu,
@@ -164,16 +166,17 @@ impl Painter {
         height: u32,
         header: Option<&Terminal>,
         term: &Terminal,
+        overlay: Option<Overlay<'_>>,
     ) {
         let rows = header.map_or(0, |header| header.size().rows());
         let layout = self.style.layout().below(rows);
-        let (
-            Quads {
+        let Frame {
+            quads: Quads {
                 instances,
                 backgrounds,
             },
-            header_quads,
-        ) = self.build(&gpu.queue, header, term);
+            term_quads,
+        } = self.build(&gpu.queue, header, term, overlay);
         let bytes = instance::to_bytes(&instances);
         if bytes.len() as u64 > self.instances.size() {
             let size = (bytes.len() as u64).next_power_of_two();
@@ -236,12 +239,13 @@ impl Painter {
                     pass.draw(0..4, range);
                 }
             };
-            let total = (instances.len() - header_quads) as u32;
+            let total = term_quads as u32;
             quads(&mut pass, 0..backgrounds as u32);
             self.draw_images(&mut pass, &below, scissor, &image_bytes);
             quads(&mut pass, backgrounds as u32..total);
             self.draw_images(&mut pass, &above, scissor, &image_bytes);
-            // The header has no images and does not overlap the grid.
+            // The header does not overlap the grid; the overlay goes over
+            // everything. Neither has images.
             quads(&mut pass, total..instances.len() as u32);
         }
         gpu.queue.submit([encoder.finish()]);
@@ -304,29 +308,34 @@ impl Painter {
     }
 
     /// Builds the frame's instances: those of `term`, then those of
-    /// `header` (their count is returned with them). When the atlas fills
-    /// up it is reset and the frame rebuilt once, dropping glyphs that
-    /// still do not fit.
+    /// `header`, then those of `overlay`. When the atlas fills up it is
+    /// reset and the frame rebuilt once, dropping glyphs that still do not
+    /// fit.
     fn build(
         &mut self,
         queue: &wgpu::Queue,
         header: Option<&Terminal>,
         term: &Terminal,
-    ) -> (Quads, usize) {
+        overlay: Option<Overlay<'_>>,
+    ) -> Frame {
         let layout = self.style.layout();
         let rows = header.map_or(0, |header| header.size().rows());
+        let grid = layout.below(rows);
         let baseline = self.style.font.baseline();
         let (atlas, font, palette) = (&mut self.atlas, &mut self.style.font, &self.style.palette);
         let all = |glyph: &mut dyn FnMut(char, bool) -> Result<Option<GlyphSlot>, AtlasFull>| {
-            let mut quads =
-                instance::build(term, palette, layout.below(rows), baseline, &mut *glyph)?;
-            let Some(header) = header else {
-                return Ok((quads, 0));
-            };
-            let extra = instance::build(header, palette, layout, baseline, &mut *glyph)?.instances;
-            let count = extra.len();
-            quads.instances.extend(extra);
-            Ok((quads, count))
+            let mut quads = instance::build(term, palette, grid, baseline, false, &mut *glyph)?;
+            let term_quads = quads.instances.len();
+            if let Some(header) = header {
+                let extra = instance::build(header, palette, layout, baseline, false, &mut *glyph)?;
+                quads.instances.extend(extra.instances);
+            }
+            if let Some(Overlay { terminal, col, row }) = overlay {
+                let at = grid.at(col, row);
+                let extra = instance::build(terminal, palette, at, baseline, true, &mut *glyph)?;
+                quads.instances.extend(extra.instances);
+            }
+            Ok(Frame { quads, term_quads })
         };
         let first = all(&mut |ch, bold| atlas.slot(queue, font, ch, bold));
         first.unwrap_or_else(|_: AtlasFull| {
@@ -335,6 +344,14 @@ impl Painter {
                 .unwrap_or_default()
         })
     }
+}
+
+/// One frame's quads: those of the grid first (`term_quads` of them),
+/// then the header's and the overlay's.
+#[derive(Debug, Default)]
+struct Frame {
+    quads: Quads,
+    term_quads: usize,
 }
 
 /// The image pipeline: same bind group layout as the glyph pipeline

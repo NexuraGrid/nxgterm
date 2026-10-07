@@ -14,7 +14,7 @@ use crate::frame::Frame;
 use crate::images::tests::encode_base64;
 use crate::palette::{Palette, rgb};
 use crate::renderer::CpuRenderer;
-use crate::style::Style;
+use crate::style::{Overlay, Style};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -31,15 +31,17 @@ fn headless_gpu() -> Option<Gpu> {
 
 /// Renders `term` offscreen and reads it back as 0RGB pixels.
 fn render_offscreen(gpu: &Gpu, painter: &mut Painter, term: &Terminal, w: u32, h: u32) -> Vec<u32> {
-    render_offscreen_with(gpu, painter, None, term, w, h)
+    render_offscreen_with(gpu, painter, None, term, None, w, h)
 }
 
-/// [`render_offscreen`] with `header` rows above the grid.
+/// [`render_offscreen`] with `header` rows above the grid and `overlay`
+/// over it.
 fn render_offscreen_with(
     gpu: &Gpu,
     painter: &mut Painter,
     header: Option<&Terminal>,
     term: &Terminal,
+    overlay: Option<Overlay<'_>>,
     w: u32,
     h: u32,
 ) -> Vec<u32> {
@@ -58,7 +60,7 @@ fn render_offscreen_with(
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    painter.render(gpu, &view, w, h, header, term);
+    painter.render(gpu, &view, w, h, header, term, overlay);
 
     let row = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -142,18 +144,32 @@ fn gpu_output_matches_cpu_renderer() {
     let mut header = Terminal::new(TermSize::new(8, 1).unwrap());
     header.advance(b"\x1b[?25l\x1b[7m 1: sh \x1b[0m\x1b[90m 2:");
     let header = Some(&header);
+    // An overlay (like the command palette) checks that both draw it over
+    // the grid and its images, default backgrounds and cursor included.
+    let mut boxed = Terminal::new(TermSize::new(5, 2).unwrap());
+    boxed.advance(b"\x1b[7m Pal \x1b[0m\r\n\x1b[90m>\x1b[0m x");
+    let overlay = Some(Overlay {
+        terminal: &boxed,
+        col: 2,
+        row: 1,
+    });
     // A margin right and below the padded grid checks the clear color too.
     let (w, h) = cpu.layout().below(1).window_size(term.size());
     let (w, h) = (w + 3, h + 2);
 
     let mut expected = vec![0; (w * h) as usize];
-    cpu.render_with_header(header, &term, &mut Frame::new(&mut expected, w, h).unwrap());
+    cpu.render_layers(
+        header,
+        &term,
+        overlay,
+        &mut Frame::new(&mut expected, w, h).unwrap(),
+    );
 
     let mut painter = Painter::new(&gpu, FORMAT, style(gpu_font));
     assert_eq!(painter.cell_size(), cell);
-    let actual = render_offscreen_with(&gpu, &mut painter, header, &term, w, h);
+    let actual = render_offscreen_with(&gpu, &mut painter, header, &term, overlay, w, h);
     // Draw twice to exercise cached atlas slots and buffer reuse.
-    let again = render_offscreen_with(&gpu, &mut painter, header, &term, w, h);
+    let again = render_offscreen_with(&gpu, &mut painter, header, &term, overlay, w, h);
     assert_eq!(actual, again);
     assert_eq!(gpu.failure(), None);
 
