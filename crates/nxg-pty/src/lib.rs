@@ -4,6 +4,8 @@
 //! ConPTY on Win10 1809+ / Server 2019+). Phase 6 adds embedded winpty as a
 //! fallback for Windows Server 2016.
 
+mod shell;
+
 use std::fmt;
 use std::io::{self, Write};
 
@@ -30,8 +32,16 @@ impl fmt::Display for PtyError {
 
 impl std::error::Error for PtyError {}
 
-/// Spawns the user's default shell (`$SHELL` or `/bin/sh`; `%COMSPEC%` on Windows).
+/// Spawns the user's default shell.
+///
+/// Unix: `$SHELL`, falling back to `/bin/sh`. Windows: PowerShell 7, then
+/// Windows PowerShell 5.1, then `%ComSpec%` (cmd.exe).
 pub fn spawn_shell(size: TermSize) -> Result<PtySession, PtyError> {
+    #[cfg(windows)]
+    let shell = shell::default_windows_shell();
+    #[cfg(windows)]
+    return spawn(size, || CommandBuilder::new(&shell));
+    #[cfg(not(windows))]
     spawn(size, CommandBuilder::new_default_prog)
 }
 
