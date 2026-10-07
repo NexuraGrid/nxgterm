@@ -243,7 +243,13 @@ impl ApplicationHandler<UserEvent> for App {
                     session.restyle(config);
                     return;
                 }
-                let bytes = keys::encode(&event.logical_key, event.text.as_deref(), self.modifiers);
+                let modes = session.terminal.modes();
+                let bytes = keys::encode(
+                    &event.logical_key,
+                    event.text.as_deref(),
+                    self.modifiers,
+                    modes,
+                );
                 if let Some(bytes) = bytes {
                     if let Err(error) = session.pty.write_all(&bytes) {
                         eprintln!("nxgterm: pty write failed: {error}");

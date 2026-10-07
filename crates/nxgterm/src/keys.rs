@@ -1,19 +1,27 @@
 //! Keyboard input encoding: winit keys to the bytes a shell expects.
 
+use nxg_core::Modes;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 /// Bytes to send to the pty for a key press, or `None` if it sends nothing.
 ///
-/// `text` is the text the key produced (winit's `KeyEvent::text`).
-pub fn encode(key: &Key, text: Option<&str>, mods: ModifiersState) -> Option<Vec<u8>> {
+/// `text` is the text the key produced (winit's `KeyEvent::text`). `modes` is
+/// the terminal's current state: full-screen programs switch cursor keys to
+/// `ESC O x` and would misread the normal form.
+pub fn encode(
+    key: &Key,
+    text: Option<&str>,
+    mods: ModifiersState,
+    modes: Modes,
+) -> Option<Vec<u8>> {
     match key {
-        Key::Named(named) => encode_named(*named, mods).map(|bytes| bytes.to_vec()),
+        Key::Named(named) => encode_named(*named, mods, modes).map(|bytes| bytes.to_vec()),
         Key::Character(chars) => encode_char(chars, text, mods),
         _ => None,
     }
 }
 
-fn encode_named(key: NamedKey, mods: ModifiersState) -> Option<&'static [u8]> {
+fn encode_named(key: NamedKey, mods: ModifiersState, modes: Modes) -> Option<&'static [u8]> {
     Some(match key {
         NamedKey::Enter => b"\r",
         NamedKey::Backspace => b"\x7f",
@@ -22,11 +30,17 @@ fn encode_named(key: NamedKey, mods: ModifiersState) -> Option<&'static [u8]> {
         NamedKey::Escape => b"\x1b",
         NamedKey::Space if mods.control_key() => b"\0",
         NamedKey::Space => b" ",
+        NamedKey::ArrowUp if modes.app_cursor_keys => b"\x1bOA",
         NamedKey::ArrowUp => b"\x1b[A",
+        NamedKey::ArrowDown if modes.app_cursor_keys => b"\x1bOB",
         NamedKey::ArrowDown => b"\x1b[B",
+        NamedKey::ArrowRight if modes.app_cursor_keys => b"\x1bOC",
         NamedKey::ArrowRight => b"\x1b[C",
+        NamedKey::ArrowLeft if modes.app_cursor_keys => b"\x1bOD",
         NamedKey::ArrowLeft => b"\x1b[D",
+        NamedKey::Home if modes.app_cursor_keys => b"\x1bOH",
         NamedKey::Home => b"\x1b[H",
+        NamedKey::End if modes.app_cursor_keys => b"\x1bOF",
         NamedKey::End => b"\x1b[F",
         NamedKey::Insert => b"\x1b[2~",
         NamedKey::Delete => b"\x1b[3~",
@@ -61,13 +75,27 @@ fn single_ascii_letter(chars: &str) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nxg_core::Modes;
 
     fn named(key: NamedKey) -> Option<Vec<u8>> {
-        encode(&Key::Named(key), None, ModifiersState::empty())
+        encode(
+            &Key::Named(key),
+            None,
+            ModifiersState::empty(),
+            Modes::default(),
+        )
+    }
+
+    fn named_app(key: NamedKey) -> Option<Vec<u8>> {
+        let modes = Modes {
+            app_cursor_keys: true,
+            ..Modes::default()
+        };
+        encode(&Key::Named(key), None, ModifiersState::empty(), modes)
     }
 
     fn ch(c: &str, mods: ModifiersState) -> Option<Vec<u8>> {
-        encode(&Key::Character(c.into()), Some(c), mods)
+        encode(&Key::Character(c.into()), Some(c), mods, Modes::default())
     }
 
     #[test]
@@ -93,8 +121,53 @@ mod tests {
     }
 
     #[test]
+    fn application_cursor_keys_use_ss3() {
+        assert_eq!(named_app(NamedKey::ArrowUp).unwrap(), b"\x1bOA");
+        assert_eq!(named_app(NamedKey::ArrowDown).unwrap(), b"\x1bOB");
+        assert_eq!(named_app(NamedKey::ArrowRight).unwrap(), b"\x1bOC");
+        assert_eq!(named_app(NamedKey::ArrowLeft).unwrap(), b"\x1bOD");
+        assert_eq!(named_app(NamedKey::Home).unwrap(), b"\x1bOH");
+        assert_eq!(named_app(NamedKey::End).unwrap(), b"\x1bOF");
+    }
+
+    #[test]
+    fn application_cursor_keys_leave_other_keys_alone() {
+        assert_eq!(named_app(NamedKey::PageUp).unwrap(), b"\x1b[5~");
+        assert_eq!(named_app(NamedKey::Delete).unwrap(), b"\x1b[3~");
+        assert_eq!(named_app(NamedKey::Enter).unwrap(), b"\r");
+        let modes = Modes {
+            app_cursor_keys: true,
+            alt_screen: true,
+        };
+        let bytes = encode(
+            &Key::Character("a".into()),
+            Some("a"),
+            ModifiersState::empty(),
+            modes,
+        );
+        assert_eq!(bytes.unwrap(), b"a");
+        // alt_screen alone does not change arrows.
+        let alt_only = Modes {
+            app_cursor_keys: false,
+            alt_screen: true,
+        };
+        let up = encode(
+            &Key::Named(NamedKey::ArrowUp),
+            None,
+            ModifiersState::empty(),
+            alt_only,
+        );
+        assert_eq!(up.unwrap(), b"\x1b[A");
+    }
+
+    #[test]
     fn shift_tab_is_back_tab() {
-        let bytes = encode(&Key::Named(NamedKey::Tab), None, ModifiersState::SHIFT);
+        let bytes = encode(
+            &Key::Named(NamedKey::Tab),
+            None,
+            ModifiersState::SHIFT,
+            Modes::default(),
+        );
         assert_eq!(bytes.unwrap(), b"\x1b[Z");
     }
 
@@ -122,7 +195,12 @@ mod tests {
         assert_eq!(named(NamedKey::Shift), None);
         assert_eq!(named(NamedKey::F24), None);
         assert_eq!(
-            encode(&Key::Character("x".into()), None, ModifiersState::SUPER),
+            encode(
+                &Key::Character("x".into()),
+                None,
+                ModifiersState::SUPER,
+                Modes::default()
+            ),
             None
         );
     }

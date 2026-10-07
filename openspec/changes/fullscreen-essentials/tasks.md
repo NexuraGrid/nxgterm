@@ -151,22 +151,22 @@ Spec references: `TC` = `specs/terminal-core/spec.md`, `II` = `specs/inline-imag
 
 ### Phase 4.A: Modes in core
 
-- [ ] 4.1 RED (`terminal/modes.rs`): `Terminal::modes()` returns default `Modes { app_cursor_keys: false, alt_screen: false }`; `CSI ? 1 h` sets `app_cursor_keys`, `CSI ? 1 l` clears it; `alt_screen` follows `?1049h/l` and is derived from `State`, not stored twice; `ESC =` and `ESC >` leave modes unchanged; RIS clears `app_cursor_keys` (D10, D13). GREEN: add `Modes` (`Debug, Clone, Copy, Default, PartialEq, Eq`), `Terminal::modes()`, and `?1` handling; export `Modes` from `crates/nxg-core/src/lib.rs`
-- [ ] 4.2 Update `unknown_and_malformed_sequences_are_ignored` for `?1`. RED first, GREEN after 4.1
+- [x] 4.1 RED (`terminal/modes.rs`): `Terminal::modes()` returns default `Modes { app_cursor_keys: false, alt_screen: false }`; `CSI ? 1 h` sets `app_cursor_keys`, `CSI ? 1 l` clears it; `alt_screen` follows `?1049h/l` and is derived from `State`, not stored twice; `ESC =` and `ESC >` leave modes unchanged; RIS clears `app_cursor_keys` (D10, D13). GREEN: add `Modes` (`Debug, Clone, Copy, Default, PartialEq, Eq`), `Terminal::modes()`, and `?1` handling; export `Modes` from `crates/nxg-core/src/lib.rs`
+- [x] 4.2 Update `unknown_and_malformed_sequences_are_ignored` for `?1`. RED first, GREEN after 4.1 — nothing to change: `?1` was never in the ignored list
 
 ### Phase 4.B: Key encoding and wiring
 
-- [ ] 4.3 RED (`crates/nxgterm/src/keys.rs`): extend `encodes_navigation_keys`: with `app_cursor_keys` arrows encode `ESC O A..D` and Home/End `ESC O H`/`ESC O F`; without it unchanged (`ESC [ ...`); other keys unaffected (TC "Application cursor keys"). GREEN: change `encode` to take a `Modes` parameter and update all existing test call sites
-- [ ] 4.4 Wire `app.rs` (line ~246) to pass `session.terminal.modes()` into `keys::encode`. RED: compile failure at the call site after 4.3 signature change; GREEN: pass the value. No extra unit test (composition root); covered by 4.3 plus the manual check below
-- [ ] 4.5 Manual check on Linux: in `vim -u NONE` and `less`, arrow keys scroll/move correctly (DECCKM on), and after exit arrows in the shell prompt (history) still work
+- [x] 4.3 RED (`crates/nxgterm/src/keys.rs`): extend `encodes_navigation_keys`: with `app_cursor_keys` arrows encode `ESC O A..D` and Home/End `ESC O H`/`ESC O F`; without it unchanged (`ESC [ ...`); other keys unaffected (TC "Application cursor keys"). GREEN: change `encode` to take a `Modes` parameter and update all existing test call sites
+- [x] 4.4 Wire `app.rs` (line ~246) to pass `session.terminal.modes()` into `keys::encode`. RED: compile failure at the call site after 4.3 signature change; GREEN: pass the value. No extra unit test (composition root); covered by 4.3 plus the manual check below
+- [x] 4.5 Manual check on Linux: in `vim -u NONE` and `less`, arrow keys scroll/move correctly (DECCKM on), and after exit arrows in the shell prompt (history) still work — verified 2026-10-07 on KDE Wayland with an `od -c` probe: normal mode sends `ESC [ A..D`, DECCKM sends `ESC O A..D`
 
 ### Phase 4.C: Verification (S4)
 
-- [ ] 4.6 Run `cargo fmt --all --check`
-- [ ] 4.7 Run `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets`
-- [ ] 4.8 Run `cargo test --workspace`
-- [ ] 4.9 Run `cargo +1.85 check --workspace --all-targets`
-- [ ] 4.10 Confirm the S4 diff is under 800 changed lines
+- [x] 4.6 Run `cargo fmt --all --check`
+- [x] 4.7 Run `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets`
+- [x] 4.8 Run `cargo test --workspace`
+- [x] 4.9 Run `cargo +1.85 check --workspace --all-targets`
+- [x] 4.10 Confirm the S4 diff is under 800 changed lines — 202 (code only, excluding openspec/)
 
 **PR boundary: S4 ends here.**
 

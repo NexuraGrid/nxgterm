@@ -16,4 +16,4 @@ pub mod terminal;
 
 pub use cell::{Cell, Color, Flags};
 pub use size::{CellPixels, SizeError, TermSize, WinSize};
-pub use terminal::{Cursor, Terminal};
+pub use terminal::{Cursor, Modes, Terminal};
