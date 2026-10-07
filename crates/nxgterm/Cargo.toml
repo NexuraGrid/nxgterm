@@ -1,0 +1,16 @@
+[package]
+name = "nxgterm"
+description = "Fast, configurable, cross-platform terminal emulator."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+nxg-core.workspace = true
+nxg-pty.workspace = true
+nxg-render.workspace = true
+nxg-config.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "nxg-core"
+description = "Platform-agnostic terminal core: domain types and ports."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
