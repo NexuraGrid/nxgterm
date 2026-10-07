@@ -8,6 +8,8 @@ license.workspace = true
 
 [dependencies]
 nxg-core.workspace = true
+fontdb.workspace = true
+fontdue.workspace = true
 
 [lints]
 workspace = true

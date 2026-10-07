@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 nxg-core.workspace = true
+portable-pty.workspace = true
 
 [lints]
 workspace = true

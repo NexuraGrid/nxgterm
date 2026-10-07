@@ -12,9 +12,9 @@ Hexagonal: a platform-agnostic core defines ports, and adapters implement them p
 
 | Crate | Role |
 |---|---|
-| `nxg-core` | Domain types, ports (`Pty`), runtime backend fallback |
+| `nxg-core` | Terminal state (VT parser, grid), ports (`PtySession`), runtime backend fallback |
 | `nxg-pty` | PTY adapters: Unix pty, ConPTY, winpty (Server 2016) |
-| `nxg-render` | Renderers: wgpu (GPU) with CPU fallback |
+| `nxg-render` | Renderers: CPU (fontdb + fontdue), wgpu GPU planned |
 | `nxg-config` | Configuration, themes, fonts, key bindings |
 | `nxgterm` | Application binary wiring everything together |
 

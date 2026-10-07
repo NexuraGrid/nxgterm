@@ -1,0 +1,106 @@
+//! Fixed-size grid of cells.
+
+use crate::TermSize;
+use crate::cell::Cell;
+
+/// A `cols x rows` grid stored row-major.
+#[derive(Debug, Clone)]
+pub struct Grid {
+    size: TermSize,
+    cells: Vec<Cell>,
+}
+
+impl Grid {
+    pub fn new(size: TermSize) -> Self {
+        let len = usize::from(size.cols()) * usize::from(size.rows());
+        Self {
+            size,
+            cells: vec![Cell::default(); len],
+        }
+    }
+
+    pub fn size(&self) -> TermSize {
+        self.size
+    }
+
+    /// The cells of `row`. Panics if `row` is out of bounds.
+    pub fn row(&self, row: u16) -> &[Cell] {
+        &self.cells[self.span(row)]
+    }
+
+    pub fn row_mut(&mut self, row: u16) -> &mut [Cell] {
+        let span = self.span(row);
+        &mut self.cells[span]
+    }
+
+    /// Moves every row up by one, filling the last row with `blank`.
+    pub fn scroll_up(&mut self, blank: Cell) {
+        let cols = usize::from(self.size.cols());
+        self.cells.copy_within(cols.., 0);
+        let len = self.cells.len();
+        self.cells[len - cols..].fill(blank);
+    }
+
+    /// Resizes keeping the top-left content; new cells are blank.
+    pub fn resize(&mut self, size: TermSize) {
+        let mut next = Self::new(size);
+        let cols = usize::from(size.cols().min(self.size.cols()));
+        for row in 0..size.rows().min(self.size.rows()) {
+            next.row_mut(row)[..cols].copy_from_slice(&self.row(row)[..cols]);
+        }
+        *self = next;
+    }
+
+    fn span(&self, row: u16) -> std::ops::Range<usize> {
+        assert!(row < self.size.rows(), "row {row} out of bounds");
+        let cols = usize::from(self.size.cols());
+        let start = usize::from(row) * cols;
+        start..start + cols
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn size(cols: u16, rows: u16) -> TermSize {
+        TermSize::new(cols, rows).unwrap()
+    }
+
+    fn put(grid: &mut Grid, col: u16, row: u16, ch: char) {
+        grid.row_mut(row)[col as usize].ch = ch;
+    }
+
+    #[test]
+    fn new_grid_is_blank() {
+        let grid = Grid::new(size(3, 2));
+        assert_eq!(grid.row(0), &[Cell::default(); 3]);
+        assert_eq!(grid.row(1).len(), 3);
+    }
+
+    #[test]
+    fn scroll_up_shifts_rows_and_blanks_last() {
+        let mut grid = Grid::new(size(2, 2));
+        put(&mut grid, 0, 0, 'a');
+        put(&mut grid, 0, 1, 'b');
+        let blank = Cell {
+            ch: '.',
+            ..Cell::default()
+        };
+        grid.scroll_up(blank);
+        assert_eq!(grid.row(0)[0].ch, 'b');
+        assert_eq!(grid.row(1), &[blank; 2]);
+    }
+
+    #[test]
+    fn resize_keeps_top_left_content() {
+        let mut grid = Grid::new(size(3, 3));
+        put(&mut grid, 0, 0, 'a');
+        put(&mut grid, 2, 2, 'z');
+        grid.resize(size(2, 4));
+        assert_eq!(grid.size(), size(2, 4));
+        assert_eq!(grid.row(0)[0].ch, 'a');
+        assert_eq!(grid.row(2), &[Cell::default(); 2]);
+        assert_eq!(grid.row(3).len(), 2);
+    }
+}
