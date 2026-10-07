@@ -1,23 +1,24 @@
 //! Window, event loop and the glue between pty, terminal and renderer.
 
+use std::env;
 use std::error::Error;
 use std::io::{Read, Write};
-use std::num::NonZeroU32;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
 use std::thread;
 
-use nxg_core::Terminal;
-use nxg_core::ports::{ChildProcess, PtyControl};
+use nxg_core::fallback::{self, Init};
+use nxg_core::ports::{ChildProcess, PtyControl, RenderError, Renderer};
+use nxg_core::{TermSize, Terminal};
 use nxg_render::font::DEFAULT_PX;
-use nxg_render::{CpuRenderer, Font, Frame, Palette};
-use softbuffer::{Context, Surface};
+use nxg_render::{CellSize, CpuWindowRenderer, Font, GpuRenderer, Palette};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
-use crate::keys;
+use crate::{choice, keys};
 
 /// Events posted to the event loop from background threads.
 #[derive(Debug)]
@@ -31,10 +32,14 @@ pub enum UserEvent {
 /// Everything that exists once the window is up.
 struct Session {
     window: Arc<Window>,
-    surface: Surface<Arc<Window>, Arc<Window>>,
-    renderer: CpuRenderer,
+    renderer: Box<dyn Renderer>,
+    /// Font size in pixels, kept to rebuild a renderer on fallback.
+    font_px: f32,
     terminal: Terminal,
     pty: Box<dyn PtyControl>,
+    /// Consecutive skipped frames; bounds retries so a surface that keeps
+    /// failing (e.g. occluded) does not spin the event loop.
+    skipped_frames: u8,
 }
 
 pub struct App {
@@ -62,14 +67,13 @@ impl App {
     fn start(&self, event_loop: &ActiveEventLoop) -> Result<Session, Box<dyn Error>> {
         let attributes = Window::default_attributes().with_title("nxgterm");
         let window = Arc::new(event_loop.create_window(attributes)?);
-        let context = Context::new(window.clone())?;
-        let surface = Surface::new(&context, window.clone())?;
 
         // TODO(phase 4): font size from config; re-rasterize on scale changes.
-        let px = DEFAULT_PX * window.scale_factor() as f32;
-        let renderer = CpuRenderer::new(Font::system(px)?, Palette::default());
+        let font_px = DEFAULT_PX * window.scale_factor() as f32;
+        let mut renderer = select_renderer(&window, font_px)?;
         let pixels = window.inner_size();
-        let size = renderer.cell_size().grid_size(pixels.width, pixels.height);
+        renderer.resize(pixels.width, pixels.height);
+        let size = grid_size(renderer.as_ref(), &window);
 
         let pty = nxg_pty::spawn_shell(size)?;
         spawn_reader(pty.reader, self.proxy.clone());
@@ -77,9 +81,10 @@ impl App {
 
         Ok(Session {
             window,
-            surface,
             renderer,
+            font_px,
             terminal: Terminal::new(size),
+            skipped_frames: 0,
             pty: pty.control,
         })
     }
@@ -126,16 +131,8 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(pixels) => {
-                let size = session
-                    .renderer
-                    .cell_size()
-                    .grid_size(pixels.width, pixels.height);
-                if size != session.terminal.size() {
-                    session.terminal.resize(size);
-                    if let Err(error) = session.pty.resize(size) {
-                        eprintln!("nxgterm: pty resize failed: {error}");
-                    }
-                }
+                session.renderer.resize(pixels.width, pixels.height);
+                session.sync_grid_size();
                 session.window.request_redraw();
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
@@ -157,22 +154,147 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
+const MAX_FRAME_RETRIES: u8 = 3;
+
 impl Session {
     fn redraw(&mut self) -> Result<(), Box<dyn Error>> {
+        match self.renderer.draw(&self.terminal) {
+            Ok(()) => {
+                self.skipped_frames = 0;
+                Ok(())
+            }
+            Err(RenderError::Transient(_)) => {
+                // Retry a few times, then wait for the next event to redraw.
+                if self.skipped_frames < MAX_FRAME_RETRIES {
+                    self.skipped_frames += 1;
+                    self.window.request_redraw();
+                }
+                Ok(())
+            }
+            Err(error) if self.renderer.name() != "cpu" => {
+                eprintln!(
+                    "nxgterm: {} renderer failed: {error}; falling back to cpu",
+                    self.renderer.name()
+                );
+                self.fall_back_to_cpu()
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Replaces a failed renderer with the CPU one and redraws.
+    fn fall_back_to_cpu(&mut self) -> Result<(), Box<dyn Error>> {
+        // Release the failed renderer's surface before attaching a new one:
+        // some platforms do not allow two presenters on one window.
+        drop(std::mem::replace(&mut self.renderer, Box::new(Detached)));
+        self.renderer = cpu_renderer(self.window.clone(), self.font_px)?;
         let pixels = self.window.inner_size();
-        let (Some(width), Some(height)) = (
-            NonZeroU32::new(pixels.width),
-            NonZeroU32::new(pixels.height),
-        ) else {
-            return Ok(()); // Minimized.
-        };
-        self.surface.resize(width, height)?;
-        let mut buffer = self.surface.buffer_mut()?;
-        let mut frame = Frame::new(&mut buffer, width.get(), height.get())
-            .ok_or("surface buffer smaller than the window")?;
-        self.renderer.render(&self.terminal, &mut frame);
-        buffer.present()?;
+        self.renderer.resize(pixels.width, pixels.height);
+        eprintln!("nxgterm: renderer cpu");
+        self.sync_grid_size();
+        self.window.request_redraw();
         Ok(())
+    }
+
+    /// Resizes the terminal and the pty to what fits the window with the
+    /// active renderer's cell size.
+    fn sync_grid_size(&mut self) {
+        let size = grid_size(self.renderer.as_ref(), &self.window);
+        if size != self.terminal.size() {
+            self.terminal.resize(size);
+            if let Err(error) = self.pty.resize(size) {
+                eprintln!("nxgterm: pty resize failed: {error}");
+            }
+        }
+    }
+}
+
+/// Grid size that fits the window with `renderer`'s cells.
+fn grid_size(renderer: &dyn Renderer, window: &Window) -> TermSize {
+    let (width, height) = renderer.cell_size();
+    let pixels = window.inner_size();
+    CellSize { width, height }.grid_size(pixels.width, pixels.height)
+}
+
+/// Picks the first renderer that starts, in the order given by
+/// `NXGTERM_RENDERER` (default: gpu, then cpu), and logs the choice.
+fn select_renderer(
+    window: &Arc<Window>,
+    font_px: f32,
+) -> Result<Box<dyn Renderer>, Box<dyn Error>> {
+    let order = choice::renderer_order(env::var(choice::ENV_VAR).ok().as_deref());
+    let candidates = order
+        .iter()
+        .map(|&name| {
+            let window = window.clone();
+            let init: Init<'_, Box<dyn Renderer>, Box<dyn Error>> = match name {
+                "gpu" => Box::new(move || gpu_renderer(window, font_px)),
+                _ => Box::new(move || cpu_renderer(window, font_px)),
+            };
+            (name, init)
+        })
+        .collect();
+    match fallback::first_available(candidates) {
+        Ok(selected) => {
+            for attempt in &selected.skipped {
+                eprintln!("nxgterm: skipped {}: {}", attempt.name, attempt.error);
+            }
+            eprintln!("nxgterm: renderer {}", selected.name);
+            Ok(selected.backend)
+        }
+        Err(attempts) => {
+            let reasons: Vec<String> = attempts
+                .iter()
+                .map(|attempt| format!("{}: {}", attempt.name, attempt.error))
+                .collect();
+            Err(format!("no renderer available ({})", reasons.join("; ")).into())
+        }
+    }
+}
+
+fn gpu_renderer(window: Arc<Window>, font_px: f32) -> Result<Box<dyn Renderer>, Box<dyn Error>> {
+    let font = Font::system(font_px)?;
+    let pixels = window.inner_size();
+    // A driver or wgpu panic during setup must not take the terminal down.
+    let renderer = panic::catch_unwind(AssertUnwindSafe(|| {
+        GpuRenderer::new(
+            window,
+            pixels.width,
+            pixels.height,
+            font,
+            Palette::default(),
+        )
+    }))
+    .map_err(|_| "panicked during initialization")??;
+    eprintln!("nxgterm: gpu adapter {}", renderer.adapter());
+    Ok(Box::new(renderer))
+}
+
+fn cpu_renderer(window: Arc<Window>, font_px: f32) -> Result<Box<dyn Renderer>, Box<dyn Error>> {
+    let font = Font::system(font_px)?;
+    Ok(Box::new(CpuWindowRenderer::new(
+        window,
+        font,
+        Palette::default(),
+    )?))
+}
+
+/// Placeholder that holds no surface, used only while swapping renderers.
+struct Detached;
+
+impl Renderer for Detached {
+    fn name(&self) -> &'static str {
+        "none"
+    }
+
+    fn cell_size(&self) -> (u32, u32) {
+        (1, 1)
+    }
+
+    fn resize(&mut self, _width: u32, _height: u32) {}
+
+    fn draw(&mut self, _terminal: &Terminal) -> Result<(), RenderError> {
+        Err(RenderError::Fatal("no renderer attached".into()))
     }
 }
 

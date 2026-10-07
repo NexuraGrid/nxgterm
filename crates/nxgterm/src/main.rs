@@ -1,6 +1,7 @@
-//! nxgterm: window, shell in a pty, CPU-rendered text.
+//! nxgterm: window, shell in a pty, GPU-rendered text with a CPU fallback.
 
 mod app;
+mod choice;
 mod keys;
 
 use std::error::Error;

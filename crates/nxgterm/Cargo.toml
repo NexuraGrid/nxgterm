@@ -11,7 +11,6 @@ nxg-core.workspace = true
 nxg-pty.workspace = true
 nxg-render.workspace = true
 nxg-config.workspace = true
-softbuffer.workspace = true
 winit.workspace = true
 
 [lints]

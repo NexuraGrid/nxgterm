@@ -19,8 +19,20 @@ fontdb = "0.24"
 # 0.9.4 uses `cast_signed` (Rust 1.87) without declaring a rust-version.
 fontdue = "=0.9.3"
 portable-pty = "0.9"
+pollster = "1"
+raw-window-handle = "0.6"
 softbuffer = "0.4"
 vte = "0.15"
+# 27+ requires Rust 1.88; 26 declares 1.84. `webgpu` (wasm only) is left out.
+wgpu = { version = "26", default-features = false, features = [
+    "std",
+    "parking_lot",
+    "dx12",
+    "metal",
+    "vulkan",
+    "gles",
+    "wgsl",
+] }
 winit = "0.30"
 
 [workspace.lints.rust]
