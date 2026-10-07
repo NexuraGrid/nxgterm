@@ -7,10 +7,9 @@ use nxg_core::ports::{RenderError, Renderer};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use softbuffer::{Context, SoftBufferError, Surface};
 
-use crate::font::Font;
 use crate::frame::Frame;
-use crate::palette::Palette;
 use crate::renderer::CpuRenderer;
+use crate::style::{Style, WindowRenderer};
 
 /// [`CpuRenderer`] plus a softbuffer surface; works everywhere.
 pub struct CpuWindowRenderer<W: HasDisplayHandle + HasWindowHandle> {
@@ -32,12 +31,12 @@ impl<W: HasDisplayHandle + HasWindowHandle> std::fmt::Debug for CpuWindowRendere
 impl<W: HasDisplayHandle + HasWindowHandle + Clone> CpuWindowRenderer<W> {
     /// Creates a surface for `window`; call [`Renderer::resize`] before
     /// the first draw.
-    pub fn new(window: W, font: Font, palette: Palette) -> Result<Self, SoftBufferError> {
+    pub fn new(window: W, style: Style) -> Result<Self, SoftBufferError> {
         let context = Context::new(window.clone())?;
         let surface = Surface::new(&context, window)?;
         Ok(Self {
             surface,
-            renderer: CpuRenderer::new(font, palette),
+            renderer: CpuRenderer::new(style),
             width: 0,
             height: 0,
         })
@@ -72,5 +71,11 @@ impl<W: HasDisplayHandle + HasWindowHandle> Renderer for CpuWindowRenderer<W> {
             .ok_or_else(|| RenderError::Fatal("surface buffer smaller than the window".into()))?;
         self.renderer.render(terminal, &mut frame);
         buffer.present().map_err(fatal)
+    }
+}
+
+impl<W: HasDisplayHandle + HasWindowHandle> WindowRenderer for CpuWindowRenderer<W> {
+    fn set_style(&mut self, style: Style) {
+        self.renderer.set_style(style);
     }
 }

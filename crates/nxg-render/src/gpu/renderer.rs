@@ -7,8 +7,7 @@ use super::GpuError;
 use super::device::Gpu;
 use super::format;
 use super::painter::Painter;
-use crate::font::Font;
-use crate::palette::Palette;
+use crate::style::{Style, WindowRenderer};
 
 /// GPU renderer presenting to a window surface.
 #[derive(Debug)]
@@ -23,13 +22,7 @@ impl GpuRenderer {
     /// Creates a surface for `window` (`width x height` pixels) on the best
     /// hardware adapter. Fails on software-only adapters so the caller can
     /// fall back to the CPU renderer.
-    pub fn new<W>(
-        window: W,
-        width: u32,
-        height: u32,
-        font: Font,
-        palette: Palette,
-    ) -> Result<Self, GpuError>
+    pub fn new<W>(window: W, width: u32, height: u32, style: Style) -> Result<Self, GpuError>
     where
         W: wgpu::WindowHandle + 'static,
     {
@@ -59,7 +52,7 @@ impl GpuRenderer {
             alpha_mode,
             view_formats: Vec::new(),
         };
-        let painter = Painter::new(&gpu, format, font, palette);
+        let painter = Painter::new(&gpu, format, style);
         let mut renderer = Self {
             surface,
             config,
@@ -139,5 +132,11 @@ impl Renderer for GpuRenderer {
             Some(failure) => Err(RenderError::Fatal(failure)),
             None => Ok(()),
         }
+    }
+}
+
+impl WindowRenderer for GpuRenderer {
+    fn set_style(&mut self, style: Style) {
+        self.painter.set_style(style);
     }
 }

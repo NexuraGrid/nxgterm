@@ -13,6 +13,7 @@ use crate::font::{DEFAULT_PX, Font};
 use crate::frame::Frame;
 use crate::palette::{Palette, rgb};
 use crate::renderer::CpuRenderer;
+use crate::style::Style;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -107,15 +108,28 @@ fn gpu_output_matches_cpu_renderer() {
 
     let mut term = Terminal::new(TermSize::new(8, 3).unwrap());
     term.advance(b"Hi \x1b[1;31mBold\x1b[0m\r\n\x1b[7mInv\x1b[0m \x1b[42;30mgr\x1b[0m\r\n\x1b[38;2;10;200;90mrgb");
-    let mut cpu = CpuRenderer::new(cpu_font, Palette::default());
+    // A non-default palette checks that both honor it, the clear color
+    // included; padding checks that both offset the grid the same way.
+    let palette = Palette {
+        background: rgb(0x1a, 0x1b, 0x26),
+        foreground: rgb(0xc0, 0xca, 0xf5),
+        ..Palette::default()
+    };
+    let style = |font| Style {
+        font,
+        palette: palette.clone(),
+        padding: 3,
+    };
+    let mut cpu = CpuRenderer::new(style(cpu_font));
     let cell = cpu.cell_size();
-    // A margin right and below the grid checks the clear color too.
-    let (w, h) = (cell.width * 8 + 3, cell.height * 3 + 2);
+    // A margin right and below the padded grid checks the clear color too.
+    let (w, h) = cpu.layout().window_size(term.size());
+    let (w, h) = (w + 3, h + 2);
 
     let mut expected = vec![0; (w * h) as usize];
     cpu.render(&term, &mut Frame::new(&mut expected, w, h).unwrap());
 
-    let mut painter = Painter::new(&gpu, FORMAT, gpu_font, Palette::default());
+    let mut painter = Painter::new(&gpu, FORMAT, style(gpu_font));
     assert_eq!(painter.cell_size(), cell);
     let actual = render_offscreen(&gpu, &mut painter, &term, w, h);
     // Draw twice to exercise cached atlas slots and buffer reuse.
@@ -134,9 +148,36 @@ fn gpu_output_matches_cpu_renderer() {
         expected.len(),
         &mismatches[..mismatches.len().min(8)]
     );
-    let inked = actual
-        .iter()
-        .filter(|&&p| p != Palette::default().background)
-        .count();
+    let inked = actual.iter().filter(|&&p| p != palette.background).count();
     assert!(inked > 100, "frame should contain text and backgrounds");
+}
+
+#[test]
+fn set_style_applies_new_palette_and_padding() {
+    let Some(gpu) = headless_gpu() else { return };
+    let Ok(font) = Font::system(DEFAULT_PX) else {
+        eprintln!("skipping GPU test: no system monospace font");
+        return;
+    };
+    let style = Style {
+        font,
+        palette: Palette::default(),
+        padding: 0,
+    };
+    let mut painter = Painter::new(&gpu, FORMAT, style.clone());
+    let mut term = Terminal::new(TermSize::new(1, 1).unwrap());
+    term.advance(b"\x1b[?25l\x1b[41m \x1b[0m");
+    let red = Palette::default().ansi[1];
+    let first = render_offscreen(&gpu, &mut painter, &term, 4, 4);
+    assert_eq!(first[0], red);
+
+    let blue = rgb(0, 0, 0xff);
+    let mut restyled = style;
+    restyled.palette.background = blue;
+    restyled.padding = 2;
+    painter.set_style(restyled);
+    let second = render_offscreen(&gpu, &mut painter, &term, 4, 4);
+    assert_eq!(second[0], blue, "padding takes the new background");
+    assert_eq!(second[2 * 4 + 2], red, "the cell moved by the padding");
+    assert_eq!(gpu.failure(), None);
 }

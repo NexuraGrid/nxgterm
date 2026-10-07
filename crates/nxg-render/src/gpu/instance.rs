@@ -2,7 +2,7 @@
 
 use nxg_core::{Flags, Terminal};
 
-use crate::paint::{self, CellSize};
+use crate::paint::{self, Layout};
 use crate::palette::{Palette, Rgb};
 
 /// Instance kind: a quad filled with `color`.
@@ -46,7 +46,7 @@ pub struct GlyphSlot {
 pub struct AtlasFull;
 
 /// Builds the quads for one frame, in draw order: cell backgrounds, the
-/// cursor, then glyphs. Mirrors [`crate::CpuRenderer::render`] pixel for
+/// cursor, then glyphs, offset by the layout's padding. Mirrors [`crate::CpuRenderer::render`] pixel for
 /// pixel; the default background comes from the clear color instead.
 ///
 /// `glyph` returns the atlas slot for `(char, bold)`, `None` for glyphs
@@ -54,7 +54,7 @@ pub struct AtlasFull;
 pub fn build<F>(
     term: &Terminal,
     palette: &Palette,
-    cell: CellSize,
+    layout: Layout,
     baseline: i32,
     glyph: F,
 ) -> Result<Vec<Instance>, AtlasFull>
@@ -63,11 +63,11 @@ where
 {
     let mut glyph = glyph;
     let rows = term.size().rows();
+    let cell = layout.cell;
     let cell_pos = |col: usize, row: u16| {
         // Grid sizes are bounded by u16 cells, so pixel positions fit i32.
-        let x = (col as u32 * cell.width) as i32;
-        let y = (u32::from(row) * cell.height) as i32;
-        [x, y]
+        let (x, y) = layout.origin(col as u32, u32::from(row));
+        [x as i32, y as i32]
     };
     let solid = |pos, color| Instance {
         pos,
@@ -144,6 +144,7 @@ pub fn to_bytes(instances: &[Instance]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paint::CellSize;
     use crate::palette::rgb;
     use nxg_core::TermSize;
 
@@ -152,6 +153,10 @@ mod tests {
         height: 20,
     };
     const BASELINE: i32 = 15;
+    const FLUSH: Layout = Layout {
+        cell: CELL,
+        padding: 0,
+    };
 
     fn term(cols: u16, rows: u16, input: &[u8]) -> Terminal {
         let mut term = Terminal::new(TermSize::new(cols, rows).unwrap());
@@ -183,7 +188,7 @@ mod tests {
     #[test]
     fn blank_default_screen_with_hidden_cursor_is_empty() {
         let term = term(3, 2, b"\x1b[?25l");
-        let instances = build(&term, &Palette::default(), CELL, BASELINE, slot).unwrap();
+        let instances = build(&term, &Palette::default(), FLUSH, BASELINE, slot).unwrap();
         assert!(instances.is_empty());
     }
 
@@ -191,7 +196,7 @@ mod tests {
     fn non_default_backgrounds_and_cursor_become_solid_quads() {
         let palette = Palette::default();
         let term = term(3, 2, b"\x1b[41m \x1b[0m\r\n");
-        let instances = build(&term, &palette, CELL, BASELINE, slot).unwrap();
+        let instances = build(&term, &palette, FLUSH, BASELINE, slot).unwrap();
         assert_eq!(
             instances,
             [solid(0, 0, palette.ansi[1]), solid(0, 20, palette.cursor)]
@@ -202,7 +207,7 @@ mod tests {
     fn glyphs_are_placed_like_the_cpu_renderer() {
         let palette = Palette::default();
         let term = term(3, 2, b"\x1b[?25l\r\n xy");
-        let instances = build(&term, &palette, CELL, BASELINE, slot).unwrap();
+        let instances = build(&term, &palette, FLUSH, BASELINE, slot).unwrap();
         // top = y + baseline - ymin - height = 20 + 15 - 2 - 6
         let glyph = |x: i32, ch: char| Instance {
             pos: [x + 1, 27],
@@ -215,10 +220,25 @@ mod tests {
     }
 
     #[test]
+    fn padding_offsets_every_quad() {
+        let palette = Palette::default();
+        let term = term(2, 1, b"\x1b[41mx");
+        let layout = Layout {
+            cell: CELL,
+            padding: 5,
+        };
+        let instances = build(&term, &palette, layout, BASELINE, slot).unwrap();
+        assert_eq!(instances[0], solid(5, 5, palette.ansi[1]));
+        assert_eq!(instances[1], solid(15, 5, palette.cursor));
+        // top = padding + baseline - ymin - height = 5 + 15 - 2 - 6
+        assert_eq!(instances[2].pos, [6, 12]);
+    }
+
+    #[test]
     fn bold_uses_bold_face_and_bright_color() {
         let palette = Palette::default();
         let term = term(2, 1, b"\x1b[?25l\x1b[1;31mB");
-        let instances = build(&term, &palette, CELL, BASELINE, slot).unwrap();
+        let instances = build(&term, &palette, FLUSH, BASELINE, slot).unwrap();
         assert_eq!(instances.len(), 1);
         assert_eq!(instances[0].uv, ['B' as u32, 1]);
         assert_eq!(instances[0].color, palette.ansi[9]);
@@ -228,7 +248,7 @@ mod tests {
     fn inverse_swaps_colors() {
         let palette = Palette::default();
         let term = term(2, 1, b"\x1b[?25l\x1b[7mI");
-        let instances = build(&term, &palette, CELL, BASELINE, slot).unwrap();
+        let instances = build(&term, &palette, FLUSH, BASELINE, slot).unwrap();
         assert_eq!(instances[0], solid(0, 0, palette.foreground));
         assert_eq!(instances[1].color, palette.background);
     }
@@ -237,7 +257,7 @@ mod tests {
     fn glyph_under_cursor_takes_cell_background_after_cursor_quad() {
         let palette = Palette::default();
         let term = term(2, 1, b"C\x1b[D");
-        let instances = build(&term, &palette, CELL, BASELINE, slot).unwrap();
+        let instances = build(&term, &palette, FLUSH, BASELINE, slot).unwrap();
         assert_eq!(instances[0], solid(0, 0, palette.cursor));
         assert_eq!(instances[1].kind, KIND_GLYPH);
         assert_eq!(instances[1].color, palette.background);
@@ -247,7 +267,7 @@ mod tests {
     fn skips_spaces_and_inkless_glyphs() {
         let mut asked = Vec::new();
         let term = term(3, 1, b"\x1b[?25la b");
-        let instances = build(&term, &Palette::default(), CELL, BASELINE, |ch, _| {
+        let instances = build(&term, &Palette::default(), FLUSH, BASELINE, |ch, _| {
             asked.push(ch);
             Ok(None)
         })
@@ -259,7 +279,7 @@ mod tests {
     #[test]
     fn propagates_atlas_full() {
         let term = term(2, 1, b"ab");
-        let result = build(&term, &Palette::default(), CELL, BASELINE, |_, _| {
+        let result = build(&term, &Palette::default(), FLUSH, BASELINE, |_, _| {
             Err(AtlasFull)
         });
         assert_eq!(result, Err(AtlasFull));

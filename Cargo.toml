@@ -16,12 +16,15 @@ nxg-render = { path = "crates/nxg-render" }
 nxg-config = { path = "crates/nxg-config" }
 # External crates, at versions that build on the MSRV (1.85).
 fontdb = "0.24"
+notify = "8"
 # 0.9.4 uses `cast_signed` (Rust 1.87) without declaring a rust-version.
 fontdue = "=0.9.3"
 portable-pty = "0.9"
 pollster = "1"
 raw-window-handle = "0.6"
+serde = { version = "1", features = ["derive"] }
 softbuffer = "0.4"
+toml = "1"
 vte = "0.15"
 # 27+ requires Rust 1.88; 26 declares 1.84. `webgpu` (wasm only) is left out.
 wgpu = { version = "26", default-features = false, features = [

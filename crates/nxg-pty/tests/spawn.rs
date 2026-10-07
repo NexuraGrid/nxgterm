@@ -53,3 +53,28 @@ fn writes_input_to_child() {
     let output = read_all(session.reader);
     assert!(output.contains("got:ping"), "output was {output:?}");
 }
+
+#[test]
+fn shell_override_runs_the_given_program_and_args() {
+    let shell = nxg_pty::ShellCommand {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "echo override:$TERM; sleep 0.3".into()],
+    };
+    let session =
+        nxg_pty::spawn_shell_with(TermSize::default(), Some(&shell)).expect("spawn override");
+    let output = read_all(session.reader);
+    assert!(
+        output.contains("override:xterm-256color"),
+        "output was {output:?}"
+    );
+}
+
+#[test]
+fn missing_override_program_is_an_error() {
+    let shell = nxg_pty::ShellCommand {
+        program: "/definitely/missing/shell".into(),
+        args: Vec::new(),
+    };
+    let error = nxg_pty::spawn_shell_with(TermSize::default(), Some(&shell)).unwrap_err();
+    assert!(!error.attempts.is_empty());
+}

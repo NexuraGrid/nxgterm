@@ -6,9 +6,8 @@ use super::atlas::Atlas;
 use super::device::Gpu;
 use super::format;
 use super::instance::{self, INSTANCE_SIZE, Instance};
-use crate::font::Font;
 use crate::paint::CellSize;
-use crate::palette::Palette;
+use crate::style::Style;
 
 /// Instance capacity of the first vertex buffer; it grows on demand.
 const INITIAL_INSTANCES: u64 = 4096;
@@ -22,14 +21,13 @@ pub struct Painter {
     globals: wgpu::Buffer,
     instances: wgpu::Buffer,
     atlas: Atlas,
-    font: Font,
-    palette: Palette,
+    style: Style,
     srgb: bool,
 }
 
 impl Painter {
     /// Builds the pipeline for targets of `format`.
-    pub fn new(gpu: &Gpu, format: wgpu::TextureFormat, font: Font, palette: Palette) -> Self {
+    pub fn new(gpu: &Gpu, format: wgpu::TextureFormat, style: Style) -> Self {
         let device = &gpu.device;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("quad"),
@@ -118,14 +116,20 @@ impl Painter {
             globals,
             instances: instance_buffer(device, INITIAL_INSTANCES * INSTANCE_SIZE as u64),
             atlas,
-            font,
-            palette,
+            style,
             srgb: format.is_srgb(),
         }
     }
 
     pub fn cell_size(&self) -> CellSize {
-        self.font.cell_size()
+        self.style.font.cell_size()
+    }
+
+    /// Switches font, colors and padding; glyphs of the old font are
+    /// dropped from the atlas and re-uploaded on demand.
+    pub fn set_style(&mut self, style: Style) {
+        self.style = style;
+        self.atlas.clear();
     }
 
     /// Draws `term` into `target` (`width x height` pixels) and submits.
@@ -165,7 +169,7 @@ impl Painter {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(format::clear_color(
-                            self.palette.background,
+                            self.style.palette.background,
                             self.srgb,
                         )),
                         store: wgpu::StoreOp::Store,
@@ -188,15 +192,15 @@ impl Painter {
     /// Builds the frame's instances; when the atlas fills up it is reset
     /// and the frame rebuilt once, dropping glyphs that still do not fit.
     fn build(&mut self, queue: &wgpu::Queue, term: &Terminal) -> Vec<Instance> {
-        let cell = self.font.cell_size();
-        let baseline = self.font.baseline();
-        let (atlas, font) = (&mut self.atlas, &mut self.font);
-        let first = instance::build(term, &self.palette, cell, baseline, |ch, bold| {
+        let layout = self.style.layout();
+        let baseline = self.style.font.baseline();
+        let (atlas, font, palette) = (&mut self.atlas, &mut self.style.font, &self.style.palette);
+        let first = instance::build(term, palette, layout, baseline, |ch, bold| {
             atlas.slot(queue, font, ch, bold)
         });
         first.unwrap_or_else(|_| {
             atlas.clear();
-            instance::build(term, &self.palette, cell, baseline, |ch, bold| {
+            instance::build(term, palette, layout, baseline, |ch, bold| {
                 Ok(atlas.slot(queue, font, ch, bold).unwrap_or(None))
             })
             .unwrap_or_default()

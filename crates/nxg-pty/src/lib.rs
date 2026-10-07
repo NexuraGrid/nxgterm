@@ -45,6 +45,29 @@ pub fn spawn_shell(size: TermSize) -> Result<PtySession, PtyError> {
     spawn(size, CommandBuilder::new_default_prog)
 }
 
+/// A program to run instead of the default shell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellCommand {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+/// Spawns `shell` when given, otherwise the default shell (see
+/// [`spawn_shell`]).
+pub fn spawn_shell_with(
+    size: TermSize,
+    shell: Option<&ShellCommand>,
+) -> Result<PtySession, PtyError> {
+    match shell {
+        Some(shell) => spawn(size, || {
+            let mut cmd = CommandBuilder::new(&shell.program);
+            cmd.args(&shell.args);
+            cmd
+        }),
+        None => spawn_shell(size),
+    }
+}
+
 /// Spawns `program` with `args`.
 pub fn spawn_command(size: TermSize, program: &str, args: &[&str]) -> Result<PtySession, PtyError> {
     spawn(size, || {

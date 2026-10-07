@@ -25,6 +25,43 @@ impl CellSize {
     }
 }
 
+/// Where the grid sits in the window: cells inset by `padding` pixels on
+/// every side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Layout {
+    pub cell: CellSize,
+    pub padding: u32,
+}
+
+impl Layout {
+    /// Top-left pixel of the cell at `col`, `row`.
+    pub fn origin(self, col: u32, row: u32) -> (u32, u32) {
+        (
+            self.padding + col * self.cell.width,
+            self.padding + row * self.cell.height,
+        )
+    }
+
+    /// How many whole cells fit in a `width x height` window once the
+    /// padding is taken out (at least 1x1).
+    pub fn grid_size(self, width: u32, height: u32) -> TermSize {
+        let inset = self.padding.saturating_mul(2);
+        self.cell
+            .grid_size(width.saturating_sub(inset), height.saturating_sub(inset))
+    }
+
+    /// Window size in pixels that fits `size` cells plus the padding.
+    pub fn window_size(self, size: TermSize) -> (u32, u32) {
+        let inset = self.padding.saturating_mul(2);
+        let span =
+            |cells: u16, cell: u32| u32::from(cells).saturating_mul(cell).saturating_add(inset);
+        (
+            span(size.cols(), self.cell.width),
+            span(size.rows(), self.cell.height),
+        )
+    }
+}
+
 /// Foreground and background pixels for `cell`, applying inverse video and
 /// bold-as-bright for the first eight ANSI colors.
 pub fn cell_colors(cell: &Cell, palette: &Palette) -> (Rgb, Rgb) {
@@ -45,25 +82,25 @@ pub fn cell_colors(cell: &Cell, palette: &Palette) -> (Rgb, Rgb) {
 pub fn paint_backgrounds(
     term: &Terminal,
     frame: &mut Frame<'_>,
-    cell: CellSize,
+    layout: Layout,
     palette: &Palette,
 ) {
+    let cell = layout.cell;
     for row in 0..term.size().rows() {
         for (col, c) in term.row(row).iter().enumerate() {
             let (_, bg) = cell_colors(c, palette);
-            let x = col as u32 * cell.width;
-            let y = u32::from(row) * cell.height;
+            let (x, y) = layout.origin(col as u32, u32::from(row));
             frame.fill_rect(x, y, cell.width, cell.height, bg);
         }
     }
 }
 
 /// Draws a block cursor when it is visible.
-pub fn paint_cursor(term: &Terminal, frame: &mut Frame<'_>, cell: CellSize, palette: &Palette) {
+pub fn paint_cursor(term: &Terminal, frame: &mut Frame<'_>, layout: Layout, palette: &Palette) {
     let cursor = term.cursor();
     if cursor.visible {
-        let x = u32::from(cursor.col) * cell.width;
-        let y = u32::from(cursor.row) * cell.height;
+        let (x, y) = layout.origin(u32::from(cursor.col), u32::from(cursor.row));
+        let cell = layout.cell;
         frame.fill_rect(x, y, cell.width, cell.height, palette.cursor);
     }
 }
@@ -76,6 +113,10 @@ mod tests {
     const CELL: CellSize = CellSize {
         width: 2,
         height: 2,
+    };
+    const FLUSH: Layout = Layout {
+        cell: CELL,
+        padding: 0,
     };
 
     fn term(cols: u16, rows: u16, input: &[u8]) -> Terminal {
@@ -93,6 +134,47 @@ mod tests {
         assert_eq!(cell.grid_size(800, 480), TermSize::new(100, 30).unwrap());
         assert_eq!(cell.grid_size(807, 495), TermSize::new(100, 30).unwrap());
         assert_eq!(cell.grid_size(3, 3), TermSize::new(1, 1).unwrap());
+    }
+
+    #[test]
+    fn layout_origin_is_offset_by_padding() {
+        let layout = Layout {
+            cell: CELL,
+            padding: 3,
+        };
+        assert_eq!(layout.origin(0, 0), (3, 3));
+        assert_eq!(layout.origin(2, 1), (7, 5));
+        let flush = Layout {
+            cell: CELL,
+            padding: 0,
+        };
+        assert_eq!(flush.origin(2, 1), (4, 2));
+    }
+
+    #[test]
+    fn layout_grid_size_subtracts_padding_on_both_sides() {
+        let cell = CellSize {
+            width: 8,
+            height: 16,
+        };
+        let layout = Layout { cell, padding: 4 };
+        assert_eq!(layout.grid_size(808, 488), TermSize::new(100, 30).unwrap());
+        assert_eq!(layout.grid_size(807, 487), TermSize::new(99, 29).unwrap());
+        // Smaller than the padding itself: still at least one cell.
+        assert_eq!(layout.grid_size(5, 5), TermSize::new(1, 1).unwrap());
+    }
+
+    #[test]
+    fn layout_window_size_round_trips_with_grid_size() {
+        let cell = CellSize {
+            width: 9,
+            height: 19,
+        };
+        let layout = Layout { cell, padding: 6 };
+        let size = TermSize::new(100, 30).unwrap();
+        assert_eq!(layout.window_size(size), (912, 582));
+        let (w, h) = layout.window_size(size);
+        assert_eq!(layout.grid_size(w, h), size);
     }
 
     #[test]
@@ -127,9 +209,38 @@ mod tests {
         let term = term(2, 1, b"\x1b[48;2;1;2;3m \x1b[0m");
         let mut pixels = vec![0; 4 * 2];
         let mut frame = Frame::new(&mut pixels, 4, 2).unwrap();
-        paint_backgrounds(&term, &mut frame, CELL, &palette);
+        paint_backgrounds(&term, &mut frame, FLUSH, &palette);
         let (a, b) = (rgb(1, 2, 3), palette.background);
         assert_eq!(pixels, [a, a, b, b, a, a, b, b]);
+    }
+
+    #[test]
+    fn padding_offsets_backgrounds_and_cursor() {
+        let palette = Palette::default();
+        let term = term(1, 1, b"\x1b[48;2;1;2;3m \x1b[0m");
+        let layout = Layout {
+            cell: CELL,
+            padding: 1,
+        };
+        let mut pixels = vec![0; 4 * 4];
+        let mut frame = Frame::new(&mut pixels, 4, 4).unwrap();
+        paint_backgrounds(&term, &mut frame, layout, &palette);
+        let a = rgb(1, 2, 3);
+        #[rustfmt::skip]
+        assert_eq!(pixels, [
+            0, 0, 0, 0,
+            0, a, a, 0,
+            0, a, a, 0,
+            0, 0, 0, 0,
+        ]);
+
+        let term = self::term(1, 1, b"");
+        let mut pixels = vec![0; 4 * 4];
+        let mut frame = Frame::new(&mut pixels, 4, 4).unwrap();
+        paint_cursor(&term, &mut frame, layout, &palette);
+        let c = palette.cursor;
+        assert_eq!(pixels[5..7], [c, c]);
+        assert_eq!(pixels[0], 0);
     }
 
     #[test]
@@ -138,14 +249,14 @@ mod tests {
         let mut term = term(2, 1, b" ");
         let mut pixels = vec![0; 4 * 2];
         let mut frame = Frame::new(&mut pixels, 4, 2).unwrap();
-        paint_cursor(&term, &mut frame, CELL, &palette);
+        paint_cursor(&term, &mut frame, FLUSH, &palette);
         let c = palette.cursor;
         assert_eq!(pixels, [0, 0, c, c, 0, 0, c, c]);
 
         term.advance(b"\x1b[?25l");
         let mut pixels = vec![0; 4 * 2];
         let mut frame = Frame::new(&mut pixels, 4, 2).unwrap();
-        paint_cursor(&term, &mut frame, CELL, &palette);
+        paint_cursor(&term, &mut frame, FLUSH, &palette);
         assert!(pixels.iter().all(|&p| p == 0));
     }
 }

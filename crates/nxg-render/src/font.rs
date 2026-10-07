@@ -52,7 +52,100 @@ pub struct Glyph {
     pub coverage: Vec<u8>,
 }
 
+/// Raw font file bytes plus the collection index of the face.
+type FaceData = (Vec<u8>, u32);
+
+/// The font files of one family (regular and, if any, bold), loaded once
+/// so [`FontFaces::font`] can build a [`Font`] at any size cheaply, e.g.
+/// when the display scale or the font size changes.
+#[derive(Clone)]
+pub struct FontFaces {
+    family: String,
+    regular: FaceData,
+    bold: Option<FaceData>,
+}
+
+impl fmt::Debug for FontFaces {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FontFaces")
+            .field("family", &self.family)
+            .field("bold", &self.bold.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl FontFaces {
+    /// Finds `family` among the system fonts, falling back to the system
+    /// monospace font and then a list of common monospace families. The
+    /// bold face comes from the same family as the regular one, or is
+    /// absent (bold text then uses the regular face).
+    pub fn system(family: Option<&str>) -> Result<Self, FontError> {
+        let mut db = Database::new();
+        db.load_system_fonts();
+        // The generic alias comes from fontconfig on Linux; elsewhere fontdb
+        // defaults it to Courier New, so prefer the platform's usual font.
+        if cfg!(windows) {
+            db.set_monospace_family("Consolas");
+        } else if cfg!(target_os = "macos") {
+            db.set_monospace_family("Menlo");
+        }
+        let families = family_order(family);
+        let query = |families: &[Family<'_>], weight| {
+            db.query(&Query {
+                families,
+                weight,
+                ..Query::default()
+            })
+        };
+        let load = |id| db.with_face_data(id, |data, index| (data.to_vec(), index));
+        let regular_id = query(&families, Weight::NORMAL).ok_or(FontError::NotFound)?;
+        let regular = load(regular_id).ok_or(FontError::NotFound)?;
+        let name = db
+            .face(regular_id)
+            .and_then(|face| face.families.first())
+            .map(|(name, _)| name.clone())
+            .unwrap_or_default();
+        let bold = query(&[Family::Name(&name)], Weight::BOLD)
+            .filter(|&id| id != regular_id)
+            .and_then(load);
+        Ok(Self {
+            family: name,
+            regular,
+            bold,
+        })
+    }
+
+    /// The family actually found, e.g. to report a missing requested one.
+    pub fn family(&self) -> &str {
+        &self.family
+    }
+
+    /// Whether this is the family called `name` (case-insensitive).
+    pub fn is_family(&self, name: &str) -> bool {
+        self.family.eq_ignore_ascii_case(name.trim())
+    }
+
+    /// The faces rasterized at `px` pixels.
+    pub fn font(&self, px: f32) -> Result<Font, FontError> {
+        let (regular, index) = self.regular.clone();
+        Font::from_bytes(regular, index, self.bold.clone(), px)
+    }
+}
+
+/// Families to query, in order: `requested` (if any), the generic
+/// monospace alias, then [`FALLBACK_FAMILIES`].
+fn family_order(requested: Option<&str>) -> Vec<Family<'_>> {
+    let requested = requested.map(str::trim).filter(|name| !name.is_empty());
+    requested
+        .map(Family::Name)
+        .into_iter()
+        .chain([Family::Monospace])
+        .chain(FALLBACK_FAMILIES.iter().map(|name| Family::Name(name)))
+        .collect()
+}
+
 /// A monospace font at a fixed pixel size with cached glyphs.
+#[derive(Clone)]
 pub struct Font {
     regular: fontdue::Font,
     bold: Option<fontdue::Font>,
@@ -73,34 +166,9 @@ impl fmt::Debug for Font {
 }
 
 impl Font {
-    /// Finds a system monospace font (and its bold face, if any).
+    /// The system monospace font (see [`FontFaces::system`]) at `px`.
     pub fn system(px: f32) -> Result<Self, FontError> {
-        let mut db = Database::new();
-        db.load_system_fonts();
-        // The generic alias comes from fontconfig on Linux; elsewhere fontdb
-        // defaults it to Courier New, so prefer the platform's usual font.
-        if cfg!(windows) {
-            db.set_monospace_family("Consolas");
-        } else if cfg!(target_os = "macos") {
-            db.set_monospace_family("Menlo");
-        }
-        let mut families = vec![Family::Monospace];
-        families.extend(FALLBACK_FAMILIES.iter().map(|name| Family::Name(name)));
-
-        let query = |weight| {
-            db.query(&Query {
-                families: &families,
-                weight,
-                ..Query::default()
-            })
-        };
-        let load = |id| db.with_face_data(id, |data, index| (data.to_vec(), index));
-        let regular_id = query(Weight::NORMAL).ok_or(FontError::NotFound)?;
-        let (regular, index) = load(regular_id).ok_or(FontError::NotFound)?;
-        let bold = query(Weight::BOLD)
-            .filter(|&id| id != regular_id)
-            .and_then(load);
-        Self::from_bytes(regular, index, bold, px)
+        FontFaces::system(None)?.font(px)
     }
 
     /// Builds a font from raw font file bytes and a collection index.
@@ -192,6 +260,44 @@ mod tests {
         assert!(glyph.width > 0 && glyph.coverage.iter().any(|&a| a > 0));
         assert!(font.glyph(' ', true).coverage.iter().all(|&a| a == 0));
         assert_eq!(font.cache.len(), 2);
+    }
+
+    #[test]
+    fn family_order_puts_the_requested_family_first() {
+        let order = family_order(Some("JetBrains Mono"));
+        assert_eq!(order[0], Family::Name("JetBrains Mono"));
+        assert_eq!(order[1], Family::Monospace);
+        assert_eq!(order.len(), FALLBACK_FAMILIES.len() + 2);
+    }
+
+    #[test]
+    fn family_order_without_request_starts_at_monospace() {
+        let order = family_order(None);
+        assert_eq!(order[0], Family::Monospace);
+        assert_eq!(order[1], Family::Name(FALLBACK_FAMILIES[0]));
+        assert_eq!(family_order(Some("  ")), order, "blank means unset");
+    }
+
+    #[test]
+    fn unknown_family_falls_back_to_a_monospace_font() {
+        let Ok(faces) = FontFaces::system(Some("No Such Font Family 1234")) else {
+            return;
+        };
+        assert!(!faces.is_family("No Such Font Family 1234"));
+        assert!(!faces.family().is_empty());
+        let fallback = FontFaces::system(None).unwrap();
+        assert_eq!(faces.family(), fallback.family());
+    }
+
+    #[test]
+    fn faces_build_fonts_at_any_size() {
+        let Ok(faces) = FontFaces::system(None) else {
+            return;
+        };
+        let small = faces.font(10.0).unwrap().cell_size();
+        let large = faces.font(30.0).unwrap().cell_size();
+        assert!(large.height > small.height && large.width > small.width);
+        assert!(faces.is_family(&faces.family().to_uppercase()));
     }
 
     #[test]
