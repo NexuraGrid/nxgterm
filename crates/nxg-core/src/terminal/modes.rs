@@ -6,6 +6,12 @@ impl State {
     pub fn set_private_mode(&mut self, mode: u16, on: bool) {
         match mode {
             6 => self.set_origin_mode(on),
+            7 => {
+                self.autowrap = on;
+                // A wrap that was waiting would otherwise fire after the mode
+                // that allowed it is gone.
+                self.screen.wrap_pending &= on;
+            }
             25 => self.cursor_visible = on,
             // DECSDM: set disables sixel scrolling.
             80 => self.sixel_scrolling = !on,
@@ -237,5 +243,38 @@ mod tests {
         assert_eq!(text(&t, 1), "$");
         assert_eq!(pos(&t), (2, 1));
         assert!(t.cursor().visible);
+    }
+
+    #[test]
+    fn autowrap_off_overwrites_the_last_column() {
+        let mut t = term(3, 2);
+        t.advance(b"\x1b[?7labcd");
+        assert_eq!(text(&t, 0), "abd");
+        assert_eq!(text(&t, 1), "");
+        assert_eq!(pos(&t), (2, 0));
+        t.advance(b"\x1b[?7h\r\x1b[Kabcd");
+        assert_eq!(text(&t, 0), "abc", "wrapping is back");
+        assert_eq!(text(&t, 1), "d");
+        assert_eq!(pos(&t), (1, 1));
+    }
+
+    #[test]
+    fn disabling_autowrap_cancels_a_pending_wrap() {
+        let mut t = term(3, 2);
+        t.advance(b"abc\x1b[?7ld");
+        assert_eq!(text(&t, 0), "abd");
+        assert_eq!(pos(&t), (2, 0));
+        assert!(!t.state.screen.wrap_pending);
+    }
+
+    #[test]
+    fn autowrap_is_global_and_not_swapped_with_the_screens() {
+        let mut t = term(3, 3);
+        t.advance(b"\x1b[?7l\x1b[?1049habcd");
+        assert_eq!(text(&t, 0), "abd", "still off inside the alternate screen");
+        t.advance(b"\x1b[?7h\x1b[?1049l\x1b[2;1Habcd");
+        assert_eq!(text(&t, 1), "abc", "turned on inside, it stays on in main");
+        assert_eq!(text(&t, 2), "d");
+        assert_eq!(pos(&t), (1, 2));
     }
 }

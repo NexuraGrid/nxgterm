@@ -2,6 +2,7 @@
 
 use super::State;
 use crate::grid::Region;
+use vte::Perform as _;
 
 impl State {
     pub(super) fn goto(&mut self, col: u16, row: u16) {
@@ -139,6 +140,77 @@ impl State {
         };
         let row = self.screen.row.saturating_add(n).min(limit);
         self.goto(self.screen.col, row);
+    }
+
+    /// CNL: down by lines, to column 0, with the CUD limits.
+    pub(super) fn cursor_next_line(&mut self, n: u16) {
+        self.cursor_down(n);
+        self.goto(0, self.screen.row);
+    }
+
+    /// CPL: up by lines, to column 0, with the CUU limits.
+    pub(super) fn cursor_previous_line(&mut self, n: u16) {
+        self.cursor_up(n);
+        self.goto(0, self.screen.row);
+    }
+
+    /// ICH. The cursor stays; a pending wrap is cancelled like any edit at
+    /// the cursor.
+    pub(super) fn insert_chars(&mut self, n: u16) {
+        let blank = self.blank();
+        let (col, row) = (self.screen.col, self.screen.row);
+        self.screen.grid.insert_cells(row, col, n, blank);
+        self.screen.wrap_pending = false;
+    }
+
+    /// DCH.
+    pub(super) fn delete_chars(&mut self, n: u16) {
+        let blank = self.blank();
+        let (col, row) = (self.screen.col, self.screen.row);
+        self.screen.grid.delete_cells(row, col, n, blank);
+        self.screen.wrap_pending = false;
+    }
+
+    /// ECH: blanks `n` cells from the cursor without moving anything.
+    pub(super) fn erase_chars(&mut self, n: u16) {
+        let blank = self.blank();
+        let (col, row) = (self.screen.col, self.screen.row);
+        self.screen
+            .grid
+            .erase_cells(row, col..col.saturating_add(n), blank);
+        self.screen.wrap_pending = false;
+    }
+
+    /// IL: opens lines at the cursor row inside the region; outside it the
+    /// sequence is ignored entirely, cursor included.
+    pub(super) fn insert_lines(&mut self, n: u16) {
+        let Region { bottom, .. } = self.screen.region;
+        let row = self.screen.row;
+        if self.screen.region.contains(row) {
+            self.scroll_down(row, bottom, n);
+            self.goto(0, row);
+        }
+    }
+
+    /// DL: mirror of [`State::insert_lines`].
+    pub(super) fn delete_lines(&mut self, n: u16) {
+        let Region { bottom, .. } = self.screen.region;
+        let row = self.screen.row;
+        if self.screen.region.contains(row) {
+            self.scroll_up(row, bottom, n);
+            self.goto(0, row);
+        }
+    }
+
+    /// REP. The count is capped at one screenful so a hostile `CSI 65535 b`
+    /// cannot stall the parser on a tiny terminal.
+    pub(super) fn repeat_last_char(&mut self, n: u16) {
+        let Some(ch) = self.last_char else { return };
+        let size = self.screen.grid.size();
+        let cap = u32::from(size.cols()) * u32::from(size.rows());
+        for _ in 0..u32::from(n).min(cap) {
+            self.print(ch);
+        }
     }
 
     /// Fills `cols` of `row` with blanks.
@@ -448,5 +520,218 @@ mod tests {
         let mut t = lettered();
         t.advance(b"\x1b[S");
         assert_eq!(rows(&t), "bcde.");
+    }
+
+    fn cells(t: &crate::Terminal, row: u16) -> String {
+        t.row(row).iter().map(|c| c.ch).collect()
+    }
+
+    #[test]
+    fn ich_opens_blank_cells_and_pushes_the_rest_right() {
+        let mut t = term(5, 1);
+        t.advance(b"abcd\x1b[2G\x1b[2@");
+        assert_eq!(cells(&t, 0), "a  bc");
+        assert_eq!(pos(&t), (1, 0), "the cursor stays");
+        t.advance(b"\x1b[@");
+        assert_eq!(cells(&t, 0), "a   b", "no parameter means one");
+        t.advance(b"\x1b[0@");
+        assert_eq!(cells(&t, 0), "a    ", "zero also means one");
+    }
+
+    #[test]
+    fn dch_pulls_the_rest_left_and_ech_blanks_in_place() {
+        let mut t = term(5, 1);
+        t.advance(b"abcde\x1b[2G\x1b[2P");
+        assert_eq!(cells(&t, 0), "ade  ");
+        assert_eq!(pos(&t), (1, 0));
+        let mut t = term(5, 1);
+        t.advance(b"abcde\x1b[2G\x1b[2X");
+        assert_eq!(cells(&t, 0), "a  de");
+        assert_eq!(pos(&t), (1, 0));
+        t.advance(b"\x1b[99X");
+        assert_eq!(cells(&t, 0), "a    ", "n is clamped to the row");
+    }
+
+    #[test]
+    fn cell_edits_blank_with_the_pen_background_and_cancel_a_pending_wrap() {
+        use crate::Color;
+        let mut t = term(5, 1);
+        t.advance(b"abcde\x1b[44m\x1b[@");
+        let last = t.row(0)[4];
+        assert_eq!((last.ch, last.bg), (' ', Color::Indexed(4)));
+        assert_eq!(
+            t.row(0)[0].bg,
+            Color::default(),
+            "only the blank is colored"
+        );
+        t.advance(b"x");
+        assert_eq!(
+            cells(&t, 0),
+            "abcdx",
+            "no wrap: the pending wrap was cancelled"
+        );
+        assert_eq!(pos(&t), (4, 0));
+    }
+
+    #[test]
+    fn dch_and_ech_cancel_a_pending_wrap_too() {
+        for edit in [&b"\x1b[P"[..], &b"\x1b[X"[..]] {
+            let mut t = term(5, 2);
+            t.advance(b"abcde");
+            t.advance(edit);
+            t.advance(b"x");
+            assert_eq!(cells(&t, 0), "abcdx");
+            assert_eq!(text(&t, 1), "");
+        }
+    }
+
+    #[test]
+    fn il_inserts_lines_inside_the_region_and_homes_the_column() {
+        let mut t = lettered();
+        t.advance(b"\x1b[2;4r\x1b[3;3H\x1b[L");
+        assert_eq!(rows(&t), "ab.ce");
+        assert_eq!(pos(&t), (0, 2));
+        t.advance(b"\x1b[99L");
+        assert_eq!(
+            rows(&t),
+            "ab..e",
+            "n is clamped to the rows below the cursor"
+        );
+    }
+
+    #[test]
+    fn il_at_the_region_top_shifts_rows_down_like_vim_ctrl_y() {
+        let mut t = lettered();
+        // Vim scrolls the window back one line with a region and IL at its top.
+        t.advance(b"\x1b[2;4r\x1b[2;1H\x1b[L");
+        assert_eq!(rows(&t), "a.bce", "the row at the region bottom is dropped");
+        assert_eq!(pos(&t), (0, 1));
+    }
+
+    #[test]
+    fn dl_deletes_lines_inside_the_region_and_pulls_the_bottom_up() {
+        let mut t = lettered();
+        t.advance(b"\x1b[2;4r\x1b[3;3H\x1b[M");
+        assert_eq!(rows(&t), "abd.e");
+        assert_eq!(pos(&t), (0, 2));
+        t.advance(b"\x1b[2M");
+        assert_eq!(rows(&t), "ab..e");
+    }
+
+    #[test]
+    fn il_and_dl_do_nothing_outside_the_region() {
+        let mut t = lettered();
+        t.advance(b"\x1b[2;4r\x1b[5;3H\x1b[L\x1b[M");
+        assert_eq!(rows(&t), "abcde");
+        assert_eq!(pos(&t), (2, 4), "not even the column moves");
+        t.advance(b"\x1b[1;3H\x1b[L\x1b[M");
+        assert_eq!(rows(&t), "abcde");
+        assert_eq!(pos(&t), (2, 0));
+    }
+
+    #[test]
+    fn il_and_dl_without_a_region_edit_the_whole_screen() {
+        let mut t = lettered();
+        t.advance(b"\x1b[2;1H\x1b[L");
+        assert_eq!(rows(&t), "a.bcd");
+        t.advance(b"\x1b[M");
+        assert_eq!(rows(&t), "abcd.");
+    }
+
+    #[test]
+    fn il_and_dl_blank_with_the_pen_background_and_cancel_a_pending_wrap() {
+        use crate::Color;
+        let mut t = term(3, 3);
+        t.advance(b"abc\x1b[44m\x1b[L");
+        assert_eq!(t.row(0)[0].bg, Color::Indexed(4));
+        t.advance(b"x");
+        assert_eq!(pos(&t), (1, 0), "column 0 and no pending wrap");
+    }
+
+    #[test]
+    fn il_and_dl_shift_placements_from_the_cursor_row() {
+        let place_at = |row: &[u8]| {
+            let mut t = lettered();
+            t.advance(b"\x1b[3;1H");
+            t.advance(&kitty_rgba(1, 10, 20, ""));
+            t.advance(b"\x1b[2;4r");
+            t.advance(row);
+            t
+        };
+        let anchor = |t: &crate::Terminal| -> Vec<i32> {
+            t.images().placements().iter().map(|p| p.row).collect()
+        };
+        assert_eq!(anchor(&place_at(b"\x1b[2;1H\x1b[L")), [3]);
+        assert_eq!(anchor(&place_at(b"\x1b[2;1H\x1b[M")), [1]);
+        assert_eq!(
+            anchor(&place_at(b"\x1b[4;1H\x1b[L")),
+            [2],
+            "rows above the cursor row are not part of the edit"
+        );
+    }
+
+    #[test]
+    fn rep_repeats_the_last_printed_character() {
+        let mut t = term(8, 1);
+        t.advance(b"x\x1b[3b");
+        assert_eq!(text(&t, 0), "xxxx");
+        t.advance(b"\x1b[b");
+        assert_eq!(text(&t, 0), "xxxxx", "no parameter means one");
+        t.advance(b"\x1b[0b");
+        assert_eq!(text(&t, 0), "xxxxxx", "zero also means one");
+        t.advance(b"y\x1b[b");
+        assert_eq!(text(&t, 0), "xxxxxxyy");
+    }
+
+    #[test]
+    fn rep_does_nothing_without_a_printed_character() {
+        let mut t = term(8, 1);
+        t.advance(b"\x1b[3b");
+        assert_eq!(text(&t, 0), "");
+        assert_eq!(pos(&t), (0, 0));
+    }
+
+    #[test]
+    fn controls_csi_and_esc_forget_the_last_character() {
+        for between in [&b"\r"[..], &b"\x1b[m"[..], &b"\x1b7"[..], &b"\n"[..]] {
+            let mut t = term(8, 2);
+            t.advance(b"x");
+            t.advance(between);
+            let before = (cells(&t, 0), pos(&t));
+            t.advance(b"\x1b[3b");
+            assert_eq!((cells(&t, 0), pos(&t)), before, "after {between:?}");
+        }
+    }
+
+    #[test]
+    fn rep_count_is_capped_at_the_screen_size() {
+        let mut t = term(80, 24);
+        t.advance(b"x\x1b[65535b");
+        // 1 + 80 * 24 characters end one column into the last row.
+        assert_eq!(pos(&t), (1, 23));
+    }
+
+    #[test]
+    fn cnl_and_cpl_move_by_lines_to_column_zero() {
+        let mut t = lettered();
+        t.advance(b"\x1b[2;4H\x1b[2E");
+        assert_eq!(pos(&t), (0, 3));
+        t.advance(b"\x1b[3;4H\x1b[F");
+        assert_eq!(pos(&t), (0, 1));
+        t.advance(b"\x1b[3;4H\x1b[0E");
+        assert_eq!(pos(&t), (0, 3), "zero means one");
+    }
+
+    #[test]
+    fn cnl_and_cpl_stop_at_the_region_edge_only_when_starting_inside() {
+        let mut t = lettered();
+        t.advance(b"\x1b[2;4r\x1b[3;3H\x1b[99E");
+        assert_eq!(pos(&t), (0, 3));
+        t.advance(b"\x1b[3;3H\x1b[99F");
+        assert_eq!(pos(&t), (0, 1));
+        t.advance(b"\x1b[5;3H\x1b[99F");
+        assert_eq!(pos(&t), (0, 0), "below the region it may cross it");
+        t.advance(b"\x1b[1;3H\x1b[99E");
+        assert_eq!(pos(&t), (0, 4), "above the region it may cross it");
     }
 }

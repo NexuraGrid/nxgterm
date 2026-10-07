@@ -113,6 +113,8 @@ impl State {
         self.cursor_visible = true;
         self.pen = Cell::default();
         self.sixel_scrolling = true;
+        self.autowrap = true;
+        self.last_char = None;
         self.sixel = None;
         self.graphics = Graphics::new();
         self.images.reset_placements();
@@ -126,6 +128,9 @@ impl State {
     /// DECRC.
     pub fn restore_cursor(&mut self) {
         self.pen = self.screen.restore_cursor();
+        // The wrap was saved under whatever DECAWM was then; with the mode off
+        // now it must not fire.
+        self.screen.wrap_pending &= self.autowrap;
     }
 
     /// Switches to the alternate screen. With `fresh` a kept alternate
@@ -330,5 +335,29 @@ mod tests {
             let saved = screen.saved.unwrap();
             assert!(saved.col <= 3 && saved.row <= 2);
         }
+    }
+
+    #[test]
+    fn ris_restores_autowrap_and_forgets_the_last_character() {
+        let mut t = term(3, 2);
+        t.advance(b"\x1b[?7lx\x1bc");
+        t.advance(b"\x1b[3b");
+        assert_eq!(text(&t, 0), "", "REP has nothing to repeat after RIS");
+        t.advance(b"abcd");
+        assert_eq!(text(&t, 0), "abc", "autowrap is back on");
+        assert_eq!(text(&t, 1), "d");
+    }
+
+    #[test]
+    fn decrc_does_not_revive_a_pending_wrap_after_autowrap_was_turned_off() {
+        let mut t = term(3, 2);
+        t.advance(b"abc\x1b7\x1b[?7l\x1b8d");
+        assert_eq!(text(&t, 0), "abd", "the last column is overwritten");
+        assert_eq!(text(&t, 1), "");
+        assert_eq!(pos(&t), (2, 0));
+        // With autowrap on, the same restore keeps the pending wrap.
+        let mut t = term(3, 2);
+        t.advance(b"abc\x1b7\x1b8d");
+        assert_eq!(text(&t, 1), "d");
     }
 }

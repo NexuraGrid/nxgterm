@@ -118,30 +118,30 @@ Spec references: `TC` = `specs/terminal-core/spec.md`, `II` = `specs/inline-imag
 
 ### Phase 3.A: Grid primitives
 
-- [ ] 3.1 RED (`grid.rs`): `insert_cells`, `delete_cells`, `erase_cells` tests: shift within the row only, blank cells use the given cell, `n` clamped to the remaining width, no-op on empty range or `n == 0`, cursor at last column, row bounds assert like `row()`. GREEN: implement the three primitives
+- [x] 3.1 RED (`grid.rs`): `insert_cells`, `delete_cells`, `erase_cells` tests: shift within the row only, blank cells use the given cell, `n` clamped to the remaining width, no-op on empty range or `n == 0`, cursor at last column, row bounds assert like `row()`. GREEN: implement the three primitives
 
 ### Phase 3.B: Terminal policy
 
-- [ ] 3.2 RED: ICH/DCH/ECH tests (TC "Insert characters"): blanks keep the pen background, cursor unmoved, `wrap_pending` cleared, `n` clamped, `n == 0` treated as 1. GREEN: `CSI @`, `CSI P`, `CSI X` in `edit.rs`
-- [ ] 3.3 RED: IL/DL tests: act only when the cursor row is inside the region (TC "IL outside region"), scroll `[row, bottom]`, cursor to column 0, wrap cleared, images shift through `scroll_region_*` with `top = row`. GREEN: `CSI L`, `CSI M` in `edit.rs`
-- [ ] 3.4 RED: REP tests (TC "Repeat"): repeats `last_char` n times, capped at `cols * rows`, no-op without `last_char`, `last_char` cleared by any control, CSI (except REP) or ESC. GREEN: `last_char` bookkeeping in `mod.rs`, `CSI b` in `edit.rs`
-- [ ] 3.5 RED: DECAWM tests (TC "Wrap disabled"): `?7 l` makes the last column overwrite and never sets `wrap_pending`; disabling clears `wrap_pending`; DECAWM global and not swapped by `?1049` (D3). GREEN: global `autowrap` in `State`, `?7` in `modes.rs`, print path updated
-- [ ] 3.6 RED: CNL/CPL tests: move by lines to column 0, clamped to the region edge when the cursor starts inside it. GREEN: `CSI E`, `CSI F`
-- [ ] 3.7 Update `unknown_and_malformed_sequences_are_ignored` for `CSI @ P X L M b E F` and `?7`. RED first, GREEN after 3.2 to 3.6
+- [x] 3.2 RED: ICH/DCH/ECH tests (TC "Insert characters"): blanks keep the pen background, cursor unmoved, `wrap_pending` cleared, `n` clamped, `n == 0` treated as 1. GREEN: `CSI @`, `CSI P`, `CSI X` in `edit.rs`
+- [x] 3.3 RED: IL/DL tests: act only when the cursor row is inside the region (TC "IL outside region"), scroll `[row, bottom]`, cursor to column 0, wrap cleared, images shift through `scroll_region_*` with `top = row`. GREEN: `CSI L`, `CSI M` in `edit.rs`
+- [x] 3.4 RED: REP tests (TC "Repeat"): repeats `last_char` n times, capped at `cols * rows`, no-op without `last_char`, `last_char` cleared by any control, CSI (except REP) or ESC. GREEN: `last_char` bookkeeping in `mod.rs`, `CSI b` in `edit.rs`
+- [x] 3.5 RED: DECAWM tests (TC "Wrap disabled"): `?7 l` makes the last column overwrite and never sets `wrap_pending`; disabling clears `wrap_pending`; DECAWM global and not swapped by `?1049` (D3). GREEN: global `autowrap` in `State`, `?7` in `modes.rs`, print path updated
+- [x] 3.6 RED: CNL/CPL tests: move by lines to column 0, clamped to the region edge when the cursor starts inside it. GREEN: `CSI E`, `CSI F`
+- [x] 3.7 Update `unknown_and_malformed_sequences_are_ignored` for `CSI @ P X L M b E F` and `?7`. RED first, GREEN after 3.2 to 3.6 — nothing to change: none of those sequences were in the ignored list (same as 2.10)
 
 ### Phase 3.C: Fuzz
 
-- [ ] 3.8 RED: extend the `random_and_truncated_input_never_panics` alphabet with `L M @ D E F J K 7 8 u b l =` (the new bytes must run without panics; fix any panic found, with a minimal regression test per bug)
-- [ ] 3.9 Add `State::assert_invariants()` (`#[cfg(test)]`): for both screens, grid size equals terminal size, cursor in bounds, region valid (`top < bottom < rows` or full), saved cursor in bounds; every active and stashed placement references a stored image. RED: a deliberately corrupted state makes it fail (test with `#[should_panic]`)
-- [ ] 3.10 Add `screen_ops_never_panic_across_resizes`: random tokens from `ESC[?1049h/l`, `?47`, `?1047`, `?1048`, `ESC[t;br`, `?6h/l`, `?7h/l`, `ESC M/D/E/7/8/c`, `ESC[nL/M/@/P/X/b/S/T`, `\n`, text (n up to 99), random resizes down to the minimum `TermSize` between tokens, calling `assert_invariants()` after every step. Resolve the open question on the minimum size (1x1; region needs `rows >= 2`) by letting invalid regions be ignored
+- [x] 3.8 RED: extend the `random_and_truncated_input_never_panics` alphabet with `L M @ D E F J K 7 8 u b l =` (the new bytes must run without panics; fix any panic found, with a minimal regression test per bug)
+- [x] 3.9 Add `State::assert_invariants()` (`#[cfg(test)]`): for both screens, grid size equals terminal size, cursor in bounds, region valid (`top < bottom < rows` or full), saved cursor in bounds; every active and stashed placement references a stored image. RED: a deliberately corrupted state makes it fail (test with `#[should_panic]`)
+- [x] 3.10 Add `screen_ops_never_panic_across_resizes`: random tokens from `ESC[?1049h/l`, `?47`, `?1047`, `?1048`, `ESC[t;br`, `?6h/l`, `?7h/l`, `ESC M/D/E/7/8/c`, `ESC[nL/M/@/P/X/b/S/T`, `\n`, text (n up to 99), random resizes down to the minimum `TermSize` between tokens, calling `assert_invariants()` after every step. Resolve the open question on the minimum size (1x1; region needs `rows >= 2`) by letting invalid regions be ignored
 
 ### Phase 3.D: Verification (S3)
 
-- [ ] 3.11 Run `cargo fmt --all --check`
-- [ ] 3.12 Run `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets`
-- [ ] 3.13 Run `cargo test --workspace`
-- [ ] 3.14 Run `cargo +1.85 check --workspace --all-targets`
-- [ ] 3.15 Confirm the S3 diff is under 800 changed lines
+- [x] 3.11 Run `cargo fmt --all --check`
+- [x] 3.12 Run `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets`
+- [x] 3.13 Run `cargo test --workspace`
+- [x] 3.14 Run `cargo +1.85 check --workspace --all-targets`
+- [x] 3.15 Confirm the S3 diff is under 800 changed lines — 725 (code only, excluding openspec/)
 
 **PR boundary: S3 ends here.**
 

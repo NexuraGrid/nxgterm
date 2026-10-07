@@ -88,6 +88,21 @@ impl ImageStore {
         self.images.values().rev().find(|i| i.number == number)
     }
 
+    /// The main screen's placements while the alternate screen is active.
+    #[cfg(test)]
+    pub(crate) fn stashed(&self) -> &[Placement] {
+        &self.inactive
+    }
+
+    /// Forgets the image data of client id `id` but not its placements,
+    /// producing the state the terminal invariants must reject.
+    #[cfg(test)]
+    pub(crate) fn drop_image_keeping_placements(&mut self, id: u32) {
+        if let Some(key) = self.ids.remove(&id) {
+            self.images.remove(&key);
+        }
+    }
+
     /// Placements in creation order.
     pub fn placements(&self) -> &[Placement] {
         &self.placements

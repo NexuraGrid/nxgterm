@@ -89,6 +89,36 @@ impl Grid {
         (start < end && shift > 0).then_some((start, end, shift.min(end - start)))
     }
 
+    /// ICH: opens `n` blank cells at `col`, pushing the rest of the row right;
+    /// cells pushed past the edge are lost. `n` is clamped to the remaining
+    /// width. Panics on a row outside the grid, like `row()`.
+    pub fn insert_cells(&mut self, row: u16, col: u16, n: u16, blank: Cell) {
+        let cells = self.row_mut(row);
+        let col = usize::from(col).min(cells.len());
+        let n = usize::from(n).min(cells.len() - col);
+        cells[col..].rotate_right(n);
+        cells[col..col + n].fill(blank);
+    }
+
+    /// DCH: removes `n` cells at `col`, pulling the rest of the row left and
+    /// blanking the freed tail.
+    pub fn delete_cells(&mut self, row: u16, col: u16, n: u16, blank: Cell) {
+        let cells = self.row_mut(row);
+        let col = usize::from(col).min(cells.len());
+        let n = usize::from(n).min(cells.len() - col);
+        cells[col..].rotate_left(n);
+        let len = cells.len();
+        cells[len - n..].fill(blank);
+    }
+
+    /// ECH: blanks `cols` in place; the range is clamped to the row.
+    pub fn erase_cells(&mut self, row: u16, cols: std::ops::Range<u16>, blank: Cell) {
+        let cells = self.row_mut(row);
+        let end = usize::from(cols.end).min(cells.len());
+        let start = usize::from(cols.start).min(end);
+        cells[start..end].fill(blank);
+    }
+
     /// Resizes keeping the top-left content; new cells are blank.
     pub fn resize(&mut self, size: TermSize) {
         let mut next = Self::new(size);
@@ -231,6 +261,86 @@ mod tests {
     #[should_panic(expected = "out of bounds")]
     fn scrolling_a_region_past_the_grid_panics_like_row() {
         letters(3).scroll_up_in(1, 3, 1, dot());
+    }
+
+    /// One row of `abcde` (plus a second row that must never change).
+    fn word() -> Grid {
+        let mut grid = Grid::new(size(5, 2));
+        for (i, ch) in "abcde".chars().enumerate() {
+            put(&mut grid, i as u16, 0, ch);
+            put(&mut grid, i as u16, 1, 'z');
+        }
+        grid
+    }
+
+    fn line(grid: &Grid, row: u16) -> String {
+        grid.row(row).iter().map(|c| c.ch).collect()
+    }
+
+    #[test]
+    fn insert_cells_shifts_right_and_drops_the_overflow() {
+        let mut grid = word();
+        grid.insert_cells(0, 1, 2, dot());
+        assert_eq!(line(&grid, 0), "a..bc");
+        assert_eq!(line(&grid, 1), "zzzzz", "other rows are untouched");
+    }
+
+    #[test]
+    fn delete_cells_shifts_left_and_blanks_the_tail() {
+        let mut grid = word();
+        grid.delete_cells(0, 1, 2, dot());
+        assert_eq!(line(&grid, 0), "ade..");
+        assert_eq!(line(&grid, 1), "zzzzz");
+    }
+
+    #[test]
+    fn erase_cells_blanks_the_range_in_place() {
+        let mut grid = word();
+        grid.erase_cells(0, 1..3, dot());
+        assert_eq!(line(&grid, 0), "a..de");
+    }
+
+    #[test]
+    fn cell_edit_counts_are_clamped_to_the_remaining_width() {
+        let mut grid = word();
+        grid.insert_cells(0, 3, 99, dot());
+        assert_eq!(line(&grid, 0), "abc..");
+        let mut grid = word();
+        grid.delete_cells(0, 3, 99, dot());
+        assert_eq!(line(&grid, 0), "abc..");
+        let mut grid = word();
+        grid.erase_cells(0, 3..99, dot());
+        assert_eq!(line(&grid, 0), "abc..");
+    }
+
+    #[test]
+    fn cell_edits_at_the_last_column_touch_only_that_cell() {
+        let mut grid = word();
+        grid.insert_cells(0, 4, 1, dot());
+        assert_eq!(line(&grid, 0), "abcd.");
+        let mut grid = word();
+        grid.delete_cells(0, 4, 1, dot());
+        assert_eq!(line(&grid, 0), "abcd.");
+    }
+
+    #[test]
+    fn empty_cell_edits_change_nothing() {
+        let mut grid = word();
+        grid.insert_cells(0, 1, 0, dot());
+        grid.delete_cells(0, 1, 0, dot());
+        grid.erase_cells(0, 2..2, dot());
+        // Built from variables: clippy rejects a literal reversed range.
+        let (start, end) = (3, 1);
+        grid.erase_cells(0, start..end, dot());
+        grid.insert_cells(0, 5, 2, dot());
+        grid.delete_cells(0, 7, 2, dot());
+        assert_eq!(line(&grid, 0), "abcde");
+    }
+
+    #[test]
+    #[should_panic(expected = "out of bounds")]
+    fn cell_edits_past_the_last_row_panic_like_row() {
+        word().insert_cells(2, 0, 1, dot());
     }
 
     #[test]

@@ -63,6 +63,11 @@ struct State {
     sixel: Option<SixelDecoder>,
     /// Sixel scrolling (DECSDM reset): images go at the cursor and move it.
     sixel_scrolling: bool,
+    /// DECAWM. Global like in xterm: not saved by DECSC nor swapped with the
+    /// screens.
+    autowrap: bool,
+    /// The last printed character, for REP. Anything but another REP clears it.
+    last_char: Option<char>,
 }
 
 impl Terminal {
@@ -82,6 +87,8 @@ impl Terminal {
                 graphics: Graphics::new(),
                 sixel: None,
                 sixel_scrolling: true,
+                autowrap: true,
+                last_char: None,
             },
         }
     }
@@ -197,7 +204,7 @@ impl State {
         let col = u32::from(self.screen.col).saturating_add(cols);
         if col > u32::from(self.last_col()) {
             self.screen.col = self.last_col();
-            self.screen.wrap_pending = true;
+            self.screen.wrap_pending = self.autowrap;
         } else {
             self.screen.col = col as u16;
             self.screen.wrap_pending = false;
@@ -360,14 +367,16 @@ impl vte::Perform for State {
         }
         let (col, row) = (self.screen.col, self.screen.row);
         self.screen.grid.row_mut(row)[usize::from(col)] = Cell { ch, ..self.pen };
-        if col == self.last_col() {
-            self.screen.wrap_pending = true;
-        } else {
+        self.last_char = Some(ch);
+        // Without autowrap the last column is overwritten in place.
+        self.screen.wrap_pending = col == self.last_col() && self.autowrap;
+        if col != self.last_col() {
             self.screen.col += 1;
         }
     }
 
     fn execute(&mut self, byte: u8) {
+        self.last_char = None;
         match byte {
             b'\r' => self.goto(0, self.screen.row),
             b'\n' | 0x0b | 0x0c => self.index(),
@@ -401,6 +410,7 @@ impl vte::Perform for State {
     }
 
     fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
+        self.last_char = None;
         if ignore || !intermediates.is_empty() {
             return;
         }
@@ -423,6 +433,10 @@ impl vte::Perform for State {
         ignore: bool,
         action: char,
     ) {
+        // REP must survive itself so that it can be chained.
+        if !(action == 'b' && intermediates.is_empty()) {
+            self.last_char = None;
+        }
         if ignore {
             return;
         }
@@ -451,7 +465,15 @@ impl vte::Perform for State {
             (false, 'C') => self.goto(col.saturating_add(n), row),
             (false, 'D') => self.goto(col.saturating_sub(n), row),
             (false, 'H' | 'f') => self.goto_addressed(second.max(1) - 1, n - 1),
+            (false, 'E') => self.cursor_next_line(n),
+            (false, 'F') => self.cursor_previous_line(n),
             (false, 'G') => self.goto(n - 1, row),
+            (false, '@') => self.insert_chars(n),
+            (false, 'P') => self.delete_chars(n),
+            (false, 'X') => self.erase_chars(n),
+            (false, 'L') => self.insert_lines(n),
+            (false, 'M') => self.delete_lines(n),
+            (false, 'b') => self.repeat_last_char(n),
             (false, 'd') => self.goto_addressed(col, n - 1),
             (false, 'r') => self.set_region(first, second),
             (false, 'S') => self.scroll_region_up(n),
@@ -911,6 +933,17 @@ mod tests {
     }
 
     #[test]
+    fn kitty_cursor_advance_past_the_edge_does_not_wait_without_autowrap() {
+        let mut t = sized(4, 3);
+        t.advance(b"\x1b[?7l");
+        t.advance(&kitty_rgba(1, 40, 20, ",q=2"));
+        assert_eq!(pos(&t), (3, 0));
+        t.advance(b"x");
+        assert_eq!(text(&t, 0), "   x", "the print overwrites the last column");
+        assert_eq!(text(&t, 1), "");
+    }
+
+    #[test]
     fn kitty_image_at_bottom_scrolls_the_screen() {
         let mut t = sized(4, 3);
         t.advance(b"top\x1b[3;1H");
@@ -1001,7 +1034,8 @@ mod tests {
     fn random_and_truncated_input_never_panics() {
         let mut seed = 0x9e37_79b9_7f4a_7c15;
         let alphabet: &[u8] =
-            b"\x1b\x07\x18_PGq#!$-~?;=,0123456789aitTfpdsvxyzwhcrCXYIUmoS\\[]\"@^ \n\r";
+            b"\x1b\x07\x18_PGq#!$-~?;=,0123456789aitTfpdsvxyzwhcrCXYIUmoS\\[]\"@^ \n\r\
+              LM@DEFJK78ubl=";
         for _ in 0..300 {
             let mut t = sized(7, 4);
             let len = (noise(&mut seed) % 400) as usize;
@@ -1016,8 +1050,10 @@ mod tests {
                 })
                 .collect();
             t.advance(&bytes);
+            t.state.assert_invariants();
             t.take_responses();
             t.resize(TermSize::new(3, 2).unwrap());
+            t.state.assert_invariants();
             t.advance(b"\x1b\\\x1b[2J");
         }
         let valid = [
@@ -1030,6 +1066,68 @@ mod tests {
                 t.advance(&input[..cut]);
                 t.advance(b"\x1b\\");
                 t.advance(&input[cut..]);
+            }
+        }
+    }
+
+    /// Sequences that touch screens, regions, modes and cell editing, so
+    /// that random mixes of them reach states a byte alphabet rarely does.
+    #[test]
+    fn screen_ops_never_panic_across_resizes() {
+        let mut tokens: Vec<Vec<u8>> = [
+            "\x1b[?1049h",
+            "\x1b[?1049l",
+            "\x1b[?47h",
+            "\x1b[?47l",
+            "\x1b[?1047h",
+            "\x1b[?1047l",
+            "\x1b[?1048h",
+            "\x1b[?1048l",
+            "\x1b[?6h",
+            "\x1b[?6l",
+            "\x1b[?7h",
+            "\x1b[?7l",
+            "\x1b[r",
+            "\x1bM",
+            "\x1bD",
+            "\x1bE",
+            "\x1b7",
+            "\x1b8",
+            "\x1bc",
+            "\n",
+            "\r",
+            "\x1b[m",
+            "\x1b[44m",
+            "\x1b[2J",
+        ]
+        .iter()
+        .map(|s| s.as_bytes().to_vec())
+        .collect();
+        tokens.push(kitty_rgba(1, 10, 20, ""));
+        tokens.push(kitty_rgba(2, 20, 40, ""));
+        let counted = ["L", "M", "@", "P", "X", "b", "S", "T", "A", "B", "E", "F"];
+        let mut seed = 0x2545_f491_4f6c_dd1d;
+        for _ in 0..400 {
+            let mut t = sized(8, 5);
+            for _ in 0..60 {
+                let r = noise(&mut seed);
+                let n = (r >> 40) % 100;
+                let token = match (r >> 8) % 6 {
+                    0 => format!("\x1b[{};{}r", (r >> 16) % 8, (r >> 24) % 8).into_bytes(),
+                    1 => format!("\x1b[{n}{}", counted[(r >> 16) as usize % counted.len()])
+                        .into_bytes(),
+                    2 => "text ".repeat(1 + (r >> 16) as usize % 4).into_bytes(),
+                    _ => tokens[(r >> 16) as usize % tokens.len()].clone(),
+                };
+                t.advance(&token);
+                t.state.assert_invariants();
+                t.take_responses();
+                if r % 5 == 0 {
+                    // Down to 1x1, where a region cannot exist.
+                    let size = TermSize::new(1 + (r >> 48) as u16 % 9, 1 + (r >> 52) as u16 % 6);
+                    t.resize(size.unwrap());
+                    t.state.assert_invariants();
+                }
             }
         }
     }

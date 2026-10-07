@@ -91,3 +91,51 @@ Roughly 480 lines are tests.
 - `State::scroll_up/scroll_down(top, bottom, n)` plus `scroll_region_up/down` (SU/SD wrappers) live in `edit.rs`.
 - Under a full-screen region SD uses `scroll_region_down` over the whole span; placements partly scrolled off the top (negative anchor) are not shifted down.
 - The 1-row grid case is covered at `Grid` level; `set_region` ignores any region on a 1-row terminal.
+
+## S3 (cell and line editing, REP, DECAWM, CNL/CPL, fuzz) - implemented
+
+Branch `feat/fullscreen-essentials-s3`, stacked on S2b. Tasks 3.1 to 3.15 done.
+Manual window check (vim Ctrl-Y) is left to the orchestrator.
+
+### TDD cycle evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 3.1 | `grid.rs` | Unit | 218/218 | compile error (3 missing methods) | 20 grid tests pass | insert/delete/erase, clamp, last column, empty and reversed ranges, row bounds panic | rotate-based, clean |
+| 3.2 | `terminal/edit.rs` | Unit | green | runtime failure (ignored sequences) | pass | ICH/DCH/ECH, n 0/absent/99, pen background, pending wrap | clean |
+| 3.3 | `terminal/edit.rs` | Unit | green | runtime failure | pass | IL/DL inside, outside (cursor untouched), no region, pen bg, placements, vim Ctrl-Y (IL at region top) | clean |
+| 3.4 | `terminal/edit.rs` | Unit | green | runtime failure | pass | REP chain, n 0/absent, no last char, cleared by control/CSI/ESC, cap (absolute cursor 1,23) | clean |
+| 3.5 | `terminal/modes.rs`, `screen.rs` | Unit | green | runtime failure (3 tests) | pass | off overwrites, off cancels pending wrap, global across `?1049`, RIS restores | RIS test was not RED (ESC already cleared state); mutation check: removing the reset makes it fail |
+| 3.6 | `terminal/edit.rs` | Unit | green | runtime failure | pass | CNL/CPL, zero, inside vs outside region | clean |
+| 3.7 | `terminal/mod.rs` | - | - | nothing to change: none of these sequences were in the ignored list | - | - | - |
+| 3.8 | `terminal/mod.rs` | Fuzz | green | alphabet extended | pass (no panic found) | - | - |
+| 3.9 | `terminal/testing.rs` | Unit | green | compile error | pass | 7 corruption cases (cursor, dormant cursor, region, saved cursor, grid size, active and stashed dangling placement, wrap with autowrap off) | clean |
+| 3.10 | `terminal/mod.rs` | Fuzz | green | runtime failure: invariant "wrap pending while autowrap is off" (found 2 real bugs, below) | pass | 400 runs x 60 tokens, resizes to 1x1; mutation check (removing region reset in resize) fails it | clean |
+
+Bugs found by the invariant fuzz, each fixed with a minimal regression test:
+- DECRC restored a pending wrap saved before `?7l`, so the next print wrapped with autowrap off
+  (`screen.rs`, test `decrc_does_not_revive_a_pending_wrap_after_autowrap_was_turned_off`).
+- Kitty cursor advance past the right edge set a pending wrap with autowrap off
+  (`mod.rs`, test `kitty_cursor_advance_past_the_edge_does_not_wait_without_autowrap`).
+
+Test totals (nxg-core lib): 218 after S2, 256 after S3 (+38).
+
+### Verification
+
+- `cargo fmt --all --check`: clean
+- `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets`: clean (one `reversed_empty_ranges` in a test fixed)
+- `cargo test --workspace`: all pass (nxg-core 256)
+- `cargo +1.85 check --workspace --all-targets`: clean
+
+### Size
+
+`git diff --shortstat feat/fullscreen-essentials-s2b -- . ':!openspec'`: 7 files, 719 insertions,
+6 deletions = 725 changed lines (budget 800). Roughly 520 are tests.
+
+### Deviations
+
+- Added test-only `ImageStore::stashed()` and `drop_image_keeping_placements(id)` for the invariants.
+- `assert_invariants` lives in `terminal/testing.rs` (already `#[cfg(test)]`), not in `screen.rs`.
+- DECAWM off also stops the kitty cursor advance from setting a pending wrap (not in the spec; needed for the invariant).
+- Wrap-pending invariant checks the active screen only; a kept dormant screen may hold a stale flag that the next switch overwrites.
+- 3.7 and 3.15: see task notes. Open for later: IL/DL at a region with DECOM are by absolute row (correct per xterm); `advance_over_image` ignores autowrap only for the pending flag.
