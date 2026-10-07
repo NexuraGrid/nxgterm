@@ -4,6 +4,7 @@ use super::State;
 use crate::TermSize;
 use crate::cell::Cell;
 use crate::grid::{Grid, Region};
+use crate::kitty::Graphics;
 
 /// What DECSC remembers.
 #[derive(Debug, Clone, Copy)]
@@ -25,8 +26,6 @@ pub(super) struct Screen {
     /// Set after printing in the last column; the next print wraps first.
     pub wrap_pending: bool,
     pub saved: Option<SavedCursor>,
-    /// Read by the scrolling operations once scroll regions land.
-    #[allow(dead_code)]
     pub region: Region,
     pub origin: bool,
 }
@@ -103,6 +102,22 @@ impl State {
         }
     }
 
+    /// RIS: back to power-on state. `cell` (a fact about the window) and
+    /// `responses` (replies the child is still waiting for) are kept, and so
+    /// are the stored images, which the budget already bounds.
+    pub fn reset(&mut self) {
+        let size = self.screen.grid.size();
+        self.screen = Screen::new(size);
+        self.dormant = None;
+        self.alt_active = false;
+        self.cursor_visible = true;
+        self.pen = Cell::default();
+        self.sixel_scrolling = true;
+        self.sixel = None;
+        self.graphics = Graphics::new();
+        self.images.reset_placements();
+    }
+
     /// DECSC.
     pub fn save_cursor(&mut self) {
         self.screen.save_cursor(self.pen);
@@ -155,6 +170,7 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing::*;
     use super::*;
     use crate::Color;
     use crate::cell::Flags;
@@ -244,5 +260,75 @@ mod tests {
         screen.region = Region { top: 1, bottom: 3 };
         screen.resize(size(4, 8));
         assert!(screen.region.is_full(8));
+    }
+
+    #[test]
+    fn ris_from_the_alternate_screen_returns_to_a_blank_main() {
+        let mut t = sized(6, 4);
+        t.advance(b"main\x1b[?1049h\x1b[2;3r\x1b[?6hxyz");
+        t.advance(&kitty_rgba(1, 10, 20, ""));
+        t.advance(b"\x1bc");
+        assert!(!t.state.alt_active);
+        assert!(t.state.dormant.is_none());
+        assert_eq!((0..4).map(|r| text(&t, r)).collect::<String>(), "");
+        assert_eq!(pos(&t), (0, 0));
+        assert!(t.state.screen.region.is_full(4));
+        assert!(!t.state.screen.origin && t.state.screen.saved.is_none());
+        assert!(t.images().placements().is_empty());
+        assert_eq!(t.images().len(), 1, "image data is kept");
+    }
+
+    #[test]
+    fn ris_drops_the_stashed_main_placements_too() {
+        let mut t = sized(6, 4);
+        t.advance(&kitty_rgba(1, 10, 20, ""));
+        t.advance(b"\x1b[?1049h\x1bc\x1b[?1049h\x1b[?1049l");
+        assert!(t.images().placements().is_empty());
+    }
+
+    #[test]
+    fn ris_resets_pen_visibility_and_sixel_scrolling_but_keeps_pending_replies() {
+        let mut t = sized(6, 4);
+        t.advance(b"\x1b[31;1m\x1b[?25l\x1b[?80h\x1b[6n");
+        t.advance(b"\x1bcX");
+        assert_eq!(t.row(0)[0].ch, 'X');
+        assert_eq!(
+            t.row(0)[0],
+            crate::cell::Cell {
+                ch: 'X',
+                ..Default::default()
+            }
+        );
+        assert!(t.cursor().visible);
+        assert!(t.state.sixel_scrolling);
+        assert_eq!(t.take_responses(), b"\x1b[1;1R", "the reply survives");
+        assert_eq!(
+            t.cell_pixels(),
+            crate::CellPixels::new(10, 20),
+            "so does the cell size"
+        );
+    }
+
+    #[test]
+    fn ris_on_the_main_screen_also_clears_the_grid_and_saved_cursor() {
+        let mut t = sized(6, 4);
+        t.advance(b"abc\x1b[3;3H\x1b7\x1bc\x1b8");
+        assert_eq!(text(&t, 0), "");
+        assert_eq!(pos(&t), (0, 0), "the saved cursor is gone");
+    }
+
+    #[test]
+    fn resize_resets_the_region_on_both_screens_and_clamps_both_cursors() {
+        let mut t = sized(10, 6);
+        t.advance(b"\x1b[2;4r\x1b[6;9H\x1b7\x1b[?1049h\x1b[2;5r\x1b[6;9H\x1b7");
+        t.resize(TermSize::new(4, 3).unwrap());
+        let alt = &t.state.screen;
+        let main = t.state.dormant.as_ref().unwrap();
+        for screen in [alt, main] {
+            assert!(screen.region.is_full(3));
+            assert!(screen.col <= 3 && screen.row <= 2);
+            let saved = screen.saved.unwrap();
+            assert!(saved.col <= 3 && saved.row <= 2);
+        }
     }
 }

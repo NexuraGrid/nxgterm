@@ -59,12 +59,34 @@ impl Grid {
         &mut self.cells[span]
     }
 
-    /// Moves every row up by one, filling the last row with `blank`.
-    pub fn scroll_up(&mut self, blank: Cell) {
+    /// Moves rows `top..=bottom` up by `n`, blanking the rows freed at the
+    /// bottom. Rows outside the region never move; `n` is clamped to the
+    /// region height.
+    pub fn scroll_up_in(&mut self, top: u16, bottom: u16, n: u16, blank: Cell) {
+        let Some((start, end, shift)) = self.region_span(top, bottom, n) else {
+            return;
+        };
+        self.cells.copy_within(start + shift..end, start);
+        self.cells[end - shift..end].fill(blank);
+    }
+
+    /// Mirror of [`Grid::scroll_up_in`]: rows move down, the top is blanked.
+    pub fn scroll_down_in(&mut self, top: u16, bottom: u16, n: u16, blank: Cell) {
+        let Some((start, end, shift)) = self.region_span(top, bottom, n) else {
+            return;
+        };
+        self.cells.copy_within(start..end - shift, start + shift);
+        self.cells[start..start + shift].fill(blank);
+    }
+
+    /// Cell offsets `(start, end, shift)` of a scroll, or `None` when there
+    /// is nothing to move. Panics on rows outside the grid, like `row()`.
+    fn region_span(&self, top: u16, bottom: u16, n: u16) -> Option<(usize, usize, usize)> {
+        let start = self.span(top).start;
+        let end = self.span(bottom).end;
         let cols = usize::from(self.size.cols());
-        self.cells.copy_within(cols.., 0);
-        let len = self.cells.len();
-        self.cells[len - cols..].fill(blank);
+        let shift = usize::from(n) * cols;
+        (start < end && shift > 0).then_some((start, end, shift.min(end - start)))
     }
 
     /// Resizes keeping the top-left content; new cells are blank.
@@ -123,18 +145,92 @@ mod tests {
         assert_eq!(grid.row(1).len(), 3);
     }
 
-    #[test]
-    fn scroll_up_shifts_rows_and_blanks_last() {
-        let mut grid = Grid::new(size(2, 2));
-        put(&mut grid, 0, 0, 'a');
-        put(&mut grid, 0, 1, 'b');
-        let blank = Cell {
+    fn letters(rows: u16) -> Grid {
+        let mut grid = Grid::new(size(2, rows));
+        for r in 0..rows {
+            put(&mut grid, 0, r, (b'a' + r as u8) as char);
+        }
+        grid
+    }
+
+    fn column(grid: &Grid) -> String {
+        (0..grid.size().rows())
+            .map(|r| grid.row(r)[0].ch)
+            .map(|c| if c == ' ' { '.' } else { c })
+            .collect()
+    }
+
+    fn dot() -> Cell {
+        Cell {
             ch: '.',
             ..Cell::default()
-        };
-        grid.scroll_up(blank);
-        assert_eq!(grid.row(0)[0].ch, 'b');
-        assert_eq!(grid.row(1), &[blank; 2]);
+        }
+    }
+
+    #[test]
+    fn scroll_up_in_shifts_only_the_region_rows() {
+        let mut grid = letters(5);
+        grid.scroll_up_in(1, 3, 1, dot());
+        assert_eq!(column(&grid), "acd.e");
+        assert_eq!(grid.row(3), &[dot(); 2], "the new row takes the blank cell");
+    }
+
+    #[test]
+    fn scroll_down_in_shifts_only_the_region_rows() {
+        let mut grid = letters(5);
+        grid.scroll_down_in(1, 3, 1, dot());
+        assert_eq!(column(&grid), "a.bce");
+    }
+
+    #[test]
+    fn scrolling_by_more_than_one_row_moves_every_row() {
+        let mut up = letters(5);
+        up.scroll_up_in(0, 4, 2, dot());
+        assert_eq!(column(&up), "cde..");
+        let mut down = letters(5);
+        down.scroll_down_in(0, 4, 2, dot());
+        assert_eq!(column(&down), "..abc");
+    }
+
+    #[test]
+    fn scroll_count_is_clamped_to_the_region_height() {
+        let mut up = letters(5);
+        up.scroll_up_in(1, 3, 99, dot());
+        assert_eq!(column(&up), "a...e");
+        let mut down = letters(5);
+        down.scroll_down_in(1, 3, 99, dot());
+        assert_eq!(column(&down), "a...e");
+    }
+
+    #[test]
+    fn scrolling_by_zero_changes_nothing() {
+        let mut grid = letters(3);
+        grid.scroll_up_in(0, 2, 0, dot());
+        grid.scroll_down_in(0, 2, 0, dot());
+        assert_eq!(column(&grid), "abc");
+    }
+
+    #[test]
+    fn a_one_row_region_is_blanked() {
+        let mut grid = letters(3);
+        grid.scroll_up_in(1, 1, 1, dot());
+        assert_eq!(column(&grid), "a.c");
+        let mut grid = letters(3);
+        grid.scroll_down_in(2, 2, 1, dot());
+        assert_eq!(column(&grid), "ab.");
+    }
+
+    #[test]
+    fn a_one_row_grid_scrolls_without_panicking() {
+        let mut grid = letters(1);
+        grid.scroll_up_in(0, 0, 1, dot());
+        assert_eq!(column(&grid), ".");
+    }
+
+    #[test]
+    #[should_panic(expected = "out of bounds")]
+    fn scrolling_a_region_past_the_grid_panics_like_row() {
+        letters(3).scroll_up_in(1, 3, 1, dot());
     }
 
     #[test]

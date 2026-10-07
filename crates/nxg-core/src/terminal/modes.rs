@@ -5,6 +5,7 @@ use super::State;
 impl State {
     pub fn set_private_mode(&mut self, mode: u16, on: bool) {
         match mode {
+            6 => self.set_origin_mode(on),
             25 => self.cursor_visible = on,
             // DECSDM: set disables sixel scrolling.
             80 => self.sixel_scrolling = !on,
