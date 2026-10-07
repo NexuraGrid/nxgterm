@@ -13,6 +13,7 @@ mod screen;
 #[cfg(test)]
 mod testing;
 
+pub use modes::Modes;
 use screen::Screen;
 
 /// Cursor position (zero-based) and visibility.
@@ -66,6 +67,9 @@ struct State {
     /// DECAWM. Global like in xterm: not saved by DECSC nor swapped with the
     /// screens.
     autowrap: bool,
+    /// DECCKM. Global too: an application sets it once and expects it to hold
+    /// across screen switches.
+    app_cursor_keys: bool,
     /// The last printed character, for REP. Anything but another REP clears it.
     last_char: Option<char>,
 }
@@ -88,6 +92,7 @@ impl Terminal {
                 sixel: None,
                 sixel_scrolling: true,
                 autowrap: true,
+                app_cursor_keys: false,
                 last_char: None,
             },
         }

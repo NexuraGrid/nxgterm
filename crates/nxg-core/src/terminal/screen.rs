@@ -114,6 +114,7 @@ impl State {
         self.pen = Cell::default();
         self.sixel_scrolling = true;
         self.autowrap = true;
+        self.app_cursor_keys = false;
         self.last_char = None;
         self.sixel = None;
         self.graphics = Graphics::new();

@@ -1,10 +1,31 @@
 //! Private (DEC) modes: `CSI ? Pm h` / `CSI ? Pm l`.
 
-use super::State;
+use super::{State, Terminal};
+
+/// The terminal modes the embedding application needs to read. A plain value,
+/// so the key encoder stays a pure function of it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Modes {
+    /// DECCKM: arrows and Home/End are sent as `ESC O x` instead of `ESC [ x`.
+    pub app_cursor_keys: bool,
+    /// Whether the alternate screen is showing.
+    pub alt_screen: bool,
+}
+
+impl Terminal {
+    pub fn modes(&self) -> Modes {
+        Modes {
+            app_cursor_keys: self.state.app_cursor_keys,
+            // Derived, not stored twice: the screens are the source of truth.
+            alt_screen: self.state.alt_active,
+        }
+    }
+}
 
 impl State {
     pub fn set_private_mode(&mut self, mode: u16, on: bool) {
         match mode {
+            1 => self.app_cursor_keys = on,
             6 => self.set_origin_mode(on),
             7 => {
                 self.autowrap = on;
@@ -40,6 +61,7 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::super::testing::*;
+    use super::Modes;
     use crate::TermSize;
     use crate::grid::Region;
 
@@ -276,5 +298,73 @@ mod tests {
         assert_eq!(text(&t, 1), "abc", "turned on inside, it stays on in main");
         assert_eq!(text(&t, 2), "d");
         assert_eq!(pos(&t), (1, 2));
+    }
+
+    #[test]
+    fn modes_start_with_the_defaults() {
+        let t = term(5, 2);
+        assert_eq!(
+            t.modes(),
+            Modes {
+                app_cursor_keys: false,
+                alt_screen: false
+            }
+        );
+        assert_eq!(t.modes(), Modes::default());
+    }
+
+    #[test]
+    fn decckm_follows_set_and_reset() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?1h");
+        assert!(t.modes().app_cursor_keys);
+        t.advance(b"\x1b[?1l");
+        assert!(!t.modes().app_cursor_keys);
+        // Combined with another mode in one sequence.
+        t.advance(b"\x1b[?1;25h");
+        assert!(t.modes().app_cursor_keys);
+    }
+
+    #[test]
+    fn decckm_is_global_across_the_screens() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?1h\x1b[?1049h");
+        assert!(
+            t.modes().app_cursor_keys,
+            "kept when entering the alt screen"
+        );
+        t.advance(b"\x1b[?1l\x1b[?1049l");
+        assert!(!t.modes().app_cursor_keys, "turned off inside, off in main");
+    }
+
+    #[test]
+    fn alt_screen_is_derived_from_the_active_screen() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?1049h");
+        assert!(t.modes().alt_screen);
+        t.advance(b"\x1b[?1049l");
+        assert!(!t.modes().alt_screen);
+        t.advance(b"\x1b[?47h");
+        assert!(t.modes().alt_screen, "any switch counts, not only 1049");
+    }
+
+    #[test]
+    fn keypad_mode_escapes_leave_the_modes_unchanged() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?1h\x1b=");
+        let expected = Modes {
+            app_cursor_keys: true,
+            alt_screen: false,
+        };
+        assert_eq!(t.modes(), expected);
+        t.advance(b"\x1b>");
+        assert_eq!(t.modes(), expected);
+    }
+
+    #[test]
+    fn ris_clears_cursor_key_mode_and_leaves_the_alt_screen() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?1h\x1b[?1049h\x1bc");
+        assert_eq!(t.modes(), Modes::default());
     }
 }
