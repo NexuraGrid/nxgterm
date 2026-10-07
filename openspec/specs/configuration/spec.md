@@ -46,6 +46,7 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | `colors.ansi` | exactly 16 colors (normal 0-7, bright 8-15) | from theme |
 | `shell.program`, `shell.args` | string; blank = unset / list | platform default / `[]` |
 | `renderer.backend` | `auto` \| `gpu` \| `cpu` | `auto` |
+| `scrollback.lines` | usize history lines; `0` disables the scrollback | `10000` |
 
 `--print-config` MUST print a documented sample that parses to exactly the
 defaults.
@@ -99,7 +100,8 @@ The parent directory of the config file MUST be watched (so editors that
 save by rename are handled), events for other files, reads and access-time
 updates MUST be ignored, and bursts MUST be debounced to one reload after
 200 ms of quiet. Font family, font size, colors and padding MUST apply
-immediately (restyle and refit the grid). Changes to `[shell]`,
+immediately (restyle and refit the grid); `scrollback.lines` MUST apply
+immediately, dropping the oldest lines beyond a lower limit. Changes to `[shell]`,
 `[renderer]` and `window.columns`/`rows` MUST be reported as
 `nxgterm: <section> changes apply on restart`. A deleted file MUST reload as
 the defaults. A failure to start watching MUST only disable live reload.

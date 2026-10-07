@@ -136,6 +136,7 @@ impl App {
 
         let mut terminal = Terminal::new(size);
         terminal.set_cell_pixels(cell.width, cell.height);
+        terminal.set_scrollback_limit(config.scrollback.lines);
         Ok(Session {
             window,
             renderer,
@@ -190,6 +191,10 @@ impl App {
             }
             if changes.restyle {
                 session.restyle(&new);
+            }
+            if changes.scrollback {
+                session.terminal.set_scrollback_limit(new.scrollback.lines);
+                session.window.request_redraw();
             }
         }
         eprintln!("nxgterm: config reloaded");

@@ -12,6 +12,8 @@ pub struct Changes {
     /// Font, colors or padding changed: give the renderer a new style and
     /// recompute the grid size.
     pub restyle: bool,
+    /// The scrollback limit changed: apply it to the terminal.
+    pub scrollback: bool,
     /// Sections that changed but only apply on the next start.
     pub on_restart: Vec<&'static str>,
 }
@@ -23,6 +25,7 @@ pub fn diff(old: &Config, new: &Config) -> Changes {
     let restyle = old.font != new.font
         || old.colors != new.colors
         || old.window.padding != new.window.padding;
+    let scrollback = old.scrollback != new.scrollback;
     let mut on_restart = Vec::new();
     if old.shell != new.shell {
         on_restart.push("shell");
@@ -37,6 +40,7 @@ pub fn diff(old: &Config, new: &Config) -> Changes {
         font_family,
         font_size,
         restyle,
+        scrollback,
         on_restart,
     }
 }
@@ -91,5 +95,12 @@ mod tests {
         });
         assert!(!changes.restyle);
         assert_eq!(changes.on_restart, ["shell", "renderer", "window size"]);
+    }
+
+    #[test]
+    fn the_scrollback_limit_applies_live() {
+        let changes = with(|c| c.scrollback.lines = 5);
+        assert!(changes.scrollback && !changes.restyle);
+        assert!(changes.on_restart.is_empty());
     }
 }
