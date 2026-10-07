@@ -49,8 +49,14 @@ fn main() -> ExitCode {
 }
 
 fn run(config_arg: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
-    let path = config_arg
-        .or_else(|| nxg_config::config_path(Platform::current(), |name| env::var_os(name)));
+    let env_var = |name: &str| env::var_os(name);
+    let default_location = config_arg.is_none() && !nxg_config::has_env_override(env_var);
+    let path = config_arg.or_else(|| nxg_config::config_path(Platform::current(), env_var));
+    if default_location {
+        if let Some(path) = &path {
+            generate_config(path);
+        }
+    }
     let config = path.as_deref().map(load_config).unwrap_or_default();
 
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
@@ -76,6 +82,20 @@ fn load_config(path: &Path) -> Config {
             eprintln!("nxgterm: {error}; using the defaults");
             Config::default()
         }
+    }
+}
+
+/// Writes the documented defaults to the default config location on first
+/// run, so there is a file to edit. Failing (e.g. a read-only home) only
+/// warns: the terminal runs with the defaults either way.
+fn generate_config(path: &Path) {
+    match nxg_config::write_default(path) {
+        Ok(true) => eprintln!("nxgterm: wrote the default config to {}", path.display()),
+        Ok(false) => {}
+        Err(error) => eprintln!(
+            "nxgterm: cannot write the default config to {}: {error}",
+            path.display()
+        ),
     }
 }
 

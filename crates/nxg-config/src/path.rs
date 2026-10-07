@@ -55,6 +55,12 @@ pub fn config_path(platform: Platform, env: impl Fn(&str) -> Option<OsString>) -
     Some(base.join(DIR).join(FILE))
 }
 
+/// Whether `NXGTERM_CONFIG` picks the file (set and non-empty), so
+/// [`config_path`] is not the platform default.
+pub fn has_env_override(env: impl Fn(&str) -> Option<OsString>) -> bool {
+    env(ENV_VAR).is_some_and(|value| !value.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,6 +75,13 @@ mod tests {
 
     fn under(base: &str) -> PathBuf {
         PathBuf::from(base).join("nxgterm").join("nxgterm.toml")
+    }
+
+    #[test]
+    fn env_override_is_detected_when_non_empty() {
+        assert!(has_env_override(env(&[("NXGTERM_CONFIG", "/a.toml")])));
+        assert!(!has_env_override(env(&[("NXGTERM_CONFIG", "")])));
+        assert!(!has_env_override(env(&[("HOME", "/home/me")])));
     }
 
     #[test]

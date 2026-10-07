@@ -131,19 +131,21 @@ Provenance, hashes and license: [`crates/nxg-pty/winpty`](crates/nxg-pty/winpty/
 
 ## Configuration
 
-nxgterm works without a config file. To customize it, create a TOML file at:
+nxgterm reads a TOML file at:
 
 | OS | Location |
 |---|---|
 | Linux, macOS | `$XDG_CONFIG_HOME/nxgterm/nxgterm.toml`, or `~/.config/nxgterm/nxgterm.toml` |
 | Windows | `%APPDATA%\nxgterm\nxgterm.toml` |
 
-`nxgterm --config <path>` or `NXGTERM_CONFIG=<path>` uses another file
-(`--config` wins). Start from the documented defaults:
+On the first run nxgterm writes the documented defaults there (every key
+commented or set to its default), so there is a file to edit. An existing
+file is never overwritten, and a location that cannot be written only
+prints a warning. `nxgterm --print-config` prints the same documented
+defaults.
 
-```sh
-nxgterm --print-config > ~/.config/nxgterm/nxgterm.toml
-```
+`nxgterm --config <path>` or `NXGTERM_CONFIG=<path>` uses another file
+(`--config` wins); such a file is never generated.
 
 Every key is optional:
 
@@ -175,26 +177,46 @@ backend = "auto"            # auto | gpu | cpu
 
 [scrollback]
 lines = 10000               # history kept on the main screen; 0 disables it
+
+[keybindings]
+"ctrl+shift+r" = "reload_config"  # "chord" = "action", added to the defaults
+"ctrl+tab" = "none"               # free a default chord for the shell
 ```
 
 Built-in themes: `nxg-dark` (default), `nxg-light`, `tokyo-night`,
 `catppuccin-mocha`, `gruvbox-dark`, `dracula`, `nord`, `one-dark`.
 
-The file is reloaded when saved. Font, colors, padding and the scrollback
-limit apply at once; `[shell]`, `[renderer]` and the initial
+The file is reloaded when saved. Font, colors, padding, the scrollback
+limit and key bindings apply at once; `[shell]`, `[renderer]` and the initial
 `columns`/`rows` apply on the next start. An invalid file is reported on stderr (with the line and the reason,
 unknown keys included) and the previous settings stay in effect; at startup
 the defaults are used instead.
 
 ### Key bindings
 
-| Keys (Cmd instead of Ctrl on macOS) | Action |
+| Keys | Action |
 |---|---|
-| `Ctrl+=` / `Ctrl++` | Increase font size |
-| `Ctrl+-` | Decrease font size |
-| `Ctrl+0` | Reset font size to the configured one |
+| `Ctrl+=` / `Ctrl++` (`Cmd` on macOS) | `zoom_in`: increase font size |
+| `Ctrl+-` (`Cmd` on macOS) | `zoom_out`: decrease font size |
+| `Ctrl+0` (`Cmd` on macOS) | `reset_zoom`: back to the configured size |
+| `Shift+PageUp` / `Shift+PageDown` | `scroll_page_up` / `scroll_page_down` |
+| `Shift+Home` / `Shift+End` | `scroll_to_top` / `scroll_to_bottom` |
+| `Ctrl+Shift+T` / `Ctrl+Shift+W` | `new_tab` / `close_tab` |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | `next_tab` / `previous_tab` |
+| `Alt+1` ... `Alt+9` | `goto_tab_1` ... `goto_tab_9` |
+| `Ctrl+Shift+P` | `command_palette` |
+| (unbound) | `reload_config` |
 
-These are handled by the terminal and never reach the shell.
+Bound keys are handled by the terminal and never reach the shell (the
+scrolling keys still do in full-screen programs, which have no history).
+Tabs and the command palette are not implemented yet; their keys are
+reserved. Change them in `[keybindings]` with `"chord" = "action"`: a chord
+is modifiers (`ctrl`, `alt`, `shift`, `super`/`cmd`) and one key joined
+with `+` in any order and case, where the key is a character, `f1`-`f24`,
+`tab`, `enter`, `escape`, `space`, `backspace`, `delete`, `insert`, `home`,
+`end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`, `plus`, `minus`
+or `equal`. Map a default chord to `"none"` to unbind it. Invalid chords and
+unknown actions are reported like any other config error.
 
 ### Scrolling and the mouse
 

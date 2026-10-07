@@ -14,6 +14,8 @@ pub struct Changes {
     pub restyle: bool,
     /// The scrollback limit changed: apply it to the terminal.
     pub scrollback: bool,
+    /// `[keybindings]` changed: rebuild the bindings.
+    pub keybindings: bool,
     /// Sections that changed but only apply on the next start.
     pub on_restart: Vec<&'static str>,
 }
@@ -26,6 +28,7 @@ pub fn diff(old: &Config, new: &Config) -> Changes {
         || old.colors != new.colors
         || old.window.padding != new.window.padding;
     let scrollback = old.scrollback != new.scrollback;
+    let keybindings = old.keybindings != new.keybindings;
     let mut on_restart = Vec::new();
     if old.shell != new.shell {
         on_restart.push("shell");
@@ -41,6 +44,7 @@ pub fn diff(old: &Config, new: &Config) -> Changes {
         font_size,
         restyle,
         scrollback,
+        keybindings,
         on_restart,
     }
 }
@@ -97,6 +101,16 @@ mod tests {
         });
         assert!(!changes.restyle);
         assert_eq!(changes.on_restart, ["shell", "renderer", "window size"]);
+    }
+
+    #[test]
+    fn key_bindings_apply_live() {
+        let chord = "ctrl+alt+n".parse().unwrap();
+        let changes = with(|c| {
+            c.keybindings.entries = vec![(chord, Some(nxg_config::keybindings::Action::NewTab))];
+        });
+        assert!(changes.keybindings && !changes.restyle);
+        assert!(changes.on_restart.is_empty());
     }
 
     #[test]

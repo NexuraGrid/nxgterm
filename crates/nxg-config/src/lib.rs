@@ -1,10 +1,12 @@
-//! Configuration: the TOML file, its defaults and the built-in themes.
+//! Configuration: the TOML file, its defaults, the built-in themes and the
+//! key bindings.
 //!
 //! Pure: no window, GPU or OS APIs. Every key is optional; a missing file
 //! or section means the defaults, and unknown keys are errors so typos do
 //! not go unnoticed. See [`DEFAULT_CONFIG_TOML`] for the documented format.
 
 pub mod color;
+pub mod keybindings;
 pub mod path;
 pub mod theme;
 
@@ -16,7 +18,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Deserializer};
 
 pub use color::Rgb;
-pub use path::{Platform, config_path};
+pub use keybindings::{Bindings, KeybindingsConfig};
+pub use path::{Platform, config_path, has_env_override};
 pub use theme::{Colors, THEMES, Theme, ThemeName};
 
 /// Smallest and largest font size accepted, in points at scale 1.0.
@@ -35,7 +38,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# nxgterm configuration.
 #
 # Every key is optional; the values below are the defaults. Unknown keys are
 # reported as errors. Changes are applied live when the file is saved, except
-# [shell] and [renderer], which apply on the next start.
+# [shell], [renderer] and the window size, which apply on the next start.
 
 [font]
 # Font family. When unset or not installed, the system monospace font is used.
@@ -84,6 +87,50 @@ backend = "auto"
 [scrollback]
 # Lines kept after they scroll off the top of the screen; 0 disables it.
 lines = 10000
+
+[keybindings]
+# Shortcuts handled by the terminal instead of being sent to the shell, as
+# "chord" = "action". Entries are added to the defaults below; map a default
+# chord to "none" to free it for the shell.
+#
+# A chord is modifiers and one key joined with "+", in any order and case.
+# Modifiers: ctrl, alt, shift, super (cmd on macOS). Keys: a character,
+# f1-f24, tab, enter, escape, space, backspace, delete, insert, home, end,
+# pageup, pagedown, up, down, left, right, plus, minus, equal.
+#
+# Actions: zoom_in, zoom_out, reset_zoom, scroll_page_up, scroll_page_down,
+# scroll_to_top, scroll_to_bottom, new_tab, close_tab, next_tab, previous_tab,
+# goto_tab_1 to goto_tab_9, command_palette, reload_config (unbound by
+# default), none. Scrolling keys reach the application on the alternate
+# screen (full-screen programs).
+#
+# The defaults (on macOS the zoom chords use cmd instead of ctrl):
+# "ctrl+equal" = "zoom_in"
+# "ctrl+plus" = "zoom_in"
+# "ctrl+minus" = "zoom_out"
+# "ctrl+0" = "reset_zoom"
+# "shift+pageup" = "scroll_page_up"
+# "shift+pagedown" = "scroll_page_down"
+# "shift+home" = "scroll_to_top"
+# "shift+end" = "scroll_to_bottom"
+# "ctrl+shift+t" = "new_tab"
+# "ctrl+shift+w" = "close_tab"
+# "ctrl+tab" = "next_tab"
+# "ctrl+shift+tab" = "previous_tab"
+# "alt+1" = "goto_tab_1"
+# "alt+2" = "goto_tab_2"
+# "alt+3" = "goto_tab_3"
+# "alt+4" = "goto_tab_4"
+# "alt+5" = "goto_tab_5"
+# "alt+6" = "goto_tab_6"
+# "alt+7" = "goto_tab_7"
+# "alt+8" = "goto_tab_8"
+# "alt+9" = "goto_tab_9"
+# "ctrl+shift+p" = "command_palette"
+#
+# Examples:
+# "ctrl+shift+r" = "reload_config"
+# "ctrl+tab" = "none"
 "##;
 
 /// The whole configuration file.
@@ -96,6 +143,7 @@ pub struct Config {
     pub shell: ShellConfig,
     pub renderer: RendererConfig,
     pub scrollback: ScrollbackConfig,
+    pub keybindings: KeybindingsConfig,
 }
 
 /// `[font]`
@@ -201,6 +249,14 @@ impl Default for ScrollbackConfig {
     }
 }
 
+impl KeybindingsConfig {
+    /// The effective bindings: these entries over the defaults. `macos`
+    /// selects Cmd instead of Ctrl for the default zoom chords.
+    pub fn resolve(&self, macos: bool) -> Bindings {
+        Bindings::new(self, macos)
+    }
+}
+
 /// Which renderer to use.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -280,6 +336,32 @@ impl Config {
     }
 }
 
+/// Writes [`DEFAULT_CONFIG_TOML`] to `path`, creating its directories,
+/// unless a file is already there. Returns whether it was written; an
+/// existing file is never touched.
+pub fn write_default(path: &Path) -> io::Result<bool> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    // `create_new` fails instead of truncating a file created meanwhile.
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if let Err(error) = io::Write::write_all(&mut file, DEFAULT_CONFIG_TOML.as_bytes()) {
+        // Do not leave a truncated file that would load as a broken config.
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(true)
+}
+
 /// Treats an empty or blank string as absent.
 fn non_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
     let value = Option::<String>::deserialize(deserializer)?;
@@ -331,6 +413,47 @@ mod tests {
     #[test]
     fn documented_sample_parses_to_the_defaults() {
         assert_eq!(parse(DEFAULT_CONFIG_TOML).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn keybindings_section_merges_over_the_defaults() {
+        let config =
+            parse("[keybindings]\n\"ctrl+alt+n\" = \"new_tab\"\n\"ctrl+0\" = \"none\"\n").unwrap();
+        let bindings = config.keybindings.resolve(false);
+        let chord = |text: &str| text.parse::<keybindings::Chord>().unwrap();
+        assert_eq!(
+            bindings.action(&chord("ctrl+alt+n")),
+            Some(keybindings::Action::NewTab)
+        );
+        assert_eq!(bindings.action(&chord("ctrl+0")), None);
+        assert_eq!(
+            Config::default().keybindings.resolve(true),
+            Bindings::defaults(true)
+        );
+    }
+
+    #[test]
+    fn keybinding_errors_carry_path_and_reason() {
+        let error = parse_error("[keybindings]\n\"ctrl+t\" = \"copy\"\n");
+        assert!(error.contains("/cfg/nxgterm.toml"), "{error}");
+        assert!(error.contains("unknown action `copy`"), "{error}");
+        let error = parse_error("[keybindings]\n\"ctrl+bogus\" = \"new_tab\"\n");
+        assert!(error.contains("unknown key `bogus`"), "{error}");
+    }
+
+    #[test]
+    fn documented_sample_lists_every_default_binding() {
+        for (chord, action) in Bindings::defaults(false).entries() {
+            let line = format!("# \"{chord}\" = \"{action}\"");
+            assert!(DEFAULT_CONFIG_TOML.contains(&line), "missing {line}");
+        }
+        for action in keybindings::Action::ALL {
+            assert!(
+                DEFAULT_CONFIG_TOML.contains(action.name()),
+                "{} is not documented",
+                action.name()
+            );
+        }
     }
 
     #[test]
@@ -509,6 +632,53 @@ mod tests {
         std::fs::write(&file, "[window]\npadding = \"x\"\n").unwrap();
         let error = Config::load(&file).unwrap_err().to_string();
         assert!(error.contains(&file.display().to_string()), "{error}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("nxg-config-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn write_default_creates_the_file_and_its_directories() {
+        let dir = scratch_dir("write-default");
+        let file = dir.join("nested").join("nxgterm.toml");
+
+        assert!(write_default(&file).unwrap(), "created");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(text, DEFAULT_CONFIG_TOML);
+        assert_eq!(Config::load(&file).unwrap(), Some(Config::default()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_default_never_overwrites() {
+        let dir = scratch_dir("no-overwrite");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("nxgterm.toml");
+        std::fs::write(&file, "[window]\npadding = 9\n").unwrap();
+
+        assert!(!write_default(&file).unwrap(), "already there");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(text, "[window]\npadding = 9\n");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_default_reports_unwritable_locations() {
+        let dir = scratch_dir("unwritable");
+        std::fs::create_dir_all(&dir).unwrap();
+        // A regular file where the parent directory should be.
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, "").unwrap();
+
+        assert!(write_default(&blocker.join("nxgterm.toml")).is_err());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
