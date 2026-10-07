@@ -6,9 +6,9 @@ use super::atlas::Atlas;
 use super::device::Gpu;
 use super::format;
 use super::image::{self, IMAGE_INSTANCE_SIZE, ImageInstance, ImageTextures};
-use super::instance::{self, INSTANCE_SIZE, Quads};
+use super::instance::{self, AtlasFull, GlyphSlot, INSTANCE_SIZE, Quads};
 use crate::images::{self as placements, ImageDraw};
-use crate::paint::CellSize;
+use crate::paint::{CellSize, Layout};
 use crate::style::Style;
 
 /// Instance capacity of the first vertex buffer; it grows on demand.
@@ -153,26 +153,34 @@ impl Painter {
         self.atlas.clear();
     }
 
-    /// Draws `term` into `target` (`width x height` pixels) and submits.
+    /// Draws `term` into `target` (`width x height` pixels) and submits,
+    /// with the rows of `header` at the top of the grid area and `term`
+    /// below them (see [`Layout::below`]).
     pub fn render(
         &mut self,
         gpu: &Gpu,
         target: &wgpu::TextureView,
         width: u32,
         height: u32,
+        header: Option<&Terminal>,
         term: &Terminal,
     ) {
-        let Quads {
-            instances,
-            backgrounds,
-        } = self.build(&gpu.queue, term);
+        let rows = header.map_or(0, |header| header.size().rows());
+        let layout = self.style.layout().below(rows);
+        let (
+            Quads {
+                instances,
+                backgrounds,
+            },
+            header_quads,
+        ) = self.build(&gpu.queue, header, term);
         let bytes = instance::to_bytes(&instances);
         if bytes.len() as u64 > self.instances.size() {
             let size = (bytes.len() as u64).next_power_of_two();
             self.instances = instance_buffer(&gpu.device, size);
         }
         gpu.queue.write_buffer(&self.instances, 0, &bytes);
-        let (below, above, image_bytes) = self.image_layers(gpu, term);
+        let (below, above, image_bytes) = self.image_layers(gpu, term, layout);
         if image_bytes.len() as u64 > self.image_instances.size() {
             let size = (image_bytes.len() as u64).next_power_of_two();
             self.image_instances = instance_buffer(&gpu.device, size);
@@ -180,7 +188,6 @@ impl Painter {
         gpu.queue
             .write_buffer(&self.image_instances, 0, &image_bytes);
         // Images are clipped to the grid area (the padding stays clear).
-        let layout = self.style.layout();
         let (cx, cy, cw, ch) = placements::grid_clip(term, layout);
         let scissor = (
             cx.min(width),
@@ -229,11 +236,13 @@ impl Painter {
                     pass.draw(0..4, range);
                 }
             };
-            let total = instances.len() as u32;
+            let total = (instances.len() - header_quads) as u32;
             quads(&mut pass, 0..backgrounds as u32);
             self.draw_images(&mut pass, &below, scissor, &image_bytes);
             quads(&mut pass, backgrounds as u32..total);
             self.draw_images(&mut pass, &above, scissor, &image_bytes);
+            // The header has no images and does not overlap the grid.
+            quads(&mut pass, total..instances.len() as u32);
         }
         gpu.queue.submit([encoder.finish()]);
         self.textures.prune(term);
@@ -241,8 +250,12 @@ impl Painter {
 
     /// Uploads the textures the frame needs and builds the image instances
     /// for the layers below and above the text.
-    fn image_layers(&mut self, gpu: &Gpu, term: &Terminal) -> (Layer, Layer, Vec<u8>) {
-        let layout = self.style.layout();
+    fn image_layers(
+        &mut self,
+        gpu: &Gpu,
+        term: &Terminal,
+        layout: Layout,
+    ) -> (Layer, Layer, Vec<u8>) {
         let mut instances: Vec<ImageInstance> = Vec::new();
         let mut layer = |draws: Vec<ImageDraw>, instances: &mut Vec<ImageInstance>| -> Layer {
             let mut out = Vec::new();
@@ -290,21 +303,36 @@ impl Painter {
         }
     }
 
-    /// Builds the frame's instances; when the atlas fills up it is reset
-    /// and the frame rebuilt once, dropping glyphs that still do not fit.
-    fn build(&mut self, queue: &wgpu::Queue, term: &Terminal) -> Quads {
+    /// Builds the frame's instances: those of `term`, then those of
+    /// `header` (their count is returned with them). When the atlas fills
+    /// up it is reset and the frame rebuilt once, dropping glyphs that
+    /// still do not fit.
+    fn build(
+        &mut self,
+        queue: &wgpu::Queue,
+        header: Option<&Terminal>,
+        term: &Terminal,
+    ) -> (Quads, usize) {
         let layout = self.style.layout();
+        let rows = header.map_or(0, |header| header.size().rows());
         let baseline = self.style.font.baseline();
         let (atlas, font, palette) = (&mut self.atlas, &mut self.style.font, &self.style.palette);
-        let first = instance::build(term, palette, layout, baseline, |ch, bold| {
-            atlas.slot(queue, font, ch, bold)
-        });
-        first.unwrap_or_else(|_| {
+        let all = |glyph: &mut dyn FnMut(char, bool) -> Result<Option<GlyphSlot>, AtlasFull>| {
+            let mut quads =
+                instance::build(term, palette, layout.below(rows), baseline, &mut *glyph)?;
+            let Some(header) = header else {
+                return Ok((quads, 0));
+            };
+            let extra = instance::build(header, palette, layout, baseline, &mut *glyph)?.instances;
+            let count = extra.len();
+            quads.instances.extend(extra);
+            Ok((quads, count))
+        };
+        let first = all(&mut |ch, bold| atlas.slot(queue, font, ch, bold));
+        first.unwrap_or_else(|_: AtlasFull| {
             atlas.clear();
-            instance::build(term, palette, layout, baseline, |ch, bold| {
-                Ok(atlas.slot(queue, font, ch, bold).unwrap_or(None))
-            })
-            .unwrap_or_default()
+            all(&mut |ch, bold| Ok(atlas.slot(queue, font, ch, bold).unwrap_or(None)))
+                .unwrap_or_default()
         })
     }
 }

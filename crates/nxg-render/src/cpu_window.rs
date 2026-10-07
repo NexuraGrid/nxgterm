@@ -59,6 +59,20 @@ impl<W: HasDisplayHandle + HasWindowHandle> Renderer for CpuWindowRenderer<W> {
     }
 
     fn draw(&mut self, terminal: &Terminal) -> Result<(), RenderError> {
+        self.draw_with_header(None, terminal)
+    }
+}
+
+impl<W: HasDisplayHandle + HasWindowHandle> WindowRenderer for CpuWindowRenderer<W> {
+    fn set_style(&mut self, style: Style) {
+        self.renderer.set_style(style);
+    }
+
+    fn draw_with_header(
+        &mut self,
+        header: Option<&Terminal>,
+        terminal: &Terminal,
+    ) -> Result<(), RenderError> {
         let (Some(width), Some(height)) =
             (NonZeroU32::new(self.width), NonZeroU32::new(self.height))
         else {
@@ -69,13 +83,8 @@ impl<W: HasDisplayHandle + HasWindowHandle> Renderer for CpuWindowRenderer<W> {
         let mut buffer = self.surface.buffer_mut().map_err(fatal)?;
         let mut frame = Frame::new(&mut buffer, width.get(), height.get())
             .ok_or_else(|| RenderError::Fatal("surface buffer smaller than the window".into()))?;
-        self.renderer.render(terminal, &mut frame);
+        self.renderer
+            .render_with_header(header, terminal, &mut frame);
         buffer.present().map_err(fatal)
-    }
-}
-
-impl<W: HasDisplayHandle + HasWindowHandle> WindowRenderer for CpuWindowRenderer<W> {
-    fn set_style(&mut self, style: Style) {
-        self.renderer.set_style(style);
     }
 }

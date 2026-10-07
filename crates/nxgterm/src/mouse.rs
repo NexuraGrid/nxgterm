@@ -113,12 +113,15 @@ pub fn viewport_scroll(action: Action, modes: Modes, rows: u16) -> Option<Viewpo
 /// The cell under window position (`x`, `y`), clamped to the grid.
 pub fn cell_at(layout: Layout, size: TermSize, x: f64, y: f64) -> (u16, u16) {
     let CellSize { width, height } = layout.cell;
-    let padding = f64::from(layout.padding);
-    let index = |pos: f64, cell: u32, count: u16| {
-        let i = ((pos - padding) / f64::from(cell.max(1))).floor();
+    let index = |pos: f64, origin: u32, cell: u32, count: u16| {
+        let i = ((pos - f64::from(origin)) / f64::from(cell.max(1))).floor();
         i.clamp(0.0, f64::from(count - 1)) as u16
     };
-    (index(x, width, size.cols()), index(y, height, size.rows()))
+    let (left, top) = layout.origin(0, 0);
+    (
+        index(x, left, width, size.cols()),
+        index(y, top, height, size.rows()),
+    )
 }
 
 /// The bytes to send for a button or motion event, if the application
@@ -299,12 +302,17 @@ mod tests {
                 height: 20,
             },
             padding: 5,
+            top: 0,
         };
         let size = TermSize::new(4, 3).unwrap();
         assert_eq!(cell_at(layout, size, 5.0, 5.0), (0, 0));
         assert_eq!(cell_at(layout, size, 24.9, 45.0), (1, 2));
         assert_eq!(cell_at(layout, size, -3.0, 999.0), (0, 2), "clamped");
         assert_eq!(cell_at(layout, size, 999.0, 0.0), (3, 0));
+        // Below a one-row tab bar the grid starts a row lower.
+        let below = layout.below(1);
+        assert_eq!(cell_at(below, size, 5.0, 25.0), (0, 0));
+        assert_eq!(cell_at(below, size, 5.0, 45.0), (0, 1));
     }
 
     fn click(action: MouseAction) -> MouseEvent {

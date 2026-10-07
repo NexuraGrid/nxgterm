@@ -58,6 +58,8 @@ padding = 4
 # Initial size in character cells.
 columns = 100
 rows = 30
+# Tab bar above the grid: auto (only with two or more tabs), always or never.
+tab_bar = "auto"
 
 [colors]
 # Built-in theme: nxg-dark, nxg-light, tokyo-night, catppuccin-mocha,
@@ -181,6 +183,8 @@ pub struct WindowConfig {
     /// Initial grid size in cells.
     pub columns: NonZeroU16,
     pub rows: NonZeroU16,
+    /// When the tab bar is shown.
+    pub tab_bar: TabBar,
 }
 
 impl Default for WindowConfig {
@@ -189,6 +193,7 @@ impl Default for WindowConfig {
             padding: 4,
             columns: NonZeroU16::new(100).expect("non-zero"),
             rows: NonZeroU16::new(30).expect("non-zero"),
+            tab_bar: TabBar::Auto,
         }
     }
 }
@@ -266,6 +271,28 @@ pub enum Backend {
     Auto,
     Gpu,
     Cpu,
+}
+
+/// When the tab bar is shown, one cell row high above the grid.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabBar {
+    /// Only with two or more tabs.
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl TabBar {
+    /// Whether the bar shows with `tabs` tabs open.
+    pub fn visible(self, tabs: usize) -> bool {
+        match self {
+            Self::Auto => tabs > 1,
+            Self::Always => true,
+            Self::Never => false,
+        }
+    }
 }
 
 /// Clamps a font size to [`MIN_FONT_SIZE`]..=[`MAX_FONT_SIZE`]; a
@@ -471,6 +498,26 @@ mod tests {
         assert_eq!(config.shell, ShellConfig::default());
         assert_eq!(config.renderer.backend, Backend::Auto);
         assert_eq!(config.scrollback.lines, 10_000);
+        assert_eq!(config.window.tab_bar, TabBar::Auto);
+    }
+
+    #[test]
+    fn tab_bar_takes_auto_always_or_never() {
+        let tab_bar = |value: &str| {
+            parse(&format!("[window]\ntab_bar = \"{value}\"\n")).map(|c| c.window.tab_bar)
+        };
+        assert_eq!(tab_bar("auto").unwrap(), TabBar::Auto);
+        assert_eq!(tab_bar("always").unwrap(), TabBar::Always);
+        assert_eq!(tab_bar("never").unwrap(), TabBar::Never);
+        assert!(tab_bar("sometimes").is_err());
+    }
+
+    #[test]
+    fn tab_bar_shows_by_tab_count() {
+        assert!(!TabBar::Auto.visible(1));
+        assert!(TabBar::Auto.visible(2));
+        assert!(TabBar::Always.visible(1));
+        assert!(!TabBar::Never.visible(5));
     }
 
     #[test]

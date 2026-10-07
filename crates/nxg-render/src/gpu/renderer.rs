@@ -100,6 +100,20 @@ impl Renderer for GpuRenderer {
     }
 
     fn draw(&mut self, terminal: &Terminal) -> Result<(), RenderError> {
+        self.draw_with_header(None, terminal)
+    }
+}
+
+impl WindowRenderer for GpuRenderer {
+    fn set_style(&mut self, style: Style) {
+        self.painter.set_style(style);
+    }
+
+    fn draw_with_header(
+        &mut self,
+        header: Option<&Terminal>,
+        terminal: &Terminal,
+    ) -> Result<(), RenderError> {
         if let Some(failure) = self.gpu.failure() {
             return Err(RenderError::Fatal(failure));
         }
@@ -122,7 +136,7 @@ impl Renderer for GpuRenderer {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let (width, height) = (self.config.width, self.config.height);
         self.painter
-            .render(&self.gpu, &view, width, height, terminal);
+            .render(&self.gpu, &view, width, height, header, terminal);
         let suboptimal = frame.suboptimal;
         frame.present();
         if suboptimal {
@@ -132,11 +146,5 @@ impl Renderer for GpuRenderer {
             Some(failure) => Err(RenderError::Fatal(failure)),
             None => Ok(()),
         }
-    }
-}
-
-impl WindowRenderer for GpuRenderer {
-    fn set_style(&mut self, style: Style) {
-        self.painter.set_style(style);
     }
 }

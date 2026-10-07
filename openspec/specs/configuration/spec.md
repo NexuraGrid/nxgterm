@@ -59,6 +59,7 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | `font.size` | integer or float points, clamped to 6-72; non-finite = 14 | `14.0` |
 | `window.padding` | u16 logical pixels | `4` |
 | `window.columns`, `window.rows` | non-zero u16 initial cells | `100`, `30` |
+| `window.tab_bar` | `auto` (two or more tabs), `always`, `never` | `auto` |
 | `colors.theme` | built-in theme name, case-insensitive | `nxg-dark` |
 | `colors.foreground`/`background`/`cursor` | `#rrggbb` or `#rgb` | from theme |
 | `colors.ansi` | exactly 16 colors (normal 0-7, bright 8-15) | from theme |
@@ -118,8 +119,8 @@ running settings MUST stay unchanged.
 The parent directory of the config file MUST be watched (so editors that
 save by rename are handled), events for other files, reads and access-time
 updates MUST be ignored, and bursts MUST be debounced to one reload after
-200 ms of quiet. Font family, fallback families, font size, colors and padding MUST apply
-immediately (restyle and refit the grid); `scrollback.lines` MUST apply
+200 ms of quiet. Font family, fallback families, font size, colors, padding and
+`window.tab_bar` MUST apply immediately (restyle and refit the grid); `scrollback.lines` MUST apply
 immediately, dropping the oldest lines beyond a lower limit; `[keybindings]`
 MUST apply to the next key press. Changes to `[shell]`,
 `[renderer]` and `window.columns`/`rows` MUST be reported as
