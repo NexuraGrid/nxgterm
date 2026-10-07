@@ -85,6 +85,15 @@ impl<T> Tabs<T> {
         self.tabs.get_mut(self.active).map(|(_, tab)| tab)
     }
 
+    /// Activates the tab at `index`; returns whether it exists.
+    pub fn select(&mut self, index: usize) -> bool {
+        let exists = index < self.tabs.len();
+        if exists {
+            self.active = index;
+        }
+        exists
+    }
+
     /// Activates the next tab, wrapping to the first.
     pub fn next(&mut self) {
         if !self.tabs.is_empty() {
@@ -108,8 +117,17 @@ impl<T> Tabs<T> {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.tabs.len()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()
+    }
+
+    /// The tabs in display order.
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.tabs.iter().map(|(_, tab)| tab)
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
@@ -135,7 +153,7 @@ mod tests {
     }
 
     fn order(tabs: &Tabs<&'static str>) -> Vec<&'static str> {
-        tabs.tabs.iter().map(|&(_, name)| name).collect()
+        tabs.iter().copied().collect()
     }
 
     #[test]
@@ -248,5 +266,14 @@ mod tests {
         assert_eq!(tabs.active(), Some(&"b"));
         tabs.goto(9);
         assert_eq!(tabs.active(), Some(&"c"));
+    }
+
+    #[test]
+    fn select_ignores_missing_tabs() {
+        let mut tabs = tabs(&["a", "b"]);
+        assert!(!tabs.select(2));
+        assert_eq!(tabs.active(), Some(&"b"));
+        assert!(tabs.select(0));
+        assert_eq!(tabs.active(), Some(&"a"));
     }
 }

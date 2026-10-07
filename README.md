@@ -159,6 +159,7 @@ size = 14.0                 # points at 100% scale, clamped to 6-72
 padding = 4                 # pixels around the grid at 100% scale
 columns = 100               # initial size in cells
 rows = 30
+tab_bar = "auto"            # auto (2+ tabs) | always | never
 
 [colors]
 theme = "nxg-dark"
@@ -186,8 +187,8 @@ lines = 10000               # history kept on the main screen; 0 disables it
 Built-in themes: `nxg-dark` (default), `nxg-light`, `tokyo-night`,
 `catppuccin-mocha`, `gruvbox-dark`, `dracula`, `nord`, `one-dark`.
 
-The file is reloaded when saved. Font, colors, padding, the scrollback
-limit and key bindings apply at once; `[shell]`, `[renderer]` and the initial
+The file is reloaded when saved. Font, colors, padding, the tab bar, the
+scrollback limit and key bindings apply at once; `[shell]`, `[renderer]` and the initial
 `columns`/`rows` apply on the next start. An invalid file is reported on stderr (with the line and the reason,
 unknown keys included) and the previous settings stay in effect; at startup
 the defaults are used instead.
@@ -209,14 +210,29 @@ the defaults are used instead.
 
 Bound keys are handled by the terminal and never reach the shell (the
 scrolling keys still do in full-screen programs, which have no history).
-Tabs and the command palette are not implemented yet; their keys are
-reserved. Change them in `[keybindings]` with `"chord" = "action"`: a chord
+The command palette is not implemented yet; its key is reserved. Change
+them in `[keybindings]` with `"chord" = "action"`: a chord
 is modifiers (`ctrl`, `alt`, `shift`, `super`/`cmd`) and one key joined
 with `+` in any order and case, where the key is a character, `f1`-`f24`,
 `tab`, `enter`, `escape`, `space`, `backspace`, `delete`, `insert`, `home`,
 `end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`, `plus`, `minus`
 or `equal`. Map a default chord to `"none"` to unbind it. Invalid chords and
 unknown actions are reported like any other config error.
+
+### Tabs
+
+`Ctrl+Shift+T` opens a tab next to the current one. Every tab runs the
+configured `[shell]` (or the default shell) on its own pty, starting in the
+directory nxgterm was started in (the shell's current directory is not
+tracked yet), with its own history and modes; background tabs keep running.
+A tab closes when its program exits or with `Ctrl+Shift+W`, and nxgterm
+exits with the last one. `Alt+N` goes to tab N (`Alt+9` past the last tab
+goes to the last).
+
+With two or more tabs (see `window.tab_bar`) a bar takes the top row,
+labelled ` N: program `, the current tab highlighted; click a label to
+switch to it. Labels are the program name; titles set by programs (OSC 0/2)
+are not shown yet.
 
 ### Scrolling and the mouse
 

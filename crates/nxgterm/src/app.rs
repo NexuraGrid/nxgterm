@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
-use nxg_config::{Backend, Bindings, Config, FontConfig};
+use nxg_config::{Backend, Bindings, Config, FontConfig, TabBar};
 use nxg_core::fallback::{self, Init};
 use nxg_core::mouse::{MouseAction, MouseButton, MouseEvent};
 use nxg_core::ports::{ChildProcess, PtyControl, RenderError, Renderer};
@@ -27,7 +27,7 @@ use winit::window::{Window, WindowId};
 use crate::bindings::Action;
 use crate::mouse::{ViewportScroll, Wheel, WheelAction};
 use crate::tabs::{TabId, Tabs};
-use crate::{appearance, bindings, choice, keys, mouse, reload};
+use crate::{appearance, bindings, choice, keys, mouse, reload, tab_bar};
 
 /// Events posted to the event loop from background threads.
 #[derive(Debug)]
@@ -44,6 +44,9 @@ pub enum UserEvent {
 struct Tab {
     terminal: Terminal,
     pty: Box<dyn PtyControl>,
+    /// Label on the tab bar: the program name (OSC 0/2 titles are not
+    /// supported yet).
+    title: String,
 }
 
 /// Everything that exists once the window is up.
@@ -61,6 +64,8 @@ struct Session {
     /// Every tab has its own shell; only the active one is drawn and gets
     /// input, the others keep reading their output.
     tabs: Tabs<Tab>,
+    /// When the tab bar shows; the grid is one row shorter while it does.
+    tab_bar: TabBar,
     /// Consecutive skipped frames; bounds retries so a surface that keeps
     /// failing (e.g. occluded) does not spin the event loop.
     skipped_frames: u8,
@@ -68,6 +73,8 @@ struct Session {
     wheel: Wheel,
     /// The cell under the pointer.
     pointer: (u16, u16),
+    /// The tab bar column under the pointer, while it is over the bar.
+    bar_pointer: Option<u16>,
     /// The button held down, for drag reports.
     held: Option<MouseButton>,
 }
@@ -138,9 +145,11 @@ impl App {
             scale,
             padding,
             tabs: Tabs::new(),
+            tab_bar: config.window.tab_bar,
             skipped_frames: 0,
             wheel: Wheel::default(),
             pointer: (0, 0),
+            bar_pointer: None,
             held: None,
         };
         session.open_tab(config, &self.proxy)?;
@@ -300,6 +309,7 @@ impl App {
                 session.font_size = new.font.size;
             }
             if changes.restyle {
+                session.tab_bar = new.window.tab_bar;
                 session.restyle(&new);
             }
             if changes.scrollback {
@@ -404,6 +414,11 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                session.bar_pointer = session.bar_column_at(position.x, position.y);
+                if session.bar_pointer.is_some() {
+                    // The bar is not part of the terminal: no reports.
+                    return;
+                }
                 let layout = session.grid_layout();
                 let Some(tab) = session.tabs.active_mut() else {
                     return;
@@ -433,6 +448,19 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 };
                 let action = mouse::action(state);
+                if let Some(col) = session.bar_pointer {
+                    if action == MouseAction::Press {
+                        if button == MouseButton::Left {
+                            session.click_bar(col);
+                        }
+                        return;
+                    }
+                    if session.held.is_none() {
+                        return; // Released after a press on the bar.
+                    }
+                    // A drag from the grid ends over the bar: report the
+                    // release at the last grid cell.
+                }
                 session.held = (action == MouseAction::Press).then_some(button);
                 let (col, row) = session.pointer;
                 let event = MouseEvent {
@@ -488,7 +516,8 @@ impl Session {
         proxy: &EventLoopProxy<UserEvent>,
     ) -> Result<TabId, Box<dyn Error>> {
         let pixels = self.window.inner_size();
-        let layout = self.grid_layout();
+        // The bar may appear with this tab.
+        let layout = self.grid_layout_for(self.tabs.len() + 1);
         let win_size = WinSize {
             cells: layout.grid_size(pixels.width, pixels.height),
             cell: Some(CellPixels::new(layout.cell.width, layout.cell.height)),
@@ -526,9 +555,13 @@ impl Session {
     }
 
     /// After the active tab or the number of tabs changed: forgets the
-    /// held button, refits the grid and redraws.
+    /// held button (and the pointer on a bar that went away), refits the
+    /// grid and redraws.
     fn tab_switched(&mut self) {
         self.held = None;
+        if !self.tab_bar.visible(self.tabs.len()) {
+            self.bar_pointer = None;
+        }
         self.sync_grid_size();
         self.window.request_redraw();
     }
@@ -550,16 +583,55 @@ impl Session {
         }
     }
 
-    /// Where the grid sits in the window.
+    /// Where the grid sits in the window, below the tab bar if it shows.
     fn grid_layout(&self) -> Layout {
-        layout(self.renderer.as_ref(), self.padding)
+        self.grid_layout_for(self.tabs.len())
+    }
+
+    /// [`Session::grid_layout`] with `tabs` tabs open.
+    fn grid_layout_for(&self, tabs: usize) -> Layout {
+        let bar = u16::from(self.tab_bar.visible(tabs));
+        layout(self.renderer.as_ref(), self.padding).below(bar)
+    }
+
+    /// The tab bar labels for a bar `cols` columns wide.
+    fn bar_labels(&self, cols: u16) -> Vec<tab_bar::Label> {
+        let titles: Vec<&str> = self.tabs.iter().map(|tab| tab.title.as_str()).collect();
+        tab_bar::layout(&titles, self.tabs.active_index(), cols)
+    }
+
+    /// The tab bar column at window pixel `x`, `y`, if the bar shows there.
+    fn bar_column_at(&self, x: f64, y: f64) -> Option<u16> {
+        if !self.tab_bar.visible(self.tabs.len()) {
+            return None;
+        }
+        let cols = self.tabs.active()?.terminal.size().cols();
+        let layout = layout(self.renderer.as_ref(), self.padding);
+        tab_bar::column_at(layout, cols, x, y)
+    }
+
+    /// Activates the tab whose label is at bar column `col`.
+    fn click_bar(&mut self, col: u16) {
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        let labels = self.bar_labels(tab.terminal.size().cols());
+        if let Some(index) = tab_bar::tab_at(&labels, col) {
+            if index != self.tabs.active_index() && self.tabs.select(index) {
+                self.tab_switched();
+            }
+        }
     }
 
     fn redraw(&mut self, config: &Config) -> Result<(), Box<dyn Error>> {
         let Some(tab) = self.tabs.active() else {
             return Ok(());
         };
-        match self.renderer.draw(&tab.terminal) {
+        let bar = self.tab_bar.visible(self.tabs.len()).then(|| {
+            let cols = tab.terminal.size().cols();
+            tab_bar::render(&self.bar_labels(cols), cols)
+        });
+        match self.renderer.draw_with_header(bar.as_ref(), &tab.terminal) {
             Ok(()) => {
                 self.skipped_frames = 0;
                 Ok(())
@@ -681,9 +753,15 @@ fn spawn_tab(
         terminal.set_cell_pixels(cell.width, cell.height);
     }
     terminal.set_scrollback_limit(config.scrollback.lines);
+    let shell_env = env::var("SHELL").ok();
     Ok(Tab {
         terminal,
         pty: pty.control,
+        title: tab_bar::title(
+            config.shell.program.as_deref(),
+            shell_env.as_deref(),
+            cfg!(windows),
+        ),
     })
 }
 

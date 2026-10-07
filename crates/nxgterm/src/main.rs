@@ -12,6 +12,7 @@ mod cli;
 mod keys;
 mod mouse;
 mod reload;
+mod tab_bar;
 mod tabs;
 mod watch;
 
