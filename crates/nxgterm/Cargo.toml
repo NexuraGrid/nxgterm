@@ -5,6 +5,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage = "https://github.com/NexuraGrid/nxgterm"
+readme = "../../README.md"
+keywords = ["terminal", "terminal-emulator", "gpu"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 nxg-core.workspace = true
@@ -14,5 +19,86 @@ nxg-config.workspace = true
 notify.workspace = true
 winit.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Console"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 [lints]
 workspace = true
+
+# `cargo deb -p nxgterm`. Display (X11/Wayland) and GPU libraries are loaded
+# at runtime with dlopen, so `$auto` (shlibdeps) only sees libc; the rest is
+# listed by hand.
+[package.metadata.deb]
+maintainer = "NexuraGrid <https://github.com/NexuraGrid>"
+copyright = "2026, The nxgterm developers"
+license-file = ["../../LICENSE-MIT", "0"]
+section = "x11"
+priority = "optional"
+depends = "$auto, libxkbcommon0, libwayland-client0 | libx11-xcb1"
+recommends = "libxkbcommon-x11-0, libx11-xcb1, libxcursor1, libxi6, libxrandr2, libwayland-cursor0, libwayland-egl1, libvulkan1 | libegl1"
+extended-description = """\
+nxgterm is a terminal emulator with a GPU renderer that falls back to the \
+CPU automatically, TOML configuration with live reload and themes, and \
+inline images through the Kitty graphics protocol and Sixel. The optional \
+tools profile installer is shipped in /usr/share/nxgterm/profile."""
+assets = [
+    ["target/release/nxgterm", "usr/bin/", "755"],
+    ["../../assets/linux/nxgterm.desktop", "usr/share/applications/", "644"],
+    ["../../assets/linux/io.github.nexuragrid.nxgterm.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["../../assets/nxgterm.svg", "usr/share/icons/hicolor/scalable/apps/nxgterm.svg", "644"],
+    ["../../assets/icons/nxgterm-16.png", "usr/share/icons/hicolor/16x16/apps/nxgterm.png", "644"],
+    ["../../assets/icons/nxgterm-24.png", "usr/share/icons/hicolor/24x24/apps/nxgterm.png", "644"],
+    ["../../assets/icons/nxgterm-32.png", "usr/share/icons/hicolor/32x32/apps/nxgterm.png", "644"],
+    ["../../assets/icons/nxgterm-48.png", "usr/share/icons/hicolor/48x48/apps/nxgterm.png", "644"],
+    ["../../assets/icons/nxgterm-64.png", "usr/share/icons/hicolor/64x64/apps/nxgterm.png", "644"],
+    ["../../assets/icons/nxgterm-128.png", "usr/share/icons/hicolor/128x128/apps/nxgterm.png", "644"],
+    ["../../assets/icons/nxgterm-256.png", "usr/share/icons/hicolor/256x256/apps/nxgterm.png", "644"],
+    ["../../assets/icons/nxgterm-512.png", "usr/share/icons/hicolor/512x512/apps/nxgterm.png", "644"],
+    ["../../README.md", "usr/share/doc/nxgterm/README.md", "644"],
+    ["../../LICENSE-MIT", "usr/share/doc/nxgterm/LICENSE-MIT", "644"],
+    ["../../LICENSE-APACHE", "usr/share/doc/nxgterm/LICENSE-APACHE", "644"],
+    ["../../profile/install.sh", "usr/share/nxgterm/profile/install.sh", "755"],
+    ["../../profile/install.ps1", "usr/share/nxgterm/profile/install.ps1", "644"],
+]
+
+# `cargo generate-rpm -p crates/nxgterm` (after `cargo build --release`).
+[package.metadata.generate-rpm]
+summary = "Fast, configurable, cross-platform terminal emulator"
+url = "https://github.com/NexuraGrid/nxgterm"
+assets = [
+    { source = "target/release/nxgterm", dest = "/usr/bin/nxgterm", mode = "755" },
+    { source = "../../assets/linux/nxgterm.desktop", dest = "/usr/share/applications/nxgterm.desktop", mode = "644" },
+    { source = "../../assets/linux/io.github.nexuragrid.nxgterm.metainfo.xml", dest = "/usr/share/metainfo/io.github.nexuragrid.nxgterm.metainfo.xml", mode = "644" },
+    { source = "../../assets/nxgterm.svg", dest = "/usr/share/icons/hicolor/scalable/apps/nxgterm.svg", mode = "644" },
+    { source = "../../assets/icons/nxgterm-16.png", dest = "/usr/share/icons/hicolor/16x16/apps/nxgterm.png", mode = "644" },
+    { source = "../../assets/icons/nxgterm-24.png", dest = "/usr/share/icons/hicolor/24x24/apps/nxgterm.png", mode = "644" },
+    { source = "../../assets/icons/nxgterm-32.png", dest = "/usr/share/icons/hicolor/32x32/apps/nxgterm.png", mode = "644" },
+    { source = "../../assets/icons/nxgterm-48.png", dest = "/usr/share/icons/hicolor/48x48/apps/nxgterm.png", mode = "644" },
+    { source = "../../assets/icons/nxgterm-64.png", dest = "/usr/share/icons/hicolor/64x64/apps/nxgterm.png", mode = "644" },
+    { source = "../../assets/icons/nxgterm-128.png", dest = "/usr/share/icons/hicolor/128x128/apps/nxgterm.png", mode = "644" },
+    { source = "../../assets/icons/nxgterm-256.png", dest = "/usr/share/icons/hicolor/256x256/apps/nxgterm.png", mode = "644" },
+    { source = "../../assets/icons/nxgterm-512.png", dest = "/usr/share/icons/hicolor/512x512/apps/nxgterm.png", mode = "644" },
+    { source = "../../README.md", dest = "/usr/share/doc/nxgterm/README.md", mode = "644", doc = true },
+    { source = "../../LICENSE-MIT", dest = "/usr/share/licenses/nxgterm/LICENSE-MIT", mode = "644", doc = true },
+    { source = "../../LICENSE-APACHE", dest = "/usr/share/licenses/nxgterm/LICENSE-APACHE", mode = "644", doc = true },
+    { source = "../../profile/install.sh", dest = "/usr/share/nxgterm/profile/install.sh", mode = "755" },
+    { source = "../../profile/install.ps1", dest = "/usr/share/nxgterm/profile/install.ps1", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+libxkbcommon = "*"
+
+[package.metadata.generate-rpm.recommends]
+libxkbcommon-x11 = "*"
+libwayland-client = "*"
+libwayland-cursor = "*"
+libwayland-egl = "*"
+libX11-xcb = "*"
+libXcursor = "*"
+libXi = "*"
+libXrandr = "*"
+vulkan-loader = "*"
+mesa-libEGL = "*"

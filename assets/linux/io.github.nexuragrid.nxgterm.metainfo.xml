@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.nexuragrid.nxgterm</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>nxgterm</name>
+  <summary>Fast, configurable, cross-platform terminal emulator</summary>
+  <description>
+    <p>
+      nxgterm is a terminal emulator written in Rust. It renders text on the GPU
+      and falls back to a CPU renderer automatically, so it always starts.
+    </p>
+    <ul>
+      <li>TOML configuration with live reload, built-in themes and font settings</li>
+      <li>Inline images through the Kitty graphics protocol and Sixel</li>
+      <li>Runs on Linux, macOS and Windows</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">nxgterm.desktop</launchable>
+  <icon type="stock">nxgterm</icon>
+  <categories>
+    <category>System</category>
+    <category>TerminalEmulator</category>
+  </categories>
+  <keywords>
+    <keyword>terminal</keyword>
+    <keyword>shell</keyword>
+    <keyword>console</keyword>
+  </keywords>
+  <provides>
+    <binary>nxgterm</binary>
+  </provides>
+  <url type="homepage">https://github.com/NexuraGrid/nxgterm</url>
+  <url type="bugtracker">https://github.com/NexuraGrid/nxgterm/issues</url>
+  <developer id="io.github.nexuragrid">
+    <name>NexuraGrid</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <releases>
+    <release version="0.1.0" date="2026-10-07"/>
+  </releases>
+</component>

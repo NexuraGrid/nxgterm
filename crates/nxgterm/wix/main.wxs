@@ -1,0 +1,161 @@
+<?xml version='1.0' encoding='windows-1252'?>
+<!--
+  nxgterm MSI (WiX Toolset v3), built by the release workflow with cargo-wix
+  (see .github/workflows/release.yml).
+
+  cargo-wix passes Version, Platform and CargoTargetBinDir. Repository files
+  are found relative to this file through sys.SOURCEFILEDIR.
+
+  Installs per machine into "Program Files\nxgterm", adds a Start Menu
+  shortcut, and offers an optional (on by default) feature that appends the
+  install folder to the system PATH.
+-->
+
+<?if $(var.Platform) = x64 ?>
+    <?define Win64 = 'yes' ?>
+    <?define PlatformProgramFilesFolder = 'ProgramFiles64Folder' ?>
+<?else ?>
+    <?define Win64 = 'no' ?>
+    <?define PlatformProgramFilesFolder = 'ProgramFilesFolder' ?>
+<?endif ?>
+
+<?define RepoDir = '$(sys.SOURCEFILEDIR)..\..\..' ?>
+
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+    <Product
+        Id='*'
+        Name='nxgterm'
+        UpgradeCode='C15C343E-7B1E-41F9-99D4-DC55B0492AB5'
+        Manufacturer='NexuraGrid'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+
+        <Package
+            Id='*'
+            Keywords='Installer'
+            Description='nxgterm terminal emulator'
+            Manufacturer='NexuraGrid'
+            InstallerVersion='450'
+            Languages='1033'
+            Compressed='yes'
+            InstallScope='perMachine'
+            SummaryCodepage='1252'
+            Platform='$(var.Platform)'/>
+
+        <MajorUpgrade
+            Schedule='afterInstallInitialize'
+            DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
+
+        <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
+        <Property Id='DiskPrompt' Value='nxgterm Installation'/>
+
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
+                <Directory Id='APPLICATIONFOLDER' Name='nxgterm'>
+                    <Directory Id='ProfileFolder' Name='profile'/>
+                </Directory>
+            </Directory>
+            <Directory Id='ProgramMenuFolder'/>
+        </Directory>
+
+        <DirectoryRef Id='APPLICATIONFOLDER'>
+            <Component Id='binary0' Guid='*' Win64='$(var.Win64)'>
+                <File
+                    Id='exe0'
+                    Name='nxgterm.exe'
+                    DiskId='1'
+                    Source='$(var.CargoTargetBinDir)\nxgterm.exe'
+                    KeyPath='yes'/>
+            </Component>
+            <Component Id='LicenseMit' Guid='*' Win64='$(var.Win64)'>
+                <File Id='LicenseMitFile' Name='LICENSE-MIT' DiskId='1' Source='$(var.RepoDir)\LICENSE-MIT' KeyPath='yes'/>
+            </Component>
+            <Component Id='LicenseApache' Guid='*' Win64='$(var.Win64)'>
+                <File Id='LicenseApacheFile' Name='LICENSE-APACHE' DiskId='1' Source='$(var.RepoDir)\LICENSE-APACHE' KeyPath='yes'/>
+            </Component>
+            <Component Id='Readme' Guid='*' Win64='$(var.Win64)'>
+                <File Id='ReadmeFile' Name='README.md' DiskId='1' Source='$(var.RepoDir)\README.md' KeyPath='yes'/>
+            </Component>
+            <Component Id='Path' Guid='D4FB9BF7-DB32-4C98-9D24-CE795E05FC9C' Win64='$(var.Win64)' KeyPath='yes'>
+                <Environment
+                    Id='PATH'
+                    Name='PATH'
+                    Value='[APPLICATIONFOLDER]'
+                    Permanent='no'
+                    Part='last'
+                    Action='set'
+                    System='yes'/>
+            </Component>
+        </DirectoryRef>
+
+        <!-- The documented WiX pattern for a non-advertised shortcut: its own
+             component with an HKCU key path (ICE38/ICE43/ICE57). -->
+        <DirectoryRef Id='ProgramMenuFolder'>
+            <Component Id='StartMenuShortcut' Guid='31E662F2-5001-4E02-9C2D-F2F1E5F34B23'>
+                <Shortcut
+                    Id='StartMenuShortcut'
+                    Name='nxgterm'
+                    Description='Terminal emulator'
+                    Target='[APPLICATIONFOLDER]nxgterm.exe'
+                    WorkingDirectory='APPLICATIONFOLDER'
+                    Icon='nxgterm.ico'/>
+                <RegistryValue
+                    Root='HKCU'
+                    Key='Software\NexuraGrid\nxgterm'
+                    Name='StartMenuShortcut'
+                    Type='integer'
+                    Value='1'
+                    KeyPath='yes'/>
+            </Component>
+        </DirectoryRef>
+
+        <DirectoryRef Id='ProfileFolder'>
+            <Component Id='ProfilePs1' Guid='*' Win64='$(var.Win64)'>
+                <File Id='ProfilePs1File' Name='install.ps1' DiskId='1' Source='$(var.RepoDir)\profile\install.ps1' KeyPath='yes'/>
+            </Component>
+            <Component Id='ProfileSh' Guid='*' Win64='$(var.Win64)'>
+                <File Id='ProfileShFile' Name='install.sh' DiskId='1' Source='$(var.RepoDir)\profile\install.sh' KeyPath='yes'/>
+            </Component>
+        </DirectoryRef>
+
+        <Feature
+            Id='Binaries'
+            Title='nxgterm'
+            Description='The nxgterm terminal, its Start Menu shortcut, licenses and the tools profile scripts.'
+            Level='1'
+            ConfigurableDirectory='APPLICATIONFOLDER'
+            AllowAdvertise='no'
+            Display='expand'
+            Absent='disallow'>
+            <ComponentRef Id='binary0'/>
+            <ComponentRef Id='StartMenuShortcut'/>
+            <ComponentRef Id='LicenseMit'/>
+            <ComponentRef Id='LicenseApache'/>
+            <ComponentRef Id='Readme'/>
+            <ComponentRef Id='ProfilePs1'/>
+            <ComponentRef Id='ProfileSh'/>
+
+            <Feature
+                Id='Environment'
+                Title='PATH Environment Variable'
+                Description='Add the install location of nxgterm.exe to the system PATH.'
+                Level='1'
+                Absent='allow'>
+                <ComponentRef Id='Path'/>
+            </Feature>
+        </Feature>
+
+        <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
+
+        <Icon Id='nxgterm.ico' SourceFile='$(var.RepoDir)\assets\nxgterm.ico'/>
+        <Property Id='ARPPRODUCTICON' Value='nxgterm.ico'/>
+        <Property Id='ARPHELPLINK' Value='https://github.com/NexuraGrid/nxgterm'/>
+        <Property Id='ARPURLINFOABOUT' Value='https://github.com/NexuraGrid/nxgterm'/>
+
+        <UI>
+            <UIRef Id='WixUI_FeatureTree'/>
+        </UI>
+        <WixVariable Id='WixUILicenseRtf' Value='$(var.RepoDir)\crates\nxgterm\wix\License.rtf'/>
+    </Product>
+</Wix>

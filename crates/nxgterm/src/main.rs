@@ -1,5 +1,9 @@
 //! nxgterm: window, shell in a pty, GPU-rendered text with a CPU fallback.
 
+// Release builds on Windows are GUI programs so launching them does not open
+// a console window; see `attach_parent_console` for CLI output.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
 mod appearance;
 mod bindings;
@@ -21,6 +25,7 @@ use crate::app::{App, UserEvent};
 use crate::cli::Command;
 
 fn main() -> ExitCode {
+    attach_parent_console();
     let command = match cli::parse(env::args_os().skip(1)) {
         Ok(command) => command,
         Err(error) => {
@@ -85,3 +90,19 @@ fn start_watcher(
         .map_err(|error| eprintln!("nxgterm: config live reload disabled: {error}"))
         .ok()
 }
+
+/// Reconnects stdout/stderr to the launching console (e.g. `nxgterm --version`
+/// from PowerShell), since GUI-subsystem programs start without one. No-op
+/// when started from Explorer or with redirected output.
+#[cfg(windows)]
+fn attach_parent_console() {
+    use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+    // SAFETY: plain Win32 call without pointers; failure just means there is
+    // no parent console to attach to.
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_parent_console() {}

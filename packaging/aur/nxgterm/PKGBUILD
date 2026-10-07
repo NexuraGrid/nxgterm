@@ -1,0 +1,63 @@
+# Maintainer: NexuraGrid <https://github.com/NexuraGrid>
+# Builds from the release source tarball. Update pkgver and the checksum with
+# packaging/update-manifests.sh, then regenerate .SRCINFO.
+
+pkgname=nxgterm
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Fast, configurable, cross-platform terminal emulator"
+arch=('x86_64' 'aarch64')
+url="https://github.com/NexuraGrid/nxgterm"
+license=('MIT OR Apache-2.0')
+# X11, Wayland and the GPU drivers are loaded at runtime (dlopen).
+depends=('gcc-libs' 'glibc' 'hicolor-icon-theme' 'libxkbcommon')
+makedepends=('cargo')
+optdepends=(
+  'wayland: Wayland support'
+  'libx11: X11 support'
+  'libxcursor: X11 cursor themes'
+  'libxi: X11 input'
+  'libxrandr: X11 scaling'
+  'libxkbcommon-x11: X11 keyboard layouts'
+  'vulkan-icd-loader: GPU renderer (Vulkan)'
+  'libglvnd: GPU renderer (OpenGL ES)'
+)
+source=("$url/releases/download/v$pkgver/nxgterm-$pkgver-source.tar.gz")
+sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p nxgterm
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen --workspace
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/nxgterm "$pkgdir/usr/bin/nxgterm"
+  install -Dm644 assets/linux/nxgterm.desktop "$pkgdir/usr/share/applications/nxgterm.desktop"
+  install -Dm644 assets/linux/io.github.nexuragrid.nxgterm.metainfo.xml \
+    "$pkgdir/usr/share/metainfo/io.github.nexuragrid.nxgterm.metainfo.xml"
+  install -Dm644 assets/nxgterm.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/nxgterm.svg"
+  local size
+  for size in 16 24 32 48 64 128 256 512; do
+    install -Dm644 "assets/icons/nxgterm-$size.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/nxgterm.png"
+  done
+  install -Dm644 README.md "$pkgdir/usr/share/doc/nxgterm/README.md"
+  install -Dm644 LICENSE-MIT LICENSE-APACHE -t "$pkgdir/usr/share/licenses/$pkgname/"
+  install -Dm755 profile/install.sh "$pkgdir/usr/share/nxgterm/profile/install.sh"
+  install -Dm644 profile/install.ps1 "$pkgdir/usr/share/nxgterm/profile/install.ps1"
+}

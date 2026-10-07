@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+
+PackageIdentifier: NexuraGrid.nxgterm
+PackageVersion: 0.1.0
+PackageLocale: en-US
+Publisher: NexuraGrid
+PublisherUrl: https://github.com/NexuraGrid
+PublisherSupportUrl: https://github.com/NexuraGrid/nxgterm/issues
+PackageName: nxgterm
+PackageUrl: https://github.com/NexuraGrid/nxgterm
+License: MIT OR Apache-2.0
+LicenseUrl: https://github.com/NexuraGrid/nxgterm/blob/main/LICENSE-MIT
+ShortDescription: Fast, configurable, cross-platform terminal emulator.
+Description: |-
+  nxgterm is a terminal emulator written in Rust. It renders on the GPU and falls back to the CPU
+  automatically, reads a TOML configuration with live reload and themes, and shows inline images
+  through the Kitty graphics protocol and Sixel. On Windows it uses ConPTY and falls back to winpty
+  on Windows Server 2016.
+Moniker: nxgterm
+Tags:
+- terminal
+- terminal-emulator
+- console
+- gpu
+- rust
+ReleaseNotesUrl: https://github.com/NexuraGrid/nxgterm/releases/tag/v0.1.0
+ManifestType: defaultLocale
+ManifestVersion: 1.10.0

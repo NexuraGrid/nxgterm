@@ -1,0 +1,265 @@
+name: Release
+
+# Tags `v*` build every package and publish a GitHub Release. A manual run
+# (workflow_dispatch) builds the same assets and only uploads them as a
+# workflow artifact named `release-assets`.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  meta:
+    name: Version and source
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the version
+        id: version
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          test -n "$version"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the Cargo version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Source tarball
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir dist
+          git archive --format=tar.gz --prefix="nxgterm-$VERSION/" \
+            -o "dist/nxgterm-$VERSION-source.tar.gz" HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-source
+          path: dist/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: meta
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 keeps the glibc requirement low (2.35).
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: ubuntu-22.04-arm
+            arch: aarch64
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      # winit, softbuffer and wgpu load X11, Wayland, xkbcommon and the GPU
+      # drivers with dlopen at runtime, so no -dev packages are needed here.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb,cargo-generate-rpm
+      - name: Build
+        run: cargo build --release --locked -p nxgterm
+      - name: Tarball
+        run: |
+          name="nxgterm-$VERSION-${{ matrix.arch }}-linux"
+          mkdir -p "stage/$name/profile" "stage/$name/share" dist
+          cp target/release/nxgterm LICENSE-MIT LICENSE-APACHE README.md "stage/$name/"
+          cp profile/install.sh profile/install.ps1 "stage/$name/profile/"
+          cp assets/linux/nxgterm.desktop assets/linux/io.github.nexuragrid.nxgterm.metainfo.xml \
+            assets/nxgterm.svg "stage/$name/share/"
+          tar -C stage -czf "dist/$name.tar.gz" "$name"
+      - name: Debian package
+        run: cargo deb -p nxgterm --no-build --output dist/
+      - name: RPM package
+        run: cargo generate-rpm -p crates/nxgterm --output dist/
+      - name: Inspect packages
+        run: |
+          dpkg-deb --info dist/*.deb
+          dpkg-deb --contents dist/*.deb
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows x86_64
+    needs: meta
+    # windows-2022 ships WiX Toolset 3.14, which cargo-wix drives.
+    runs-on: windows-2022
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      # Fail instead of shipping an exe without its icon.
+      NXGTERM_REQUIRE_ICON: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-wix
+      - name: Build
+        run: cargo build --release --locked -p nxgterm
+      - name: Portable zip
+        shell: pwsh
+        run: |
+          $name = "nxgterm-$env:VERSION-x86_64-windows"
+          New-Item -ItemType Directory -Force -Path "stage\$name\profile", dist | Out-Null
+          Copy-Item target\release\nxgterm.exe, LICENSE-MIT, LICENSE-APACHE, README.md "stage\$name\"
+          Copy-Item profile\install.ps1, profile\install.sh "stage\$name\profile\"
+          Compress-Archive -Path "stage\$name" -DestinationPath "dist\$name.zip"
+      - name: Ensure WiX Toolset 3
+        shell: pwsh
+        run: |
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            if (-not $env:WIX) {
+              choco install wixtoolset --version 3.14.1 --no-progress -y
+              $env:WIX = [Environment]::GetEnvironmentVariable('WIX', 'Machine')
+            }
+            Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $env:WIX 'bin')
+          }
+      - name: MSI
+        shell: pwsh
+        run: cargo wix --package nxgterm --no-build --nocapture --output "dist\nxgterm-$env:VERSION-x86_64.msi"
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          .\target\release\nxgterm.exe --version
+          Get-ChildItem dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows-x86_64
+          path: dist/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal
+    needs: meta
+    runs-on: macos-14
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+      # Optional signing and notarization: set these repository secrets to
+      # enable them. Without them the app is only ad-hoc signed.
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+      MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+      MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - name: Build both architectures
+        run: |
+          cargo build --release --locked -p nxgterm --target aarch64-apple-darwin
+          cargo build --release --locked -p nxgterm --target x86_64-apple-darwin
+      - name: Universal binary and app bundle
+        run: |
+          app=stage/nxgterm.app
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/profile" dist
+          lipo -create -output "$app/Contents/MacOS/nxgterm" \
+            target/aarch64-apple-darwin/release/nxgterm \
+            target/x86_64-apple-darwin/release/nxgterm
+          lipo -info "$app/Contents/MacOS/nxgterm"
+          sed "s/@VERSION@/$VERSION/g" assets/macos/Info.plist > "$app/Contents/Info.plist"
+          plutil -lint "$app/Contents/Info.plist"
+          cp assets/nxgterm.icns "$app/Contents/Resources/"
+          cp LICENSE-MIT LICENSE-APACHE README.md "$app/Contents/Resources/"
+          cp profile/install.sh profile/install.ps1 "$app/Contents/Resources/profile/"
+          "$app/Contents/MacOS/nxgterm" --version
+      - name: Sign (optional, Developer ID)
+        if: env.MACOS_CERTIFICATE != ''
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password=$(openssl rand -hex 16)
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          codesign --force --options runtime --timestamp \
+            --sign "$MACOS_SIGNING_IDENTITY" stage/nxgterm.app
+      - name: Sign (ad-hoc)
+        if: env.MACOS_CERTIFICATE == ''
+        run: codesign --force --sign - stage/nxgterm.app
+      - name: Verify signature
+        run: codesign --verify --verbose=2 stage/nxgterm.app
+      - name: Disk image and tarball
+        run: |
+          name="nxgterm-$VERSION-universal-macos"
+          mkdir -p dmg
+          cp -R stage/nxgterm.app dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "nxgterm $VERSION" -srcfolder dmg -ov -format UDZO "dist/$name.dmg"
+          tar -C stage -czf "dist/$name.tar.gz" nxgterm.app
+      - name: Notarize (optional)
+        if: env.MACOS_CERTIFICATE != '' && env.MACOS_NOTARY_APPLE_ID != ''
+        run: |
+          dmg="dist/nxgterm-$VERSION-universal-macos.dmg"
+          xcrun notarytool submit "$dmg" --wait \
+            --apple-id "$MACOS_NOTARY_APPLE_ID" \
+            --team-id "$MACOS_NOTARY_TEAM_ID" \
+            --password "$MACOS_NOTARY_PASSWORD"
+          xcrun stapler staple "$dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos-universal
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Checksums and release
+    needs: [meta, linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+      - name: GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: nxgterm ${{ needs.meta.outputs.version }}
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

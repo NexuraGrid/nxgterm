@@ -6,6 +6,91 @@ Fast, configurable, cross-platform terminal emulator written in Rust.
 
 Linux (Arch, Debian, Ubuntu, Fedora), macOS, and Windows 10 / Windows Server 2016 or newer.
 
+## Install
+
+Packages are attached to each [GitHub Release](https://github.com/NexuraGrid/nxgterm/releases)
+together with a `SHA256SUMS` file. Replace `<v>` with the version.
+
+| OS | Install |
+|---|---|
+| Arch Linux (AUR) | `yay -S nxgterm-bin` (release binary) or `yay -S nxgterm` (build from source) |
+| Debian 12+, Ubuntu 22.04+ | `sudo apt install ./nxgterm_<v>-1_amd64.deb` (or `_arm64.deb`) |
+| Fedora | `sudo dnf install ./nxgterm-<v>-1.x86_64.rpm` (or `.aarch64.rpm`) |
+| Other Linux | extract `nxgterm-<v>-x86_64-linux.tar.gz` and put `nxgterm` on your `PATH` |
+| Windows (winget) | `winget install NexuraGrid.nxgterm` |
+| Windows (MSI) | run `nxgterm-<v>-x86_64.msi`: Program Files, Start Menu shortcut, optional `PATH` entry |
+| Windows (portable) | extract `nxgterm-<v>-x86_64-windows.zip` anywhere |
+| macOS (Homebrew) | `brew install --cask nexuragrid/tap/nxgterm` |
+| macOS (manual) | open `nxgterm-<v>-universal-macos.dmg` and drag `nxgterm.app` to Applications |
+
+The macOS app is universal (Apple silicon and Intel) but not notarized yet.
+If macOS says it cannot be opened, run
+`xattr -dr com.apple.quarantine /Applications/nxgterm.app` once.
+
+From source (Rust 1.85 or newer):
+
+```sh
+cargo install --locked --git https://github.com/NexuraGrid/nxgterm nxgterm
+```
+
+Building needs no system libraries: X11, Wayland, xkbcommon and the GPU
+drivers are loaded at runtime. Maintainers: see [`packaging/`](packaging/README.md).
+
+## Tools profile
+
+nxgterm does not bundle any tools. An optional, separate installer sets up a
+terminal workflow: [Yazi](https://github.com/sxyazi/yazi) (file manager),
+[zoxide](https://github.com/ajeetdsouza/zoxide) (smarter `cd`),
+[ngmux](https://github.com/NexuraGrid/ng_mux) (terminal multiplexer),
+[Bruno CLI](https://www.usebruno.com/) (`bru`, API client) and curl.
+
+```sh
+# Linux, macOS
+curl -fsSL https://raw.githubusercontent.com/NexuraGrid/nxgterm/main/profile/install.sh | sh -s -- --yes
+```
+
+```powershell
+# Windows PowerShell 5.1 or PowerShell 7
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NexuraGrid/nxgterm/main/profile/install.ps1))) -Yes
+```
+
+Without `--yes` / `-Yes` it asks before using sudo, installing Node.js or
+running the ngmux installer (plain `irm ... | iex` works too, interactively).
+The scripts also ship with every package: `/usr/share/nxgterm/profile/`,
+`profile\` next to `nxgterm.exe`, and `nxgterm.app/Contents/Resources/profile/`.
+
+| Option (`install.sh` / `install.ps1`) | Effect |
+|---|---|
+| `--dry-run` / `-DryRun` | Print what would be done; change nothing |
+| `--yes` / `-Yes` | Do not ask |
+| `--only yazi,zoxide` / `-Only yazi,zoxide` | Only these tools (`curl`, `zoxide`, `yazi`, `ngmux`, `bruno`) |
+| `--skip bruno` / `-Skip bruno` | Skip these tools |
+| `--no-shell-init` / `-NoShellInit` | Leave shell startup files alone |
+| `--uninstall-shell-init` / `-UninstallShellInit` | Remove the shell integration and exit |
+
+How each tool is installed:
+
+| Tool | Arch | Debian, Ubuntu | Fedora | macOS | Windows |
+|---|---|---|---|---|---|
+| Yazi | `pacman` | release binary | release binary | `brew` | winget `sxyazi.yazi` / scoop `yazi` |
+| zoxide | `pacman` | `apt` | `dnf` | `brew` | winget `ajeetdsouza.zoxide` / scoop `zoxide` |
+| ngmux | official `install.sh` | official `install.sh` | official `install.sh` | official `install.sh` | official `install.ps1` |
+| Bruno CLI | `npm` (`@usebruno/cli`) | `npm` | `npm` | `npm` | `npm` |
+| Node.js LTS (for `bru`) | `nodejs-lts`, `npm` | `nodejs`, `npm` | `nodejs`, `nodejs-npm` | `node` | winget `OpenJS.NodeJS.LTS` / scoop `nodejs-lts` |
+| curl | `pacman` | `apt` | `dnf` | preinstalled | built in (`curl.exe`); winget `cURL.cURL` / scoop `curl` |
+
+Release binaries (Yazi on Debian/Ubuntu/Fedora; zoxide and Yazi wherever no
+package manager is available, such as Windows Server 2016) come from the
+projects' latest GitHub release, are checked against the SHA-256 digest GitHub
+publishes for the asset, and go to `~/.local/bin`
+(`%LOCALAPPDATA%\Programs\nxgterm-profile\bin` on Windows). Re-running is
+safe: installed tools are detected and skipped.
+
+The shell integration adds `zoxide init`, Yazi's `y` wrapper (changes
+directory when Yazi exits) and, on Linux and macOS, `~/.local/bin` on `PATH` to `~/.bashrc`, `~/.zshrc`,
+`~/.config/fish/conf.d/nxgterm-profile.fish` and the PowerShell profiles,
+between `# >>> nxgterm profile >>>` and `# <<< nxgterm profile <<<` markers.
+
 ## Architecture
 
 Hexagonal: a platform-agnostic core defines ports, and adapters implement them per platform.
@@ -139,7 +224,7 @@ window (`TIOCGWINSZ`, `CSI 14/16/18 t`). Decoded images are capped at
 5. Images: Kitty graphics protocol and Sixel ✅
 6. winpty fallback for Windows Server 2016 ✅
 7. Packages (AUR, deb, rpm, winget, Homebrew) and the tools profile
-   (Yazi, zoxide, ngmux, Bruno CLI, curl)
+   (Yazi, zoxide, ngmux, Bruno CLI, curl) ✅
 
 ## Development
 

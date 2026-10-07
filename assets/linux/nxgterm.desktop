@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=nxgterm
+GenericName=Terminal
+Comment=Fast, configurable, cross-platform terminal emulator
+Exec=nxgterm
+Icon=nxgterm
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;console;command;prompt;
+StartupNotify=true
+StartupWMClass=nxgterm

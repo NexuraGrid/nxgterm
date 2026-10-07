@@ -1,0 +1,25 @@
+pkgbase = nxgterm
+	pkgdesc = Fast, configurable, cross-platform terminal emulator
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/NexuraGrid/nxgterm
+	arch = x86_64
+	arch = aarch64
+	license = MIT OR Apache-2.0
+	makedepends = cargo
+	depends = gcc-libs
+	depends = glibc
+	depends = hicolor-icon-theme
+	depends = libxkbcommon
+	optdepends = wayland: Wayland support
+	optdepends = libx11: X11 support
+	optdepends = libxcursor: X11 cursor themes
+	optdepends = libxi: X11 input
+	optdepends = libxrandr: X11 scaling
+	optdepends = libxkbcommon-x11: X11 keyboard layouts
+	optdepends = vulkan-icd-loader: GPU renderer (Vulkan)
+	optdepends = libglvnd: GPU renderer (OpenGL ES)
+	source = https://github.com/NexuraGrid/nxgterm/releases/download/v0.1.0/nxgterm-0.1.0-source.tar.gz
+	sha256sums = 0000000000000000000000000000000000000000000000000000000000000000
+
+pkgname = nxgterm

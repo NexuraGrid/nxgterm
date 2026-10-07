@@ -1,0 +1,8 @@
+# Shell scripts and packaging files must keep LF endings even when checked
+# out on Windows (the release zip and MSI ship profile/install.sh).
+*.sh       text eol=lf
+PKGBUILD   text eol=lf
+.SRCINFO   text eol=lf
+*.spec     text eol=lf
+*.rb       text eol=lf
+*.desktop  text eol=lf

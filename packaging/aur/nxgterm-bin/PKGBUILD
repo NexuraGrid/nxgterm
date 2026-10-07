@@ -1,0 +1,42 @@
+# Maintainer: NexuraGrid <https://github.com/NexuraGrid>
+# Prebuilt release binaries. Update pkgver and the checksums with
+# packaging/update-manifests.sh, then regenerate .SRCINFO.
+
+pkgname=nxgterm-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Fast, configurable, cross-platform terminal emulator (prebuilt binary)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/NexuraGrid/nxgterm"
+license=('MIT OR Apache-2.0')
+# X11, Wayland and the GPU drivers are loaded at runtime (dlopen).
+depends=('gcc-libs' 'glibc' 'hicolor-icon-theme' 'libxkbcommon')
+optdepends=(
+  'wayland: Wayland support'
+  'libx11: X11 support'
+  'libxcursor: X11 cursor themes'
+  'libxi: X11 input'
+  'libxrandr: X11 scaling'
+  'libxkbcommon-x11: X11 keyboard layouts'
+  'vulkan-icd-loader: GPU renderer (Vulkan)'
+  'libglvnd: GPU renderer (OpenGL ES)'
+)
+provides=('nxgterm')
+conflicts=('nxgterm')
+source_x86_64=("$url/releases/download/v$pkgver/nxgterm-$pkgver-x86_64-linux.tar.gz")
+source_aarch64=("$url/releases/download/v$pkgver/nxgterm-$pkgver-aarch64-linux.tar.gz")
+sha256sums_x86_64=('0000000000000000000000000000000000000000000000000000000000000000')
+sha256sums_aarch64=('0000000000000000000000000000000000000000000000000000000000000000')
+
+package() {
+  cd "nxgterm-$pkgver-$CARCH-linux"
+  install -Dm755 nxgterm "$pkgdir/usr/bin/nxgterm"
+  install -Dm644 share/nxgterm.desktop "$pkgdir/usr/share/applications/nxgterm.desktop"
+  install -Dm644 share/io.github.nexuragrid.nxgterm.metainfo.xml \
+    "$pkgdir/usr/share/metainfo/io.github.nexuragrid.nxgterm.metainfo.xml"
+  install -Dm644 share/nxgterm.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/nxgterm.svg"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/nxgterm/README.md"
+  install -Dm644 LICENSE-MIT LICENSE-APACHE -t "$pkgdir/usr/share/licenses/$pkgname/"
+  install -Dm755 profile/install.sh "$pkgdir/usr/share/nxgterm/profile/install.sh"
+  install -Dm644 profile/install.ps1 "$pkgdir/usr/share/nxgterm/profile/install.ps1"
+}
