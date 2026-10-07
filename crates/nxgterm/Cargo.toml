@@ -12,6 +12,7 @@ keywords = ["terminal", "terminal-emulator", "gpu"]
 categories = ["command-line-utilities"]
 
 [dependencies]
+arboard.workspace = true
 nxg-core.workspace = true
 nxg-pty.workspace = true
 nxg-render.workspace = true

@@ -14,6 +14,7 @@ use serde::de::{self, Deserialize, Deserializer, MapAccess, Visitor};
 pub enum Category {
     Font,
     Scrollback,
+    Clipboard,
     Tabs,
     General,
 }
@@ -23,6 +24,7 @@ impl Category {
         match self {
             Self::Font => "Font",
             Self::Scrollback => "Scrollback",
+            Self::Clipboard => "Clipboard",
             Self::Tabs => "Tabs",
             Self::General => "General",
         }
@@ -40,6 +42,9 @@ pub enum Action {
     ScrollPageDown,
     ScrollToTop,
     ScrollToBottom,
+    Copy,
+    Paste,
+    SelectAll,
     NewTab,
     CloseTab,
     NextTab,
@@ -51,7 +56,7 @@ pub enum Action {
 }
 
 /// Name, title and category of every action, in listing order.
-const ACTIONS: [(Action, &str, &str, Category); 22] = [
+const ACTIONS: [(Action, &str, &str, Category); 25] = [
     (Action::ZoomIn, "zoom_in", "Zoom In", Category::Font),
     (Action::ZoomOut, "zoom_out", "Zoom Out", Category::Font),
     (
@@ -83,6 +88,14 @@ const ACTIONS: [(Action, &str, &str, Category); 22] = [
         "scroll_to_bottom",
         "Scroll to Bottom",
         Category::Scrollback,
+    ),
+    (Action::Copy, "copy", "Copy", Category::Clipboard),
+    (Action::Paste, "paste", "Paste", Category::Clipboard),
+    (
+        Action::SelectAll,
+        "select_all",
+        "Select All",
+        Category::Clipboard,
     ),
     (Action::NewTab, "new_tab", "New Tab", Category::Tabs),
     (Action::CloseTab, "close_tab", "Close Tab", Category::Tabs),
@@ -465,8 +478,9 @@ impl<'de> Visitor<'de> for EntriesVisitor {
 }
 
 /// The built-in bindings as config text; `PRIMARY` is Ctrl, or Cmd on
-/// macOS.
-const DEFAULTS: [(&str, Action); 22] = [
+/// macOS, and `CLIPBOARD` is Ctrl+Shift, or Cmd on macOS (Ctrl+C and
+/// Ctrl+V belong to the shell elsewhere).
+const DEFAULTS: [(&str, Action); 25] = [
     ("PRIMARY+equal", Action::ZoomIn),
     ("PRIMARY+plus", Action::ZoomIn),
     ("PRIMARY+minus", Action::ZoomOut),
@@ -489,6 +503,9 @@ const DEFAULTS: [(&str, Action); 22] = [
     ("alt+8", Action::GotoTab(8)),
     ("alt+9", Action::GotoTab(9)),
     ("ctrl+shift+p", Action::CommandPalette),
+    ("CLIPBOARD+c", Action::Copy),
+    ("CLIPBOARD+v", Action::Paste),
+    ("shift+insert", Action::Paste),
 ];
 
 /// The effective bindings: the configured ones, then the defaults they
@@ -503,10 +520,13 @@ impl Bindings {
     /// The built-in bindings; `macos` uses Cmd instead of Ctrl for zoom.
     pub fn defaults(macos: bool) -> Self {
         let primary = if macos { "cmd" } else { "ctrl" };
+        let clipboard = if macos { "cmd" } else { "ctrl+shift" };
         let entries = DEFAULTS
             .iter()
             .map(|&(text, action)| {
-                let text = text.replace("PRIMARY", primary);
+                let text = text
+                    .replace("PRIMARY", primary)
+                    .replace("CLIPBOARD", clipboard);
                 let chord = text.parse().expect("default chords are valid");
                 (chord, action)
             })
@@ -612,7 +632,11 @@ mod tests {
         assert_eq!(Action::from_name("New_Tab"), Some(Action::NewTab));
         assert_eq!(Action::from_name("goto_tab_0"), None);
         assert_eq!(Action::from_name("goto_tab_10"), None);
-        assert_eq!(Action::from_name("copy"), None);
+        assert_eq!(Action::from_name("copy"), Some(Action::Copy));
+        assert_eq!(Action::Paste.name(), "paste");
+        assert_eq!(Action::SelectAll.name(), "select_all");
+        assert_eq!(Action::Copy.category(), Category::Clipboard);
+        assert_eq!(Action::from_name("cut"), None);
     }
 
     #[test]
@@ -732,6 +756,11 @@ mod tests {
             assert_eq!(on(&format!("alt+{n}")), Some(Action::GotoTab(n)));
         }
         assert_eq!(on("ctrl+shift+p"), Some(Action::CommandPalette));
+        assert_eq!(on("ctrl+shift+c"), Some(Action::Copy));
+        assert_eq!(on("ctrl+shift+v"), Some(Action::Paste));
+        assert_eq!(on("shift+insert"), Some(Action::Paste));
+        assert_eq!(on("ctrl+c"), None, "ctrl+c stays an interrupt");
+        assert_eq!(on("ctrl+v"), None);
         assert_eq!(on("ctrl+t"), None);
         assert_eq!(on("ctrl+alt+equal"), None);
     }
@@ -745,6 +774,10 @@ mod tests {
         assert_eq!(b.action(&chord("cmd+0")), Some(Action::ResetZoom));
         assert_eq!(b.action(&chord("ctrl+equal")), None);
         assert_eq!(b.action(&chord("ctrl+shift+t")), Some(Action::NewTab));
+        assert_eq!(b.action(&chord("cmd+c")), Some(Action::Copy));
+        assert_eq!(b.action(&chord("cmd+v")), Some(Action::Paste));
+        assert_eq!(b.action(&chord("shift+insert")), Some(Action::Paste));
+        assert_eq!(b.action(&chord("ctrl+shift+c")), None);
     }
 
     #[test]
@@ -765,8 +798,8 @@ mod tests {
         let error = config("\"ctrl+foo\" = \"new_tab\"").unwrap_err();
         assert!(error.contains("invalid key binding `ctrl+foo`"), "{error}");
         assert!(error.contains("unknown key `foo`"), "{error}");
-        let error = config("\"ctrl+t\" = \"copy\"").unwrap_err();
-        assert!(error.contains("unknown action `copy`"), "{error}");
+        let error = config("\"ctrl+t\" = \"cut\"").unwrap_err();
+        assert!(error.contains("unknown action `cut`"), "{error}");
         assert!(error.contains("zoom_in"), "lists the actions: {error}");
         let error = config("\"ctrl+t\" = \"new_tab\"\n\"T+Ctrl\" = \"close_tab\"").unwrap_err();
         assert!(error.contains("`ctrl+t` is bound twice"), "{error}");

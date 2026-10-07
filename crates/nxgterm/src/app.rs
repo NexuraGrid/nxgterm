@@ -11,7 +11,7 @@ use std::thread;
 use nxg_config::{Backend, Bindings, Config, FontConfig, TabBar};
 use nxg_core::fallback::{self, Init};
 use nxg_core::mouse::{MouseAction, MouseButton, MouseEvent};
-use nxg_core::ports::{ChildProcess, PtyControl, RenderError, Renderer};
+use nxg_core::ports::{ChildProcess, Clipboard, ClipboardKind, PtyControl, RenderError, Renderer};
 use nxg_core::{CellPixels, TermSize, Terminal, WinSize};
 use nxg_pty::ShellCommand;
 use nxg_render::{
@@ -26,10 +26,11 @@ use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
 use crate::bindings::Action;
+use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
 use crate::mouse::{ViewportScroll, Wheel, WheelAction};
 use crate::tabs::{TabId, Tabs};
-use crate::{appearance, bindings, choice, keys, mouse, reload, tab_bar};
+use crate::{appearance, bindings, choice, clipboard, keys, mouse, reload, tab_bar};
 
 /// Events posted to the event loop from background threads.
 #[derive(Debug)]
@@ -94,6 +95,9 @@ pub struct App {
     /// [`Bindings::shortcuts`] lists every action with its shortcut.
     bindings: Bindings,
     modifiers: ModifiersState,
+    /// The system clipboard, kept for the whole run (X11 and Wayland
+    /// serve copied text from it).
+    clipboard: Box<dyn Clipboard>,
     error: Option<Box<dyn Error>>,
 }
 
@@ -115,6 +119,7 @@ impl App {
             session: None,
             bindings,
             modifiers: ModifiersState::empty(),
+            clipboard: clipboard::system(),
             error: None,
         }
     }
@@ -324,6 +329,18 @@ impl App {
                 self.toggle_palette();
                 return true;
             }
+            Action::Copy => {
+                self.copy();
+                return true;
+            }
+            Action::Paste => {
+                self.paste(ClipboardKind::Clipboard);
+                return true;
+            }
+            Action::SelectAll => {
+                self.select_all();
+                return true;
+            }
             _ => {}
         }
         let config = &self.config;
@@ -369,7 +386,10 @@ impl App {
             | Action::ScrollToTop
             | Action::ScrollToBottom => false,
             // Handled above.
-            Action::CommandPalette
+            Action::Copy
+            | Action::Paste
+            | Action::SelectAll
+            | Action::CommandPalette
             | Action::ZoomIn
             | Action::ZoomOut
             | Action::ResetZoom
@@ -380,6 +400,52 @@ impl App {
             | Action::PreviousTab
             | Action::GotoTab(_) => true,
         }
+    }
+
+    /// The selected text of the active tab.
+    fn selected_text(&self) -> Option<String> {
+        self.session
+            .as_ref()?
+            .tabs
+            .active()?
+            .terminal
+            .selection_text()
+    }
+
+    /// Copies the selection to the clipboard; nothing without one.
+    fn copy(&mut self) {
+        if let Some(text) = self.selected_text() {
+            if let Err(error) = self.clipboard.set_text(ClipboardKind::Clipboard, text) {
+                eprintln!("nxgterm: {error}");
+            }
+        }
+    }
+
+    /// Pastes the text of the clipboard `kind` into the active tab.
+    fn paste(&mut self, kind: ClipboardKind) {
+        let text = match self.clipboard.get_text(kind) {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("nxgterm: {error}");
+                return;
+            }
+        };
+        if let Some(session) = &mut self.session {
+            session.paste(&text);
+        }
+    }
+
+    /// Selects everything in the active tab, history included.
+    fn select_all(&mut self) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        let Some(tab) = session.tabs.active_mut() else {
+            return;
+        };
+        tab.terminal.select_all();
+        session.window.request_redraw();
+        copy_on_select(self.clipboard.as_mut(), &self.config, &tab.terminal);
     }
 
     /// Reloads the config file, applying what can change live. An invalid
@@ -663,6 +729,22 @@ impl Session {
         }
     }
 
+    /// Sends pasted `text` to the active tab, bracketed when the
+    /// application asked for it, and shows the live screen.
+    fn paste(&mut self, text: &str) {
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        let bytes = nxg_core::paste::encode(text, tab.terminal.modes().bracketed_paste);
+        self.scroll_viewport(ViewportScroll::Bottom);
+        // Written on the UI thread: the reader thread keeps draining the
+        // child's output meanwhile, so a large paste cannot deadlock.
+        self.send(&bytes);
+    }
+
     /// After the active tab or the number of tabs changed: forgets the
     /// held button (and the pointer on a bar that went away), refits the
     /// grid and redraws.
@@ -913,6 +995,19 @@ fn spawn_tab(
             cfg!(windows),
         ),
     })
+}
+
+/// Copies the selection of `terminal` to the PRIMARY selection when the
+/// config asks for it and the system has one; failures only warn.
+fn copy_on_select(clipboard: &mut dyn Clipboard, config: &Config, terminal: &Terminal) {
+    if !(HAS_PRIMARY && config.selection.copy_on_select) {
+        return;
+    }
+    if let Some(text) = terminal.selection_text() {
+        if let Err(error) = clipboard.set_text(ClipboardKind::Primary, text) {
+            eprintln!("nxgterm: {error}");
+        }
+    }
 }
 
 /// The renderer's cells inset by `padding` pixels. Takes the subtrait\n/// object directly: upcasting to `&dyn Renderer` needs Rust 1.86.
