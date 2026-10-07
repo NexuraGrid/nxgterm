@@ -1232,6 +1232,7 @@ version = "0.1.0"
 dependencies = [
  "nxg-core",
  "portable-pty",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

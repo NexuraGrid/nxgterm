@@ -116,7 +116,13 @@ impl App {
             cells: size,
             cell: Some(cell),
         };
-        let pty = nxg_pty::spawn_shell_with(win_size, shell.as_ref())?;
+        let backends = nxg_pty::backends_from_env(env::var(nxg_pty::ENV_VAR).ok().as_deref());
+        let pty = nxg_pty::spawn_shell_with(win_size, shell.as_ref(), backends)?;
+        for attempt in &pty.skipped {
+            eprintln!("nxgterm: skipped {}: {}", attempt.name, attempt.error);
+        }
+        eprintln!("nxgterm: pty {}", pty.name);
+        let pty = pty.backend;
         spawn_reader(pty.reader, self.proxy.clone());
         spawn_waiter(pty.child, self.proxy.clone());
 

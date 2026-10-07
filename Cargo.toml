@@ -39,6 +39,8 @@ wgpu = { version = "26", default-features = false, features = [
     "gles",
     "wgsl",
 ] }
+# Raw Win32 bindings for the winpty adapter (ConPTY probe, winpty.dll).
+windows-sys = "0.61"
 winit = "0.30"
 
 [workspace.lints.rust]

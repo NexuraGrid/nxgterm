@@ -26,6 +26,24 @@ renderer is lighter, and is replaced by the CPU renderer at runtime if the
 device is lost. Set `NXGTERM_RENDERER=gpu` or `cpu` to force one; the
 choice and any skipped renderer are printed to stderr.
 
+### PTY backends
+
+| Backend | Platforms |
+|---|---|
+| `native` | Unix pty; ConPTY on Windows 10 1809+ / Server 2019+ (via `portable-pty`) |
+| `winpty` | Windows without ConPTY, e.g. Windows Server 2016 (x86_64 only) |
+
+On Windows the native backend first checks that `kernel32.dll` exports
+`CreatePseudoConsole`; when it does not, nxgterm falls back to winpty. Set
+`NXGTERM_PTY=native` or `winpty` to force one (`auto` is the default). The
+chosen backend and any skipped one are printed to stderr, e.g.
+`nxgterm: skipped native: ConPTY is unavailable ...` then `nxgterm: pty winpty`.
+
+winpty 0.4.3 (`winpty.dll` and `winpty-agent.exe`, x64, MIT license) is
+embedded in the Windows executable and unpacked to
+`%LOCALAPPDATA%\nxgterm\winpty\<version>-<hash>\` the first time it is used.
+Provenance, hashes and license: [`crates/nxg-pty/winpty`](crates/nxg-pty/winpty/README.md).
+
 ## Configuration
 
 nxgterm works without a config file. To customize it, create a TOML file at:
@@ -95,6 +113,7 @@ These are handled by the terminal and never reach the shell.
 |---|---|
 | `NXGTERM_CONFIG` | Config file path |
 | `NXGTERM_RENDERER` | `auto`, `gpu` or `cpu`; overrides `[renderer] backend` |
+| `NXGTERM_PTY` | `auto`, `native` or `winpty`; forces a PTY backend |
 
 ## Images
 
@@ -118,7 +137,7 @@ window (`TIOCGWINSZ`, `CSI 14/16/18 t`). Decoded images are capped at
 3. GPU renderer with automatic fallback ✅
 4. Configuration, themes, fonts ✅
 5. Images: Kitty graphics protocol and Sixel ✅
-6. winpty fallback for Windows Server 2016
+6. winpty fallback for Windows Server 2016 ✅
 7. Packages (AUR, deb, rpm, winget, Homebrew) and the tools profile
    (Yazi, zoxide, ngmux, Bruno CLI, curl)
 

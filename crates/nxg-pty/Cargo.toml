@@ -10,5 +10,12 @@ license.workspace = true
 nxg-core.workspace = true
 portable-pty.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+] }
+
 [lints]
 workspace = true
