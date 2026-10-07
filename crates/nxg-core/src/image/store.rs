@@ -21,6 +21,8 @@ pub struct ImageStore {
     ids: HashMap<u32, u64>,
     /// In creation order; later ones draw on top within a z level.
     placements: Vec<Placement>,
+    /// The main screen's placements while the alternate screen is active.
+    inactive: Vec<Placement>,
     bytes: usize,
     budget: usize,
     next_key: u64,
@@ -42,6 +44,7 @@ impl ImageStore {
             images: BTreeMap::new(),
             ids: HashMap::new(),
             placements: Vec::new(),
+            inactive: Vec::new(),
             bytes: 0,
             budget,
             next_key: 1,
@@ -152,6 +155,7 @@ impl ImageStore {
             }
         }
         self.placements.retain(|p| p.image != key);
+        self.inactive.retain(|p| p.image != key);
     }
 
     /// Adds a placement. A non-zero placement id replaces the image's
@@ -184,7 +188,9 @@ impl ImageStore {
         });
         if free {
             for key in touched {
-                if !self.placements.iter().any(|p| p.image == key) {
+                // Stashed placements still show the image on the other screen.
+                let used = |list: &[Placement]| list.iter().any(|p| p.image == key);
+                if !used(&self.placements) && !used(&self.inactive) {
                     self.remove_image(key);
                 }
             }
@@ -194,6 +200,18 @@ impl ImageStore {
     /// Removes every placement, keeping the images (screen clear).
     pub fn clear_placements(&mut self) {
         self.placements.clear();
+    }
+
+    /// Hides the placements of the screen being left (alternate screen
+    /// entry); the new screen starts with none.
+    pub fn stash_placements(&mut self) {
+        self.inactive = std::mem::take(&mut self.placements);
+    }
+
+    /// Brings the stashed placements back, dropping whatever the screen
+    /// being left placed.
+    pub fn restore_placements(&mut self) {
+        self.placements = std::mem::take(&mut self.inactive);
     }
 
     /// Moves placements up `lines` rows as the grid scrolls, dropping the
@@ -347,5 +365,71 @@ mod tests {
         store.place(at(key, 0, 0, 0));
         store.clear_placements();
         assert!(store.placements().is_empty() && store.image(key).is_some());
+    }
+
+    #[test]
+    fn stash_hides_placements_and_restore_brings_them_back() {
+        let mut store = ImageStore::default();
+        let key = store.insert(1, 0, 2, 2, pixels(2, 2)).unwrap();
+        store.place(at(key, 0, 3, 0));
+        store.stash_placements();
+        assert!(store.placements().is_empty());
+        store.place(at(key, 0, 7, 0));
+        store.restore_placements();
+        let rows: Vec<i32> = store.placements().iter().map(|p| p.row).collect();
+        assert_eq!(rows, [3], "the placement added meanwhile is dropped");
+    }
+
+    #[test]
+    fn restore_without_stash_clears_active_placements() {
+        let mut store = ImageStore::default();
+        let key = store.insert(1, 0, 2, 2, pixels(2, 2)).unwrap();
+        store.place(at(key, 0, 1, 0));
+        store.restore_placements();
+        assert!(store.placements().is_empty());
+        assert!(store.image(key).is_some(), "image data stays");
+    }
+
+    #[test]
+    fn remove_image_purges_stashed_placements() {
+        let mut store = ImageStore::default();
+        let a = store.insert(1, 0, 2, 2, pixels(2, 2)).unwrap();
+        let b = store.insert(2, 0, 2, 2, pixels(2, 2)).unwrap();
+        store.place(at(a, 0, 0, 0));
+        store.place(at(b, 0, 1, 0));
+        store.stash_placements();
+        store.remove_image(a);
+        store.restore_placements();
+        let images: Vec<u64> = store.placements().iter().map(|p| p.image).collect();
+        assert_eq!(images, [b]);
+    }
+
+    #[test]
+    fn remove_placements_does_not_free_images_the_stash_references() {
+        let mut store = ImageStore::default();
+        let key = store.insert(1, 0, 2, 2, pixels(2, 2)).unwrap();
+        store.place(at(key, 0, 0, 0));
+        store.stash_placements();
+        store.place(at(key, 0, 5, 0));
+        store.remove_placements(true, |_| true);
+        assert!(store.image(key).is_some(), "main still shows it");
+        store.restore_placements();
+        assert_eq!(store.placements().len(), 1);
+        // With nothing stashed, the same call frees the image.
+        store.remove_placements(true, |_| true);
+        assert!(store.image(key).is_none());
+    }
+
+    #[test]
+    fn clear_placements_leaves_the_stash_alone() {
+        let mut store = ImageStore::default();
+        let key = store.insert(1, 0, 1, 1, pixels(1, 1)).unwrap();
+        store.place(at(key, 0, 0, 0));
+        store.stash_placements();
+        store.place(at(key, 0, 1, 0));
+        store.clear_placements();
+        assert!(store.placements().is_empty());
+        store.restore_placements();
+        assert_eq!(store.placements().len(), 1);
     }
 }

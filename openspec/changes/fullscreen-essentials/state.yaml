@@ -1,0 +1,20 @@
+change: fullscreen-essentials
+status: applying
+artifact_store: openspec
+description: >
+  Recommendation #3 (P0): alternate screen, scroll regions and full-screen
+  app essentials in nxg-core, plus DECCKM in the app key encoder.
+phases:
+  explore: done
+  propose: done
+  spec: done
+  design: done
+  tasks: done
+  apply: in-progress (S1 done, size:exception)
+  verify: pending
+  archive: pending
+delivery:
+  strategy: ask-on-risk
+  review_budget_lines: 800
+  forecast: chained PRs S1-S5 (~2090 changed lines; S2 may split into S2a/S2b)
+recommendation_ref: openspec/RECOMMENDATIONS.md#3
