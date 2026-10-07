@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           nxgterm
-Version:        0.1.0
+Version:        0.2.0
 Release:        1%{?dist}
 Summary:        Fast, configurable, cross-platform terminal emulator
 
@@ -79,5 +79,9 @@ cargo test --release --locked --workspace
 %{_datadir}/%{name}/
 
 %changelog
+* Wed Oct 07 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.2.0-1
+- Scrollback, mouse wheel and mouse reporting, tabs, command palette,
+  configurable key bindings, font fallback for icons, sixel fix for yazi
+
 * Wed Oct 07 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.1.0-1
 - Initial package
