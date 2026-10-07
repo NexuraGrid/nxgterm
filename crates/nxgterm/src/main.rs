@@ -9,6 +9,7 @@ mod appearance;
 mod bindings;
 mod choice;
 mod cli;
+mod command_palette;
 mod keys;
 mod mouse;
 mod reload;

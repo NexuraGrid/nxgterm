@@ -62,7 +62,7 @@ pub fn layout(titles: &[&str], active: usize, cols: u16) -> Vec<Label> {
 }
 
 /// `text` cut to `width` chars, the last one replaced by `…` when cut.
-fn truncate(text: &str, width: usize) -> String {
+pub(crate) fn truncate(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_owned();
     }
