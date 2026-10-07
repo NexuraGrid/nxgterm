@@ -1,10 +1,12 @@
-//! Configuration: the TOML file, its defaults and the built-in themes.
+//! Configuration: the TOML file, its defaults, the built-in themes and the
+//! key bindings.
 //!
 //! Pure: no window, GPU or OS APIs. Every key is optional; a missing file
 //! or section means the defaults, and unknown keys are errors so typos do
 //! not go unnoticed. See [`DEFAULT_CONFIG_TOML`] for the documented format.
 
 pub mod color;
+pub mod keybindings;
 pub mod path;
 pub mod theme;
 
@@ -16,6 +18,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Deserializer};
 
 pub use color::Rgb;
+pub use keybindings::{Bindings, KeybindingsConfig};
 pub use path::{Platform, config_path, has_env_override};
 pub use theme::{Colors, THEMES, Theme, ThemeName};
 
@@ -35,7 +38,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# nxgterm configuration.
 #
 # Every key is optional; the values below are the defaults. Unknown keys are
 # reported as errors. Changes are applied live when the file is saved, except
-# [shell] and [renderer], which apply on the next start.
+# [shell], [renderer] and the window size, which apply on the next start.
 
 [font]
 # Font family. When unset or not installed, the system monospace font is used.
@@ -84,6 +87,50 @@ backend = "auto"
 [scrollback]
 # Lines kept after they scroll off the top of the screen; 0 disables it.
 lines = 10000
+
+[keybindings]
+# Shortcuts handled by the terminal instead of being sent to the shell, as
+# "chord" = "action". Entries are added to the defaults below; map a default
+# chord to "none" to free it for the shell.
+#
+# A chord is modifiers and one key joined with "+", in any order and case.
+# Modifiers: ctrl, alt, shift, super (cmd on macOS). Keys: a character,
+# f1-f24, tab, enter, escape, space, backspace, delete, insert, home, end,
+# pageup, pagedown, up, down, left, right, plus, minus, equal.
+#
+# Actions: zoom_in, zoom_out, reset_zoom, scroll_page_up, scroll_page_down,
+# scroll_to_top, scroll_to_bottom, new_tab, close_tab, next_tab, previous_tab,
+# goto_tab_1 to goto_tab_9, command_palette, reload_config (unbound by
+# default), none. Scrolling keys reach the application on the alternate
+# screen (full-screen programs).
+#
+# The defaults (on macOS the zoom chords use cmd instead of ctrl):
+# "ctrl+equal" = "zoom_in"
+# "ctrl+plus" = "zoom_in"
+# "ctrl+minus" = "zoom_out"
+# "ctrl+0" = "reset_zoom"
+# "shift+pageup" = "scroll_page_up"
+# "shift+pagedown" = "scroll_page_down"
+# "shift+home" = "scroll_to_top"
+# "shift+end" = "scroll_to_bottom"
+# "ctrl+shift+t" = "new_tab"
+# "ctrl+shift+w" = "close_tab"
+# "ctrl+tab" = "next_tab"
+# "ctrl+shift+tab" = "previous_tab"
+# "alt+1" = "goto_tab_1"
+# "alt+2" = "goto_tab_2"
+# "alt+3" = "goto_tab_3"
+# "alt+4" = "goto_tab_4"
+# "alt+5" = "goto_tab_5"
+# "alt+6" = "goto_tab_6"
+# "alt+7" = "goto_tab_7"
+# "alt+8" = "goto_tab_8"
+# "alt+9" = "goto_tab_9"
+# "ctrl+shift+p" = "command_palette"
+#
+# Examples:
+# "ctrl+shift+r" = "reload_config"
+# "ctrl+tab" = "none"
 "##;
 
 /// The whole configuration file.
@@ -96,6 +143,7 @@ pub struct Config {
     pub shell: ShellConfig,
     pub renderer: RendererConfig,
     pub scrollback: ScrollbackConfig,
+    pub keybindings: KeybindingsConfig,
 }
 
 /// `[font]`
@@ -198,6 +246,14 @@ pub struct ScrollbackConfig {
 impl Default for ScrollbackConfig {
     fn default() -> Self {
         Self { lines: 10_000 }
+    }
+}
+
+impl KeybindingsConfig {
+    /// The effective bindings: these entries over the defaults. `macos`
+    /// selects Cmd instead of Ctrl for the default zoom chords.
+    pub fn resolve(&self, macos: bool) -> Bindings {
+        Bindings::new(self, macos)
     }
 }
 
@@ -357,6 +413,47 @@ mod tests {
     #[test]
     fn documented_sample_parses_to_the_defaults() {
         assert_eq!(parse(DEFAULT_CONFIG_TOML).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn keybindings_section_merges_over_the_defaults() {
+        let config =
+            parse("[keybindings]\n\"ctrl+alt+n\" = \"new_tab\"\n\"ctrl+0\" = \"none\"\n").unwrap();
+        let bindings = config.keybindings.resolve(false);
+        let chord = |text: &str| text.parse::<keybindings::Chord>().unwrap();
+        assert_eq!(
+            bindings.action(&chord("ctrl+alt+n")),
+            Some(keybindings::Action::NewTab)
+        );
+        assert_eq!(bindings.action(&chord("ctrl+0")), None);
+        assert_eq!(
+            Config::default().keybindings.resolve(true),
+            Bindings::defaults(true)
+        );
+    }
+
+    #[test]
+    fn keybinding_errors_carry_path_and_reason() {
+        let error = parse_error("[keybindings]\n\"ctrl+t\" = \"copy\"\n");
+        assert!(error.contains("/cfg/nxgterm.toml"), "{error}");
+        assert!(error.contains("unknown action `copy`"), "{error}");
+        let error = parse_error("[keybindings]\n\"ctrl+bogus\" = \"new_tab\"\n");
+        assert!(error.contains("unknown key `bogus`"), "{error}");
+    }
+
+    #[test]
+    fn documented_sample_lists_every_default_binding() {
+        for (chord, action) in Bindings::defaults(false).entries() {
+            let line = format!("# \"{chord}\" = \"{action}\"");
+            assert!(DEFAULT_CONFIG_TOML.contains(&line), "missing {line}");
+        }
+        for action in keybindings::Action::ALL {
+            assert!(
+                DEFAULT_CONFIG_TOML.contains(action.name()),
+                "{} is not documented",
+                action.name()
+            );
+        }
     }
 
     #[test]
@@ -540,10 +637,8 @@ mod tests {
     }
 
     fn scratch_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "nxg-config-test-{name}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("nxg-config-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
