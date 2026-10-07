@@ -86,9 +86,47 @@ pub trait Renderer {
     fn draw(&mut self, terminal: &Terminal) -> Result<(), RenderError>;
 }
 
+/// Which system clipboard to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardKind {
+    /// The clipboard of copy and paste shortcuts.
+    Clipboard,
+    /// The X11/Wayland PRIMARY selection: set by selecting text, pasted
+    /// with the middle button. Missing on other systems.
+    Primary,
+}
+
+/// Why the clipboard could not be read or written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardError(pub String);
+
+impl fmt::Display for ClipboardError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "clipboard: {}", self.0)
+    }
+}
+
+impl std::error::Error for ClipboardError {}
+
+/// Text on the system clipboard.
+///
+/// Adapters: the OS clipboard (X11, Wayland, macOS, Windows). On X11 and
+/// Wayland copied text is served by its owner, so an adapter must live as
+/// long as the text should stay pasteable.
+pub trait Clipboard {
+    fn get_text(&mut self, kind: ClipboardKind) -> Result<String, ClipboardError>;
+    fn set_text(&mut self, kind: ClipboardKind, text: String) -> Result<(), ClipboardError>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_errors_say_where_they_come_from() {
+        let error = ClipboardError("no display".into());
+        assert_eq!(error.to_string(), "clipboard: no display");
+    }
 
     #[test]
     fn only_fatal_errors_are_fatal() {
