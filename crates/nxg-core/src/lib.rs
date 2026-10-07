@@ -10,6 +10,7 @@ pub mod grid;
 pub mod image;
 pub mod kitty;
 pub mod mouse;
+pub mod paste;
 pub mod ports;
 pub mod selection;
 pub mod sixel;
