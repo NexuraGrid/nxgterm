@@ -82,7 +82,10 @@ softbuffer, in this order: clear to background, cell backgrounds, images with
 `z < 0`, block cursor, glyphs, then images with `z >= 0`. Inverse video MUST
 swap foreground and background; bold MUST select the bright variant for ANSI
 colors 0-7 and the bold face when the family has one. The glyph under a
-visible cursor MUST be drawn in the cell background color. Italic and
+visible cursor MUST be drawn in the cell background color. Selected cells
+MUST use `selection_foreground`/`selection_background` when the palette has
+them, each unset one taking the cell's colors swapped (inverse video); the
+GPU renderer MUST match. Italic and
 underline flags are parsed but SHALL NOT be rendered yet.
 
 #### Scenario: Glyph stays inside its cell

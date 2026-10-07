@@ -63,9 +63,11 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | `colors.theme` | built-in theme name, case-insensitive | `nxg-dark` |
 | `colors.foreground`/`background`/`cursor` | `#rrggbb` or `#rgb` | from theme |
 | `colors.ansi` | exactly 16 colors (normal 0-7, bright 8-15) | from theme |
+| `colors.selection_foreground`/`selection_background` | `#rrggbb` or `#rgb`; unset swaps the colors of selected cells | unset |
 | `shell.program`, `shell.args` | string; blank = unset / list | platform default / `[]` |
 | `renderer.backend` | `auto` \| `gpu` \| `cpu` | `auto` |
 | `scrollback.lines` | usize history lines; `0` disables the scrollback | `10000` |
+| `selection.copy_on_select` | bool; copy finished selections to PRIMARY (Linux X11/Wayland only, ignored elsewhere) | `true` |
 | `keybindings` | table of `"chord" = "action"` (or `"none"`), merged over the defaults | see Key bindings |
 
 `--print-config` MUST print a documented sample that parses to exactly the
@@ -153,13 +155,18 @@ scale factor change MUST re-rasterize the font and refit the grid.
 Actions MUST have stable snake_case names: `zoom_in`, `zoom_out`,
 `reset_zoom`, `scroll_page_up`, `scroll_page_down`, `scroll_to_top`,
 `scroll_to_bottom`, `new_tab`, `close_tab`, `next_tab`, `previous_tab`,
-`goto_tab_1`..`goto_tab_9`, `command_palette` and `reload_config`, each with
-a title and a category for listing. The defaults MUST be: Ctrl (Cmd on
+`goto_tab_1`..`goto_tab_9`, `command_palette`, `copy`, `paste`,
+`select_all` and `reload_config`, each with a title and a category for
+listing. The defaults MUST be: Ctrl (Cmd on
 macOS) with `=` or `+` for `zoom_in`, `-` for `zoom_out` and `0` for
 `reset_zoom`; Shift+PageUp/PageDown/Home/End for the scroll actions;
 Ctrl+Shift+T/W for `new_tab`/`close_tab`; Ctrl+Tab and Ctrl+Shift+Tab for
 `next_tab`/`previous_tab`; Alt+1..9 for `goto_tab_N`; Ctrl+Shift+P for
-`command_palette`. `reload_config` MUST be unbound by default.
+`command_palette`; Ctrl+Shift+C for `copy` and Ctrl+Shift+V for `paste`
+(Cmd+C and Cmd+V on macOS), plus Shift+Insert for `paste`. `select_all` and
+`reload_config` MUST be unbound by default. Ctrl+C and Ctrl+V MUST reach
+the shell. `copy` without a selection MUST do nothing, and MUST NOT write to
+the PTY.
 
 `[keybindings]` entries MUST be added over the defaults; `"none"` MUST
 remove a binding. Chords are modifiers (`ctrl`, `alt`, `shift`,
@@ -188,9 +195,15 @@ of its shortcut (e.g. `Ctrl+Shift+T`) MUST be listable.
 - THEN the key is sent to the shell
 
 #### Scenario: Unknown action
-- GIVEN `[keybindings] "ctrl+t" = "copy"`
+- GIVEN `[keybindings] "ctrl+t" = "cut"`
 - WHEN the config is loaded
-- THEN the error names `unknown action `copy`` and lists the actions
+- THEN the error names `unknown action `cut`` and lists the actions
+
+#### Scenario: Copy keeps Ctrl+C for the shell
+- GIVEN Linux and a selection
+- WHEN Ctrl+C is pressed
+- THEN the shell receives ETX and the clipboard is unchanged
+- AND Ctrl+Shift+C copies the selected text
 
 ### Requirement: Command-line interface
 

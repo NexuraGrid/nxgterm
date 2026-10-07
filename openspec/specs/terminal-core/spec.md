@@ -165,6 +165,10 @@ graphics) SHALL be acted on.
   `RenderError::Fatal` (renderer must be replaced).
 - `WinSize { cells, cell: Option<CellPixels> }` whose `pixels()` is the text
   area clamped to `u16`, or `(0, 0)` when the cell size is unknown.
+- `Clipboard { get_text, set_text }` over a `ClipboardKind` (`Clipboard` or
+  the X11/Wayland `Primary` selection), failing with a `ClipboardError` that
+  callers log; the adapter MUST live as long as copied text should stay
+  pasteable.
 
 #### Scenario: Pixel size unknown
 - GIVEN a `WinSize` built from cells only
@@ -312,6 +316,59 @@ DECKPNM MAY be accepted and ignored.
 - GIVEN `CSI ? 1 h` was fed
 - WHEN Up is pressed
 - THEN `ESC O A` is sent; after `CSI ? 1 l` it is `ESC [ A`
+
+### Requirement: Bracketed paste mode
+
+`Terminal::modes()` MUST expose bracketed paste (`CSI ? 2004 h/l`, default
+reset), global across both screens and reset by RIS. Pasted text MUST be
+encoded by `nxg_core::paste::encode`: `\r\n` and `\n` become `\r`, tab is
+kept, every other control character (C0, DEL, C1, ESC included) is dropped
+in both modes, and with the mode set the result is wrapped in `ESC [ 200 ~`
+and `ESC [ 201 ~`.
+
+#### Scenario: Paste cannot close the bracket
+- GIVEN bracketed paste on
+- WHEN `a ESC [201~ b` is pasted
+- THEN the child receives `ESC [200~ a[201~ b ESC [201~`
+
+### Requirement: Soft wraps
+
+When autowrap moves printing to the next row, the last cell of the row left
+MUST carry the `WRAPLINE` flag; it moves with the row through scrolling and
+into the history, and is lost when that cell is rewritten or erased.
+
+#### Scenario: Wrapped row
+- GIVEN a 3-column terminal
+- WHEN `abcd` is fed
+- THEN row 0 is soft-wrapped and row 1 is not
+
+### Requirement: Selection
+
+A selection MUST be kept in absolute line coordinates: line `n` is the `n`th
+line that ever entered the history (lines dropped from a full or disabled
+history still count), so it survives viewport scrolling and lines moving
+into the history. Kinds: simple (cells in reading order), word (separators
+are whitespace and ``()[]{}<>'"`,;:│``; words continue across soft wraps),
+line (the whole logical line, soft wraps included) and block (the same
+columns of every line). Its text MUST trim the trailing blanks of each row
+and join rows with `\n`, except that a soft-wrapped row joins the next one
+directly. A blank selection has no text.
+
+Output that changes a selected line MUST clear the selection: printing,
+erasing, inserting or deleting cells, and scrolls that move lines without
+saving them (region scrolls, IL, DL, RI, SD, and saving scrolls of a region
+smaller than the screen). Switching screens, resizing, RIS and ED 3 MUST
+clear it too.
+
+#### Scenario: Selection follows its line into the history
+- GIVEN line `b` selected on the screen
+- WHEN more lines are printed below and scroll it into the history
+- THEN the selected text is still `b`
+
+#### Scenario: Output over the selection
+- GIVEN a selection on row 0
+- WHEN text is printed on row 0
+- THEN there is no selection
 
 ### Requirement: Replay of full-screen programs
 

@@ -168,6 +168,8 @@ theme = "nxg-dark"
 # background = "#1a1b26"
 # cursor = "#c0caf5"
 # ansi = ["#15161e", ...]   # exactly 16 colors: normal 0-7, bright 8-15
+# selection_foreground = "#c0caf5"  # unset: selected cells are inverted
+# selection_background = "#33467c"
 
 [shell]
 program = "pwsh.exe"        # default: $SHELL on Unix; pwsh, powershell, cmd on Windows
@@ -178,6 +180,9 @@ backend = "auto"            # auto | gpu | cpu
 
 [scrollback]
 lines = 10000               # history kept on the main screen; 0 disables it
+
+[selection]
+copy_on_select = true       # selected text goes to PRIMARY (Linux only)
 
 [keybindings]
 "ctrl+shift+r" = "reload_config"  # "chord" = "action", added to the defaults
@@ -206,7 +211,9 @@ the defaults are used instead.
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | `next_tab` / `previous_tab` |
 | `Alt+1` ... `Alt+9` | `goto_tab_1` ... `goto_tab_9` |
 | `Ctrl+Shift+P` | `command_palette`: list and run every action |
-| (unbound) | `reload_config` |
+| `Ctrl+Shift+C` (`Cmd+C` on macOS) | `copy`: the selection to the clipboard |
+| `Ctrl+Shift+V` (`Cmd+V` on macOS), `Shift+Insert` | `paste`: the clipboard into the shell |
+| (unbound) | `select_all`, `reload_config` |
 
 Bound keys are handled by the terminal and never reach the shell (the
 scrolling keys still do in full-screen programs, which have no history).
@@ -217,6 +224,30 @@ with `+` in any order and case, where the key is a character, `f1`-`f24`,
 `end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`, `plus`, `minus`
 or `equal`. Map a default chord to `"none"` to unbind it. Invalid chords and
 unknown actions are reported like any other config error.
+
+### Selection, copy and paste
+
+| Input | Action |
+|---|---|
+| Left drag | Select characters; dragging above or below the grid scrolls the history |
+| `Alt` + left drag | Select a block (rectangle) |
+| Double click / triple click | Select a word / a whole line (wrapped lines included) |
+| Single click | Clear the selection |
+| Middle click | Paste the PRIMARY selection (Linux) |
+
+Selected text stays selected while the view scrolls and output moves it into
+the history; output that changes a selected line, a resize or switching
+screens clears it. Copied text has trailing blanks trimmed and lines that
+wrapped automatically joined. `Ctrl+C` stays an interrupt for the shell, and
+copy without a selection does nothing. On Linux (X11 and Wayland) every
+selection is also copied to the PRIMARY selection (`selection.copy_on_select`).
+Words stop at spaces and ``()[]{}<>'"`,;:│``, so paths select whole.
+
+Pasted text has its line breaks sent as Enter (`\r`) and other control
+characters, escape included, removed. Programs that enable bracketed paste
+(mode 2004) receive it between `ESC [200~` and `ESC [201~`, so a pasted
+command does not run by itself. When a program uses the mouse, hold `Shift`
+to select or middle-click paste instead.
 
 ### Command palette
 
