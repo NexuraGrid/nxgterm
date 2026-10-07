@@ -30,14 +30,17 @@ pub fn padding_px(padding: u16, scale: f64) -> u32 {
     (f64::from(padding) * valid_scale(scale)).round() as u32
 }
 
-/// The font size after `action`, from `current` (zoomed) and the
-/// `configured` size that reset returns to; always clamped.
-pub fn zoom(action: Action, current: f32, configured: f32) -> f32 {
-    clamp_font_size(match action {
+/// The font size after a zoom `action`, from `current` (zoomed) and the
+/// `configured` size that reset returns to; always clamped. `None` for
+/// other actions.
+pub fn zoom(action: Action, current: f32, configured: f32) -> Option<f32> {
+    let size = match action {
         Action::ZoomIn => current + ZOOM_STEP,
         Action::ZoomOut => current - ZOOM_STEP,
         Action::ResetZoom => configured,
-    })
+        _ => return None,
+    };
+    Some(clamp_font_size(size))
 }
 
 fn pixel(color: Rgb) -> u32 {
@@ -99,14 +102,21 @@ mod tests {
 
     #[test]
     fn zoom_steps_and_resets() {
-        assert_eq!(zoom(Action::ZoomIn, 14.0, 14.0), 15.0);
-        assert_eq!(zoom(Action::ZoomOut, 14.0, 14.0), 13.0);
-        assert_eq!(zoom(Action::ResetZoom, 20.0, 12.0), 12.0);
+        assert_eq!(zoom(Action::ZoomIn, 14.0, 14.0), Some(15.0));
+        assert_eq!(zoom(Action::ZoomOut, 14.0, 14.0), Some(13.0));
+        assert_eq!(zoom(Action::ResetZoom, 20.0, 12.0), Some(12.0));
+        assert_eq!(zoom(Action::NewTab, 20.0, 12.0), None, "not a zoom action");
     }
 
     #[test]
     fn zoom_is_clamped() {
-        assert_eq!(zoom(Action::ZoomIn, MAX_FONT_SIZE, 14.0), MAX_FONT_SIZE);
-        assert_eq!(zoom(Action::ZoomOut, MIN_FONT_SIZE, 14.0), MIN_FONT_SIZE);
+        assert_eq!(
+            zoom(Action::ZoomIn, MAX_FONT_SIZE, 14.0),
+            Some(MAX_FONT_SIZE)
+        );
+        assert_eq!(
+            zoom(Action::ZoomOut, MIN_FONT_SIZE, 14.0),
+            Some(MIN_FONT_SIZE)
+        );
     }
 }

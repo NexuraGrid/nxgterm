@@ -6,7 +6,9 @@ use nxg_core::{Modes, TermSize};
 use nxg_render::{CellSize, Layout};
 use winit::dpi::PhysicalPosition;
 use winit::event::MouseScrollDelta;
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::ModifiersState;
+
+use crate::bindings::Action;
 
 /// Lines one wheel notch scrolls.
 pub const LINES_PER_NOTCH: u32 = 3;
@@ -90,24 +92,20 @@ pub enum ViewportScroll {
     Bottom,
 }
 
-/// Shift+PageUp/PageDown scroll the main screen viewport by a page of
-/// `rows`, Shift+Home/End jump to the oldest line or the live screen. On
-/// the alternate screen, or without Shift, the key belongs to the app.
-pub fn viewport_key(
-    key: &Key,
-    mods: ModifiersState,
-    modes: Modes,
-    rows: u16,
-) -> Option<ViewportScroll> {
-    if !mods.shift_key() || modes.alt_screen {
+/// The viewport movement for a scroll `action`, by a page of `rows` or
+/// to the oldest line or the live screen. `None` for other actions, and on
+/// the alternate screen, which has no history: there the key belongs to
+/// the application.
+pub fn viewport_scroll(action: Action, modes: Modes, rows: u16) -> Option<ViewportScroll> {
+    if modes.alt_screen {
         return None;
     }
     let page = i32::from(rows);
-    match key {
-        Key::Named(NamedKey::PageUp) => Some(ViewportScroll::Lines(page)),
-        Key::Named(NamedKey::PageDown) => Some(ViewportScroll::Lines(-page)),
-        Key::Named(NamedKey::Home) => Some(ViewportScroll::Top),
-        Key::Named(NamedKey::End) => Some(ViewportScroll::Bottom),
+    match action {
+        Action::ScrollPageUp => Some(ViewportScroll::Lines(page)),
+        Action::ScrollPageDown => Some(ViewportScroll::Lines(-page)),
+        Action::ScrollToTop => Some(ViewportScroll::Top),
+        Action::ScrollToBottom => Some(ViewportScroll::Bottom),
         _ => None,
     }
 }
@@ -167,7 +165,6 @@ pub fn action(state: winit::event::ElementState) -> MouseAction {
 mod tests {
     use super::*;
     use nxg_core::mouse::{MouseEncoding, MouseTracking};
-    use winit::keyboard::{Key, NamedKey};
 
     fn main() -> Modes {
         Modes::default()
@@ -277,17 +274,20 @@ mod tests {
     }
 
     #[test]
-    fn shift_page_keys_scroll_the_main_screen_viewport() {
-        let shift = ModifiersState::SHIFT;
-        let key = |k| Key::Named(k);
-        let page = |k| viewport_key(&key(k), shift, main(), 24);
-        assert_eq!(page(NamedKey::PageUp), Some(ViewportScroll::Lines(24)));
-        assert_eq!(page(NamedKey::PageDown), Some(ViewportScroll::Lines(-24)));
-        assert_eq!(page(NamedKey::Home), Some(ViewportScroll::Top));
-        assert_eq!(page(NamedKey::End), Some(ViewportScroll::Bottom));
-        let plain = viewport_key(&key(NamedKey::PageUp), ModifiersState::empty(), main(), 24);
-        assert_eq!(plain, None, "without shift the key goes to the app");
-        let on_alt = viewport_key(&key(NamedKey::PageUp), shift, alt(), 24);
+    fn scroll_actions_move_the_main_screen_viewport() {
+        let scroll = |action| viewport_scroll(action, main(), 24);
+        assert_eq!(
+            scroll(Action::ScrollPageUp),
+            Some(ViewportScroll::Lines(24))
+        );
+        assert_eq!(
+            scroll(Action::ScrollPageDown),
+            Some(ViewportScroll::Lines(-24))
+        );
+        assert_eq!(scroll(Action::ScrollToTop), Some(ViewportScroll::Top));
+        assert_eq!(scroll(Action::ScrollToBottom), Some(ViewportScroll::Bottom));
+        assert_eq!(scroll(Action::ZoomIn), None, "not a scroll action");
+        let on_alt = viewport_scroll(Action::ScrollPageUp, alt(), 24);
         assert_eq!(on_alt, None, "the alternate screen has no history");
     }
 

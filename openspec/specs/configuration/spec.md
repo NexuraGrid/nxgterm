@@ -4,9 +4,9 @@
 
 The optional TOML configuration (`nxg-config`, pure and OS-free), where it
 is found, how it is validated, the built-in themes, the command-line
-interface, live reload, and the font zoom key bindings (`nxgterm`).
+interface, live reload, and the key bindings (`nxgterm`).
 
-Sources: `crates/nxg-config/src/{lib,path,theme,color}.rs`,
+Sources: `crates/nxg-config/src/{lib,path,theme,color,keybindings}.rs`,
 `crates/nxgterm/src/{main,cli,reload,watch,bindings,appearance}.rs`.
 
 ## Requirements
@@ -65,6 +65,7 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | `shell.program`, `shell.args` | string; blank = unset / list | platform default / `[]` |
 | `renderer.backend` | `auto` \| `gpu` \| `cpu` | `auto` |
 | `scrollback.lines` | usize history lines; `0` disables the scrollback | `10000` |
+| `keybindings` | table of `"chord" = "action"` (or `"none"`), merged over the defaults | see Key bindings |
 
 `--print-config` MUST print a documented sample that parses to exactly the
 defaults.
@@ -119,7 +120,8 @@ save by rename are handled), events for other files, reads and access-time
 updates MUST be ignored, and bursts MUST be debounced to one reload after
 200 ms of quiet. Font family, fallback families, font size, colors and padding MUST apply
 immediately (restyle and refit the grid); `scrollback.lines` MUST apply
-immediately, dropping the oldest lines beyond a lower limit. Changes to `[shell]`,
+immediately, dropping the oldest lines beyond a lower limit; `[keybindings]`
+MUST apply to the next key press. Changes to `[shell]`,
 `[renderer]` and `window.columns`/`rows` MUST be reported as
 `nxgterm: <section> changes apply on restart`. A deleted file MUST reload as
 the defaults. A failure to start watching MUST only disable live reload.
@@ -145,13 +147,29 @@ scale factor change MUST re-rasterize the font and refit the grid.
 - WHEN the style is built
 - THEN padding is 6 physical pixels
 
-### Requirement: Font zoom key bindings
+### Requirement: Key bindings
 
-The primary modifier (Ctrl; Cmd on macOS) with `=` or `+` MUST increase the
-font size by 1 point, with `-` decrease it by 1, and with `0` reset it to the
-configured size; results MUST be clamped to 6-72. Shift MAY also be held;
-any other extra modifier MUST NOT match. Matched keys MUST NOT reach the
-shell. Changing the configured size on reload MUST discard the zoom.
+Actions MUST have stable snake_case names: `zoom_in`, `zoom_out`,
+`reset_zoom`, `scroll_page_up`, `scroll_page_down`, `scroll_to_top`,
+`scroll_to_bottom`, `new_tab`, `close_tab`, `next_tab`, `previous_tab`,
+`goto_tab_1`..`goto_tab_9`, `command_palette` and `reload_config`, each with
+a title and a category for listing. The defaults MUST be: Ctrl (Cmd on
+macOS) with `=` or `+` for `zoom_in`, `-` for `zoom_out` and `0` for
+`reset_zoom`; Shift+PageUp/PageDown/Home/End for the scroll actions;
+Ctrl+Shift+T/W for `new_tab`/`close_tab`; Ctrl+Tab and Ctrl+Shift+Tab for
+`next_tab`/`previous_tab`; Alt+1..9 for `goto_tab_N`; Ctrl+Shift+P for
+`command_palette`. `reload_config` MUST be unbound by default.
+
+`[keybindings]` entries MUST be added over the defaults; `"none"` MUST
+remove a binding. Chords are modifiers (`ctrl`, `alt`, `shift`,
+`super`/`cmd`) and one key joined with `+`, in any order and case. An
+invalid chord, an unknown action or a chord bound twice MUST be a config
+error naming it. A chord MUST match exactly the modifiers held, except that
+Shift MAY be ignored when it produced a non-letter character (`+` from
+Shift+`=`). Matched keys MUST NOT reach the shell, except scroll actions on
+the alternate screen. Zoom results MUST be clamped to 6-72, and changing the
+configured size on reload MUST discard the zoom. Every action with the label
+of its shortcut (e.g. `Ctrl+Shift+T`) MUST be listable.
 
 #### Scenario: Zoom on macOS
 - GIVEN macOS
@@ -162,6 +180,16 @@ shell. Changing the configured size on reload MUST discard the zoom.
 - GIVEN Linux
 - WHEN Ctrl+Alt+= is pressed
 - THEN no zoom happens
+
+#### Scenario: Unbinding a default
+- GIVEN `[keybindings] "ctrl+tab" = "none"`
+- WHEN Ctrl+Tab is pressed
+- THEN the key is sent to the shell
+
+#### Scenario: Unknown action
+- GIVEN `[keybindings] "ctrl+t" = "copy"`
+- WHEN the config is loaded
+- THEN the error names `unknown action `copy`` and lists the actions
 
 ### Requirement: Command-line interface
 

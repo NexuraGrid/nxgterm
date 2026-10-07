@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
-use nxg_config::{Backend, Config, FontConfig};
+use nxg_config::{Backend, Bindings, Config, FontConfig};
 use nxg_core::fallback::{self, Init};
 use nxg_core::mouse::{MouseAction, MouseButton, MouseEvent};
 use nxg_core::ports::{ChildProcess, PtyControl, RenderError, Renderer};
@@ -19,11 +19,12 @@ use nxg_render::{
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
+use crate::bindings::Action;
 use crate::mouse::{ViewportScroll, Wheel, WheelAction};
 use crate::{appearance, bindings, choice, keys, mouse, reload};
 
@@ -69,9 +70,16 @@ pub struct App {
     /// Config file to reload on change; `None` when no location is known.
     config_path: Option<PathBuf>,
     session: Option<Session>,
+    /// Key bindings from the config, resolved for this platform;
+    /// [`Bindings::shortcuts`] lists every action with its shortcut.
+    bindings: Bindings,
     modifiers: ModifiersState,
     error: Option<Box<dyn Error>>,
 }
+
+/// Cmd instead of Ctrl for the default zoom bindings, and in shortcut
+/// labels.
+const MACOS: bool = cfg!(target_os = "macos");
 
 impl App {
     pub fn new(
@@ -79,11 +87,13 @@ impl App {
         config: Config,
         config_path: Option<PathBuf>,
     ) -> Self {
+        let bindings = config.keybindings.resolve(MACOS);
         Self {
             proxy,
             config,
             config_path,
             session: None,
+            bindings,
             modifiers: ModifiersState::empty(),
             error: None,
         }
@@ -158,6 +168,73 @@ impl App {
         event_loop.exit();
     }
 
+    /// Handles a key press: a bound action, or bytes for the pty.
+    fn key_pressed(&mut self, event: &KeyEvent) {
+        let action = bindings::resolve(&self.bindings, &event.logical_key, self.modifiers);
+        if let Some(action) = action {
+            if self.perform(action) {
+                return;
+            }
+        }
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        let modes = session.terminal.modes();
+        let bytes = keys::encode(
+            &event.logical_key,
+            event.text.as_deref(),
+            self.modifiers,
+            modes,
+        );
+        if let Some(bytes) = bytes {
+            // Typing shows what is being typed into.
+            session.scroll_viewport(ViewportScroll::Bottom);
+            session.send(&bytes);
+        }
+    }
+
+    /// Runs `action`. Returns `false` when it does not apply right now and
+    /// the key should go to the pty instead (scrolling on the alternate
+    /// screen, which has no history).
+    fn perform(&mut self, action: Action) -> bool {
+        if action == Action::ReloadConfig {
+            self.reload_config();
+            return true;
+        }
+        let config = &self.config;
+        let Some(session) = &mut self.session else {
+            return true;
+        };
+        if let Some(size) = appearance::zoom(action, session.font_size, config.font.size) {
+            session.font_size = size;
+            session.restyle(config);
+            return true;
+        }
+        let modes = session.terminal.modes();
+        let rows = session.terminal.size().rows();
+        if let Some(scroll) = mouse::viewport_scroll(action, modes, rows) {
+            session.scroll_viewport(scroll);
+            return true;
+        }
+        match action {
+            Action::ScrollPageUp
+            | Action::ScrollPageDown
+            | Action::ScrollToTop
+            | Action::ScrollToBottom => false,
+            // Tabs and the command palette are not built yet. Their keys
+            // are still consumed so the bindings behave the same once they
+            // are, and never leak to the shell in the meantime.
+            Action::NewTab
+            | Action::CloseTab
+            | Action::NextTab
+            | Action::PreviousTab
+            | Action::GotoTab(_)
+            | Action::CommandPalette => true,
+            // Handled above.
+            Action::ZoomIn | Action::ZoomOut | Action::ResetZoom | Action::ReloadConfig => true,
+        }
+    }
+
     /// Reloads the config file, applying what can change live. An invalid
     /// file keeps the previous config.
     fn reload_config(&mut self) {
@@ -178,6 +255,9 @@ impl App {
         }
         for what in &changes.on_restart {
             eprintln!("nxgterm: {what} changes apply on restart");
+        }
+        if changes.keybindings {
+            self.bindings = new.keybindings.resolve(MACOS);
         }
         if let Some(session) = &mut self.session {
             if changes.font_faces {
@@ -233,6 +313,12 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        if let WindowEvent::KeyboardInput { event, .. } = &event {
+            if event.state == ElementState::Pressed {
+                self.key_pressed(event);
+            }
+            return;
+        }
         let config = &self.config;
         let Some(session) = &mut self.session else {
             return;
@@ -251,34 +337,6 @@ impl ApplicationHandler<UserEvent> for App {
                 session.restyle(config);
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
-            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                let macos = cfg!(target_os = "macos");
-                if let Some(action) = bindings::resolve(&event.logical_key, self.modifiers, macos) {
-                    session.font_size =
-                        appearance::zoom(action, session.font_size, config.font.size);
-                    session.restyle(config);
-                    return;
-                }
-                let modes = session.terminal.modes();
-                let rows = session.terminal.size().rows();
-                if let Some(scroll) =
-                    mouse::viewport_key(&event.logical_key, self.modifiers, modes, rows)
-                {
-                    session.scroll_viewport(scroll);
-                    return;
-                }
-                let bytes = keys::encode(
-                    &event.logical_key,
-                    event.text.as_deref(),
-                    self.modifiers,
-                    modes,
-                );
-                if let Some(bytes) = bytes {
-                    // Typing shows what is being typed into.
-                    session.scroll_viewport(ViewportScroll::Bottom);
-                    session.send(&bytes);
-                }
-            }
             WindowEvent::MouseWheel { delta, .. } => {
                 let cell = layout(session.renderer.as_ref(), session.padding).cell;
                 let lines = session.wheel.lines(delta, cell.height);
