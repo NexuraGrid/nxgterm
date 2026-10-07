@@ -8,6 +8,7 @@ pub mod adapter;
 mod atlas;
 mod device;
 pub mod format;
+pub mod image;
 pub mod instance;
 pub mod packer;
 mod painter;

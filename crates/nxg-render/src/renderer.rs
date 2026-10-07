@@ -3,6 +3,7 @@
 use nxg_core::{Flags, Terminal};
 
 use crate::frame::Frame;
+use crate::images;
 use crate::paint::{self, CellSize, Layout};
 use crate::style::Style;
 
@@ -30,12 +31,14 @@ impl CpuRenderer {
     }
 
     /// Draws `term` into `frame`; pixels outside the grid (the padding
-    /// included) get the background.
+    /// included) get the background. Order: cell backgrounds, images with
+    /// `z < 0`, cursor, glyphs, then the other images.
     pub fn render(&mut self, term: &Terminal, frame: &mut Frame<'_>) {
         let layout = self.layout();
         let palette = &self.style.palette;
         frame.clear(palette.background);
         paint::paint_backgrounds(term, frame, layout, palette);
+        images::paint(term, frame, layout, false);
         paint::paint_cursor(term, frame, layout, palette);
         let cursor = term.cursor();
         for row in 0..term.size().rows() {
@@ -52,6 +55,7 @@ impl CpuRenderer {
                 self.draw_glyph(frame, c.ch, c.flags.contains(Flags::BOLD), x, y, fg);
             }
         }
+        images::paint(term, frame, layout, true);
     }
 
     fn draw_glyph(&mut self, frame: &mut Frame<'_>, ch: char, bold: bool, x: i64, y: i64, fg: u32) {
@@ -138,5 +142,47 @@ mod tests {
         let mut frame = Frame::new(&mut pixels, 2, 2).unwrap();
         renderer.render(&term, &mut frame);
         assert_eq!(frame.pixel(0, 0), Some(rgb(1, 2, 3)));
+    }
+
+    /// Renders "W" with an opaque red image over its cell at `z`.
+    fn render_glyph_with_image(z: i32) -> Option<(Vec<u32>, u32, u32)> {
+        let mut renderer = CpuRenderer::new(style(0)?);
+        let cell = renderer.cell_size();
+        let mut term = Terminal::new(TermSize::new(2, 1).unwrap());
+        term.set_cell_pixels(cell.width, cell.height);
+        // Exactly one cell of pixels at native size.
+        let (cw, ch) = (cell.width, cell.height);
+        let data =
+            crate::images::tests::encode_base64(&[255, 0, 0, 255].repeat((cw * ch) as usize));
+        let image = format!("\x1b_Ga=T,s={cw},v={ch},C=1,z={z};{data}\x1b\\");
+        term.advance(format!("\x1b[?25lW\x1b[H{image}").as_bytes());
+        let (w, h) = (cell.width * 2, cell.height);
+        let mut pixels = vec![0; (w * h) as usize];
+        renderer.render(&term, &mut Frame::new(&mut pixels, w, h).unwrap());
+        Some((pixels, w, cell.width))
+    }
+
+    #[test]
+    fn negative_z_images_go_below_text_and_others_above() {
+        let Some((below, w, cell_w)) = render_glyph_with_image(-1) else {
+            return;
+        };
+        let red = rgb(255, 0, 0);
+        let first_cell = |pixels: &[u32]| -> Vec<u32> {
+            pixels
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| (*i as u32 % w) < cell_w)
+                .map(|(_, &p)| p)
+                .collect()
+        };
+        let cell = first_cell(&below);
+        assert!(cell.contains(&red), "image visible behind the glyph");
+        assert!(cell.iter().any(|&p| p != red), "glyph drawn over the image");
+        let (above, _, _) = render_glyph_with_image(0).unwrap();
+        assert!(
+            first_cell(&above).iter().all(|&p| p == red),
+            "image covers the glyph"
+        );
     }
 }

@@ -1,8 +1,12 @@
 //! Terminal state machine: feeds child output through a VT parser into a grid.
 
-use crate::TermSize;
+use crate::apc::{ApcFilter, Event};
 use crate::cell::{Cell, Color, Flags};
 use crate::grid::Grid;
+use crate::image::{ImageStore, Placement, SrcRect};
+use crate::kitty::{self, Graphics};
+use crate::sixel::{self, SixelDecoder};
+use crate::{CellPixels, TermSize};
 
 /// Cursor position (zero-based) and visibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,6 +18,8 @@ pub struct Cursor {
 
 /// Screen state driven by [`Terminal::advance`].
 pub struct Terminal {
+    /// Pulls kitty graphics APC strings out before vte (which drops them).
+    filter: ApcFilter,
     parser: vte::Parser,
     state: State,
 }
@@ -37,11 +43,20 @@ struct State {
     wrap_pending: bool,
     /// Replies to queries, waiting to be written to the child.
     responses: Vec<u8>,
+    /// Pixel size of a cell, for image geometry and size reports.
+    cell: CellPixels,
+    images: ImageStore,
+    graphics: Graphics,
+    /// The sixel image being received through a DCS string.
+    sixel: Option<SixelDecoder>,
+    /// Sixel scrolling (DECSDM reset): images go at the cursor and move it.
+    sixel_scrolling: bool,
 }
 
 impl Terminal {
     pub fn new(size: TermSize) -> Self {
         Self {
+            filter: ApcFilter::new(),
             parser: vte::Parser::new(),
             state: State {
                 grid: Grid::new(size),
@@ -53,13 +68,31 @@ impl Terminal {
                 pen: Cell::default(),
                 wrap_pending: false,
                 responses: Vec::new(),
+                cell: CellPixels::default(),
+                images: ImageStore::default(),
+                graphics: Graphics::new(),
+                sixel: None,
+                sixel_scrolling: true,
             },
         }
     }
 
     /// Feeds raw child output.
     pub fn advance(&mut self, bytes: &[u8]) {
-        self.parser.advance(&mut self.state, bytes);
+        let Self {
+            filter,
+            parser,
+            state,
+        } = self;
+        filter.feed(bytes, |event| match event {
+            Event::Text(text) => parser.advance(state, text),
+            Event::Apc(payload) => {
+                // `ESC _` ends any string or sequence vte is inside, as it
+                // would have had vte seen it.
+                parser.advance(state, b"\x1b\\");
+                state.apc(payload);
+            }
+        });
     }
 
     pub fn resize(&mut self, size: TermSize) {
@@ -87,6 +120,21 @@ impl Terminal {
     /// The cells of `row`. Panics if `row` is out of bounds.
     pub fn row(&self, row: u16) -> &[Cell] {
         self.state.grid.row(row)
+    }
+
+    /// Sets the pixel size of a cell; the app calls this whenever the
+    /// renderer's font or scale changes. Zero is treated as one.
+    pub fn set_cell_pixels(&mut self, width: u32, height: u32) {
+        self.state.cell = CellPixels::new(width, height);
+    }
+
+    pub fn cell_pixels(&self) -> CellPixels {
+        self.state.cell
+    }
+
+    /// Stored images and their placements on screen.
+    pub fn images(&self) -> &ImageStore {
+        &self.state.images
     }
 }
 
@@ -119,6 +167,7 @@ impl State {
         if self.cursor.row == self.last_row() {
             let blank = self.blank();
             self.grid.scroll_up(blank);
+            self.images.scroll_up(1, self.cell);
         } else {
             self.cursor.row += 1;
         }
@@ -144,7 +193,11 @@ impl State {
                 (0..row).for_each(|r| self.erase(r, 0..cols));
                 self.erase(row, 0..col + 1);
             }
-            2 | 3 => (0..rows).for_each(|r| self.erase(r, 0..cols)),
+            2 | 3 => {
+                (0..rows).for_each(|r| self.erase(r, 0..cols));
+                // Like kitty, a full clear removes image placements.
+                self.images.clear_placements();
+            }
             _ => {}
         }
     }
@@ -158,6 +211,113 @@ impl State {
             2 => self.erase(row, 0..cols),
             _ => {}
         }
+    }
+
+    /// Runs an APC string; only kitty graphics (`G…`) are understood.
+    fn apc(&mut self, payload: &[u8]) {
+        let Some(body) = payload.strip_prefix(b"G") else {
+            return;
+        };
+        let mut ctx = kitty::Context {
+            store: &mut self.images,
+            cursor: (u32::from(self.cursor.col), i32::from(self.cursor.row)),
+            cell: self.cell,
+        };
+        let outcome = self.graphics.handle(body, &mut ctx);
+        if let Some(reply) = outcome.reply {
+            self.responses.extend_from_slice(&reply);
+        }
+        if let Some((cols, rows)) = outcome.advance {
+            self.advance_over_image(cols, rows);
+        }
+    }
+
+    /// Kitty cursor movement after a placement: right by `cols`, down by
+    /// `rows - 1` (scrolling as needed). Past the right edge the cursor
+    /// waits in the last column to wrap on the next print.
+    fn advance_over_image(&mut self, cols: u32, rows: u32) {
+        let rows = rows.min(u32::from(self.grid.size().rows()));
+        for _ in 1..rows {
+            self.line_feed();
+        }
+        let col = u32::from(self.cursor.col).saturating_add(cols);
+        if col > u32::from(self.last_col()) {
+            self.cursor.col = self.last_col();
+            self.wrap_pending = true;
+        } else {
+            self.cursor.col = col as u16;
+            self.wrap_pending = false;
+        }
+    }
+
+    /// Stores a finished sixel image and places it: at the cursor, moving
+    /// the cursor to the line below the image, or at the origin without
+    /// moving it when sixel scrolling is off (DECSDM).
+    fn finish_sixel(&mut self, decoder: SixelDecoder) {
+        let Some(image) = decoder.finish() else {
+            return;
+        };
+        let id = self.images.unused_id();
+        let (width, height) = (image.width, image.height);
+        let Some(key) = self.images.insert(id, 0, width, height, image.pixels) else {
+            return;
+        };
+        let (col, row) = if self.sixel_scrolling {
+            (self.cursor.col, self.cursor.row)
+        } else {
+            (0, 0)
+        };
+        self.images.place(Placement {
+            image: key,
+            id: 0,
+            row: i32::from(row),
+            col: u32::from(col),
+            offset_x: 0,
+            offset_y: 0,
+            src: SrcRect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
+            cols: 0,
+            rows: 0,
+            z: 0,
+        });
+        if self.sixel_scrolling {
+            let rows = self.cell.rows_for(height);
+            for _ in 0..rows.min(u32::from(self.grid.size().rows())) {
+                self.line_feed();
+            }
+        }
+    }
+
+    /// XTWINOPS size reports (`CSI 14/16/18 t`).
+    fn window_report(&mut self, what: u16) {
+        let size = self.grid.size();
+        let (width, height) = self.cell.text_area(size);
+        let reply = match what {
+            14 => format!("\x1b[4;{height};{width}t"),
+            16 => format!("\x1b[6;{};{}t", self.cell.height, self.cell.width),
+            18 => format!("\x1b[8;{};{}t", size.rows(), size.cols()),
+            _ => return,
+        };
+        self.responses.extend_from_slice(reply.as_bytes());
+    }
+
+    /// XTSMGRAPHICS (`CSI ? Pi ; Pa S`): reports color registers and the
+    /// largest sixel image; nothing can be changed.
+    fn graphics_attributes(&mut self, item: u16) {
+        let reply = match item {
+            1 => "\x1b[?1;0;256S".to_owned(),
+            2 => {
+                let (w, h) = self.cell.text_area(self.grid.size());
+                let (w, h) = (w.min(sixel::MAX_SIZE), h.min(sixel::MAX_SIZE));
+                format!("\x1b[?2;0;{w};{h}S")
+            }
+            n => format!("\x1b[?{n};1;0S"),
+        };
+        self.responses.extend_from_slice(reply.as_bytes());
     }
 
     fn sgr(&mut self, params: &vte::Params) {
@@ -266,6 +426,26 @@ impl vte::Perform for State {
         }
     }
 
+    fn hook(&mut self, params: &vte::Params, intermediates: &[u8], ignore: bool, action: char) {
+        self.sixel = None;
+        if action == 'q' && intermediates.is_empty() && !ignore {
+            let params: Vec<u16> = params.iter().map(|p| p[0]).collect();
+            self.sixel = Some(SixelDecoder::new(&params));
+        }
+    }
+
+    fn put(&mut self, byte: u8) {
+        if let Some(sixel) = &mut self.sixel {
+            sixel.put(byte);
+        }
+    }
+
+    fn unhook(&mut self) {
+        if let Some(sixel) = self.sixel.take() {
+            self.finish_sixel(sixel);
+        }
+    }
+
     fn csi_dispatch(
         &mut self,
         params: &vte::Params,
@@ -287,10 +467,16 @@ impl vte::Perform for State {
         let Cursor { col, row, .. } = self.cursor;
         match (private, action) {
             (true, 'h' | 'l') => {
-                if params.iter().any(|p| p[0] == 25) {
-                    self.cursor.visible = action == 'h';
+                for p in params.iter() {
+                    match p[0] {
+                        25 => self.cursor.visible = action == 'h',
+                        // DECSDM: set disables sixel scrolling.
+                        80 => self.sixel_scrolling = action == 'l',
+                        _ => {}
+                    }
                 }
             }
+            (true, 'S') => self.graphics_attributes(first),
             (true, _) => {}
             (false, 'A') => self.goto(col, row.saturating_sub(n)),
             (false, 'B') => self.goto(col, row.saturating_add(n)),
@@ -308,8 +494,9 @@ impl vte::Perform for State {
                 let reply = format!("\x1b[{};{}R", row + 1, col + 1);
                 self.responses.extend_from_slice(reply.as_bytes());
             }
-            // DA1: identify as a VT100 with advanced video option.
-            (false, 'c') if first == 0 => self.responses.extend_from_slice(b"\x1b[?1;2c"),
+            // DA1: a VT220 with sixel graphics (4) and ANSI color (22).
+            (false, 'c') if first == 0 => self.responses.extend_from_slice(b"\x1b[?62;4;22c"),
+            (false, 't') => self.window_report(first),
             _ => {}
         }
     }
@@ -609,7 +796,7 @@ mod tests {
     fn replies_to_primary_device_attributes() {
         let mut t = term(10, 3);
         t.advance(b"\x1b[c\x1b[0c");
-        assert_eq!(t.take_responses(), b"\x1b[?1;2c\x1b[?1;2c");
+        assert_eq!(t.take_responses(), b"\x1b[?62;4;22c\x1b[?62;4;22c");
     }
 
     #[test]
@@ -618,5 +805,195 @@ mod tests {
         t.advance(b"\x1b[6n");
         t.take_responses();
         assert!(t.take_responses().is_empty());
+    }
+
+    fn kitty_rgba(id: u32, w: u32, h: u32, extra: &str) -> Vec<u8> {
+        let data = crate::image::decode::tests::encode_base64(&[255; 4].repeat((w * h) as usize));
+        format!("\x1b_Ga=T,f=32,s={w},v={h},i={id}{extra};{data}\x1b\\").into_bytes()
+    }
+
+    fn sized(cols: u16, rows: u16) -> Terminal {
+        let mut t = term(cols, rows);
+        t.set_cell_pixels(10, 20);
+        t
+    }
+
+    #[test]
+    fn replies_to_window_size_queries() {
+        let mut t = sized(8, 3);
+        assert_eq!(t.cell_pixels(), CellPixels::new(10, 20));
+        t.advance(b"\x1b[14t\x1b[16t\x1b[18t");
+        assert_eq!(t.take_responses(), b"\x1b[4;60;80t\x1b[6;20;10t\x1b[8;3;8t");
+    }
+
+    #[test]
+    fn replies_to_sixel_graphics_attribute_queries() {
+        let mut t = sized(8, 3);
+        t.advance(b"\x1b[?1;1S\x1b[?2;1S\x1b[?3;1S");
+        assert_eq!(
+            t.take_responses(),
+            b"\x1b[?1;0;256S\x1b[?2;0;80;60S\x1b[?3;1;0S"
+        );
+    }
+
+    #[test]
+    fn kitty_image_is_placed_between_surrounding_text() {
+        let mut t = sized(10, 3);
+        let mut input = b"ab".to_vec();
+        input.extend(kitty_rgba(1, 15, 30, ""));
+        input.extend_from_slice(b"cd");
+        t.advance(&input);
+        assert_eq!(t.take_responses(), b"\x1b_Gi=1;OK\x1b\\");
+        let p = t.images().placements()[0];
+        assert_eq!((p.col, p.row), (2, 0));
+        // 15x30 px covers 2x2 cells: cursor moves right 2 and down 1.
+        assert_eq!(text(&t, 0), "ab");
+        assert_eq!(text(&t, 1), "    cd");
+        assert_eq!(pos(&t), (6, 1));
+    }
+
+    #[test]
+    fn kitty_sequences_split_across_reads_work() {
+        let mut t = sized(10, 3);
+        let input = kitty_rgba(2, 1, 1, ",C=1");
+        for chunk in input.chunks(3) {
+            t.advance(chunk);
+        }
+        assert_eq!(t.take_responses(), b"\x1b_Gi=2;OK\x1b\\");
+        assert_eq!(t.images().placements().len(), 1);
+        assert_eq!(pos(&t), (0, 0), "C=1 keeps the cursor");
+    }
+
+    #[test]
+    fn kitty_cursor_advance_past_the_edge_waits_to_wrap() {
+        let mut t = sized(4, 3);
+        t.advance(&kitty_rgba(1, 40, 20, ",q=2"));
+        assert_eq!(pos(&t), (3, 0));
+        t.advance(b"x");
+        assert_eq!(text(&t, 1), "x");
+    }
+
+    #[test]
+    fn kitty_image_at_bottom_scrolls_the_screen() {
+        let mut t = sized(4, 3);
+        t.advance(b"top\x1b[3;1H");
+        t.advance(&kitty_rgba(1, 10, 40, ""));
+        assert_eq!(text(&t, 0), "", "scrolled up one line");
+        assert_eq!(t.images().placements()[0].row, 1);
+        assert_eq!(pos(&t), (1, 2));
+    }
+
+    #[test]
+    fn placements_scroll_with_text_and_drop_off_the_top() {
+        let mut t = sized(4, 3);
+        // Two rows tall, anchored at the top.
+        t.advance(&kitty_rgba(1, 10, 40, ",C=1"));
+        t.advance(b"\x1b[3;1H\n");
+        assert_eq!(t.images().placements()[0].row, -1, "partly visible");
+        t.advance(b"\n");
+        assert!(t.images().placements().is_empty(), "fully scrolled off");
+        assert_eq!(t.images().len(), 1, "the image data stays");
+    }
+
+    #[test]
+    fn full_screen_clear_removes_placements_but_keeps_images() {
+        let mut t = sized(4, 3);
+        t.advance(&kitty_rgba(1, 10, 20, ""));
+        t.advance(b"\x1b[J");
+        assert_eq!(t.images().placements().len(), 1, "ED 0 keeps images");
+        t.advance(b"\x1b[2J");
+        assert!(t.images().placements().is_empty());
+        assert_eq!(t.images().len(), 1);
+        t.advance(b"\x1b_Ga=p,i=1\x1b\\\x1b[3J");
+        assert!(t.images().placements().is_empty());
+    }
+
+    #[test]
+    fn sixel_is_placed_at_cursor_and_moves_cursor_below() {
+        let mut t = sized(10, 5);
+        t.advance(b"\x1b[1;3H\x1bP0;1q#1;2;100;0;0!12~-!12~-!12~-!12~\x1b\\");
+        let p = t.images().placements()[0];
+        assert_eq!((p.col, p.row), (2, 0));
+        let image = t.images().image(p.image).unwrap();
+        assert_eq!((image.width, image.height), (12, 24));
+        assert_eq!(image.pixel(11, 23), [255, 0, 0, 255]);
+        // 24 px is 2 rows of 20 px: cursor ends on the row below.
+        assert_eq!(pos(&t), (2, 2));
+        assert!(t.take_responses().is_empty());
+    }
+
+    #[test]
+    fn sixel_at_bottom_scrolls_the_image_into_view() {
+        let mut t = sized(10, 3);
+        t.advance(b"\x1b[3;1H\x1bPq#1~-~-~-~-~-~-~\x1b\\x");
+        let p = t.images().placements()[0];
+        // 42 px = 3 rows; starts on row 2, three line feeds scroll 3.
+        assert_eq!(p.row, -1);
+        assert_eq!(pos(&t), (1, 2));
+        assert_eq!(text(&t, 2), "x");
+    }
+
+    #[test]
+    fn sixel_display_mode_pins_image_to_origin() {
+        let mut t = sized(10, 3);
+        t.advance(b"\x1b[?80h\x1b[2;2H\x1bPq#1~\x1b\\");
+        let p = t.images().placements()[0];
+        assert_eq!((p.col, p.row), (0, 0));
+        assert_eq!(pos(&t), (1, 1), "cursor does not move");
+        t.advance(b"\x1b[?80l\x1bPq#1~\x1b\\");
+        assert_eq!(pos(&t), (1, 2));
+    }
+
+    #[test]
+    fn other_dcs_strings_are_ignored() {
+        let mut t = sized(10, 3);
+        t.advance(b"\x1bP$qm\x1b\\\x1bP1$r\x1b\\ok");
+        assert!(t.images().is_empty());
+        assert_eq!(text(&t, 0), "ok");
+    }
+
+    /// Deterministic xorshift so failures reproduce.
+    fn noise(seed: &mut u64) -> u64 {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        *seed
+    }
+
+    #[test]
+    fn random_and_truncated_input_never_panics() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15;
+        let alphabet: &[u8] =
+            b"\x1b\x07\x18_PGq#!$-~?;=,0123456789aitTfpdsvxyzwhcrCXYIUmoS\\[]\"@^ \n\r";
+        for _ in 0..300 {
+            let mut t = sized(7, 4);
+            let len = (noise(&mut seed) % 400) as usize;
+            let bytes: Vec<u8> = (0..len)
+                .map(|_| {
+                    let r = noise(&mut seed);
+                    if r % 4 == 0 {
+                        (r >> 8) as u8
+                    } else {
+                        alphabet[(r >> 8) as usize % alphabet.len()]
+                    }
+                })
+                .collect();
+            t.advance(&bytes);
+            t.take_responses();
+            t.resize(TermSize::new(3, 2).unwrap());
+            t.advance(b"\x1b\\\x1b[2J");
+        }
+        let valid = [
+            kitty_rgba(1, 3, 3, ""),
+            b"\x1bP0;1;0q\"1;1;8;8#0;2;0;0;0#1;1;120;50;100#1!8~-!8~\x1b\\".to_vec(),
+        ];
+        for input in valid {
+            for cut in 0..input.len() {
+                let mut t = sized(5, 3);
+                t.advance(&input[..cut]);
+                t.advance(b"\x1b\\");
+                t.advance(&input[cut..]);
+            }
+        }
     }
 }

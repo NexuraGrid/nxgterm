@@ -15,8 +15,11 @@ nxg-pty = { path = "crates/nxg-pty" }
 nxg-render = { path = "crates/nxg-render" }
 nxg-config = { path = "crates/nxg-config" }
 # External crates, at versions that build on the MSRV (1.85).
+flate2 = "1"
 fontdb = "0.24"
+miniz_oxide = "0.8"
 notify = "8"
+png = "0.18"
 # 0.9.4 uses `cast_signed` (Rust 1.87) without declaring a rust-version.
 fontdue = "=0.9.3"
 portable-pty = "0.9"

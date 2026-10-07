@@ -7,6 +7,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+flate2.workspace = true
+png.workspace = true
 vte.workspace = true
 
 [lints]

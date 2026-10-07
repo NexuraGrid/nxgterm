@@ -9,7 +9,7 @@ mod shell;
 use std::fmt;
 use std::io::{self, Write};
 
-use nxg_core::TermSize;
+use nxg_core::WinSize;
 use nxg_core::fallback::{self, Attempt, Init};
 use nxg_core::ports::{ChildProcess, PtyControl, PtySession};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -36,7 +36,8 @@ impl std::error::Error for PtyError {}
 ///
 /// Unix: `$SHELL`, falling back to `/bin/sh`. Windows: PowerShell 7, then
 /// Windows PowerShell 5.1, then `%ComSpec%` (cmd.exe).
-pub fn spawn_shell(size: TermSize) -> Result<PtySession, PtyError> {
+pub fn spawn_shell(size: impl Into<WinSize>) -> Result<PtySession, PtyError> {
+    let size = size.into();
     #[cfg(windows)]
     let shell = shell::default_windows_shell();
     #[cfg(windows)]
@@ -55,9 +56,10 @@ pub struct ShellCommand {
 /// Spawns `shell` when given, otherwise the default shell (see
 /// [`spawn_shell`]).
 pub fn spawn_shell_with(
-    size: TermSize,
+    size: impl Into<WinSize>,
     shell: Option<&ShellCommand>,
 ) -> Result<PtySession, PtyError> {
+    let size = size.into();
     match shell {
         Some(shell) => spawn(size, || {
             let mut cmd = CommandBuilder::new(&shell.program);
@@ -69,15 +71,19 @@ pub fn spawn_shell_with(
 }
 
 /// Spawns `program` with `args`.
-pub fn spawn_command(size: TermSize, program: &str, args: &[&str]) -> Result<PtySession, PtyError> {
-    spawn(size, || {
+pub fn spawn_command(
+    size: impl Into<WinSize>,
+    program: &str,
+    args: &[&str],
+) -> Result<PtySession, PtyError> {
+    spawn(size.into(), || {
         let mut cmd = CommandBuilder::new(program);
         cmd.args(args);
         cmd
     })
 }
 
-fn spawn(size: TermSize, command: impl Fn() -> CommandBuilder) -> Result<PtySession, PtyError> {
+fn spawn(size: WinSize, command: impl Fn() -> CommandBuilder) -> Result<PtySession, PtyError> {
     let candidates: Vec<(&'static str, Init<'_, PtySession, String>)> = vec![
         ("native", Box::new(|| spawn_native(size, command()))),
         // Phase 6: ("winpty", ...) as the fallback for Windows Server 2016,
@@ -89,8 +95,11 @@ fn spawn(size: TermSize, command: impl Fn() -> CommandBuilder) -> Result<PtySess
 }
 
 /// Unix pty or Windows ConPTY through `portable-pty`.
-fn spawn_native(size: TermSize, mut cmd: CommandBuilder) -> Result<PtySession, String> {
+fn spawn_native(size: WinSize, mut cmd: CommandBuilder) -> Result<PtySession, String> {
     cmd.env("TERM", "xterm-256color");
+    // Lets programs (Yazi, chafa, timg) detect image protocol support.
+    cmd.env("TERM_PROGRAM", "nxgterm");
+    cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
     let pair = native_pty_system()
         .openpty(pty_size(size))
         .map_err(|e| e.to_string())?;
@@ -111,12 +120,13 @@ fn spawn_native(size: TermSize, mut cmd: CommandBuilder) -> Result<PtySession, S
     })
 }
 
-fn pty_size(size: TermSize) -> PtySize {
+fn pty_size(size: WinSize) -> PtySize {
+    let (pixel_width, pixel_height) = size.pixels();
     PtySize {
-        cols: size.cols(),
-        rows: size.rows(),
-        pixel_width: 0,
-        pixel_height: 0,
+        cols: size.cells.cols(),
+        rows: size.cells.rows(),
+        pixel_width,
+        pixel_height,
     }
 }
 
@@ -137,7 +147,7 @@ impl Write for NativeControl {
 }
 
 impl PtyControl for NativeControl {
-    fn resize(&mut self, size: TermSize) -> io::Result<()> {
+    fn resize(&mut self, size: WinSize) -> io::Result<()> {
         self.master.resize(pty_size(size)).map_err(io::Error::other)
     }
 }

@@ -11,7 +11,7 @@ use std::thread;
 use nxg_config::{Backend, Config};
 use nxg_core::fallback::{self, Init};
 use nxg_core::ports::{ChildProcess, PtyControl, RenderError, Renderer};
-use nxg_core::{TermSize, Terminal};
+use nxg_core::{CellPixels, TermSize, Terminal, WinSize};
 use nxg_pty::ShellCommand;
 use nxg_render::{
     CellSize, CpuWindowRenderer, FontError, FontFaces, GpuRenderer, Layout, Style, WindowRenderer,
@@ -104,16 +104,24 @@ impl App {
         let mut renderer = select_renderer(&window, &style, config.renderer.backend)?;
         let pixels = window.inner_size();
         renderer.resize(pixels.width, pixels.height);
-        let size = layout(renderer.as_ref(), padding).grid_size(pixels.width, pixels.height);
+        let layout = layout(renderer.as_ref(), padding);
+        let size = layout.grid_size(pixels.width, pixels.height);
+        let cell = CellPixels::new(layout.cell.width, layout.cell.height);
 
         let shell = config.shell.program.clone().map(|program| ShellCommand {
             program,
             args: config.shell.args.clone(),
         });
-        let pty = nxg_pty::spawn_shell_with(size, shell.as_ref())?;
+        let win_size = WinSize {
+            cells: size,
+            cell: Some(cell),
+        };
+        let pty = nxg_pty::spawn_shell_with(win_size, shell.as_ref())?;
         spawn_reader(pty.reader, self.proxy.clone());
         spawn_waiter(pty.child, self.proxy.clone());
 
+        let mut terminal = Terminal::new(size);
+        terminal.set_cell_pixels(cell.width, cell.height);
         Ok(Session {
             window,
             renderer,
@@ -121,7 +129,7 @@ impl App {
             font_size: config.font.size,
             scale,
             padding,
-            terminal: Terminal::new(size),
+            terminal,
             skipped_frames: 0,
             pty: pty.control,
         })
@@ -310,16 +318,26 @@ impl Session {
     }
 
     /// Resizes the terminal and the pty to what fits the window with the
-    /// active renderer's cell size and the padding.
+    /// active renderer's cell size and the padding, and tells both the
+    /// cell size in pixels (images and size reports depend on it).
     fn sync_grid_size(&mut self) {
         let pixels = self.window.inner_size();
-        let size =
-            layout(self.renderer.as_ref(), self.padding).grid_size(pixels.width, pixels.height);
+        let layout = layout(self.renderer.as_ref(), self.padding);
+        let size = layout.grid_size(pixels.width, pixels.height);
+        let cell = CellPixels::new(layout.cell.width, layout.cell.height);
+        if size == self.terminal.size() && cell == self.terminal.cell_pixels() {
+            return;
+        }
         if size != self.terminal.size() {
             self.terminal.resize(size);
-            if let Err(error) = self.pty.resize(size) {
-                eprintln!("nxgterm: pty resize failed: {error}");
-            }
+        }
+        self.terminal.set_cell_pixels(cell.width, cell.height);
+        let win_size = WinSize {
+            cells: size,
+            cell: Some(cell),
+        };
+        if let Err(error) = self.pty.resize(win_size) {
+            eprintln!("nxgterm: pty resize failed: {error}");
         }
     }
 }

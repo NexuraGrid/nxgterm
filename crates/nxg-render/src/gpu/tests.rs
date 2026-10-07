@@ -11,6 +11,7 @@ use super::device::Gpu;
 use super::painter::Painter;
 use crate::font::{DEFAULT_PX, Font};
 use crate::frame::Frame;
+use crate::images::tests::encode_base64;
 use crate::palette::{Palette, rgb};
 use crate::renderer::CpuRenderer;
 use crate::style::Style;
@@ -122,6 +123,8 @@ fn gpu_output_matches_cpu_renderer() {
     };
     let mut cpu = CpuRenderer::new(style(cpu_font));
     let cell = cpu.cell_size();
+    term.set_cell_pixels(cell.width, cell.height);
+    add_images(&mut term);
     // A margin right and below the padded grid checks the clear color too.
     let (w, h) = cpu.layout().window_size(term.size());
     let (w, h) = (w + 3, h + 2);
@@ -150,6 +153,64 @@ fn gpu_output_matches_cpu_renderer() {
     );
     let inked = actual.iter().filter(|&&p| p != palette.background).count();
     assert!(inked > 100, "frame should contain text and backgrounds");
+}
+
+/// A `w x h` gradient with varying alpha, so scaling, sampling and
+/// blending all show up in the pixels.
+fn gradient(w: u32, h: u32, alpha: u8) -> Vec<u8> {
+    let mut out = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            out.extend_from_slice(&[(x * 37) as u8, (y * 53) as u8, (x * y * 11) as u8, alpha]);
+        }
+    }
+    out
+}
+
+/// Image placements covering every path: below text with alpha, above
+/// text scaled to cells, and one running past the grid into the padding.
+fn add_images(term: &mut Terminal) {
+    let image = |id: u32, w: u32, h: u32, alpha: u8| {
+        let data = encode_base64(&gradient(w, h, alpha));
+        format!("\x1b_Ga=t,f=32,s={w},v={h},i={id},q=2;{data}\x1b\\")
+    };
+    let input = [
+        image(1, 7, 5, 160),
+        image(2, 3, 2, 255),
+        "\x1b[1;1H\x1b_Ga=p,i=1,c=3,r=2,z=-1,C=1,q=2\x1b\\".into(),
+        "\x1b[2;5H\x1b_Ga=p,i=2,c=2,r=1,C=1,q=2\x1b\\".into(),
+        "\x1b[3;7H\x1b_Ga=p,i=1,X=3,Y=2,C=1,q=2\x1b\\".into(),
+        "\x1b[3;7H\x1b_Ga=p,i=2,c=4,r=4,C=1,z=2,q=2\x1b\\".into(),
+    ];
+    term.advance(input.concat().as_bytes());
+    assert_eq!(term.images().placements().len(), 4);
+}
+
+#[test]
+fn image_textures_follow_the_terminal_images() {
+    let Some(gpu) = headless_gpu() else { return };
+    let Ok(font) = Font::system(DEFAULT_PX) else {
+        eprintln!("skipping GPU test: no system monospace font");
+        return;
+    };
+    let style = Style {
+        font,
+        palette: Palette::default(),
+        padding: 0,
+    };
+    let mut painter = Painter::new(&gpu, FORMAT, style);
+    let mut term = Terminal::new(TermSize::new(4, 2).unwrap());
+    let data = encode_base64(&[255, 0, 0, 255]);
+    term.advance(format!("\x1b[?25l\x1b_Ga=T,s=1,v=1,i=1,c=1,r=1;{data}\x1b\\").as_bytes());
+    let cell = painter.cell_size();
+    let first = render_offscreen(&gpu, &mut painter, &term, cell.width * 4, cell.height * 2);
+    assert_eq!(painter.texture_count(), 1);
+    assert!(first.contains(&rgb(255, 0, 0)));
+    term.advance(b"\x1b_Ga=d,d=I,i=1\x1b\\");
+    let second = render_offscreen(&gpu, &mut painter, &term, cell.width * 4, cell.height * 2);
+    assert_eq!(painter.texture_count(), 0, "texture freed with its image");
+    assert!(!second.contains(&rgb(255, 0, 0)));
+    assert_eq!(gpu.failure(), None);
 }
 
 #[test]

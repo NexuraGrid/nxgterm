@@ -15,6 +15,7 @@ pub mod cpu_window;
 pub mod font;
 pub mod frame;
 pub mod gpu;
+pub mod images;
 pub mod paint;
 pub mod palette;
 pub mod renderer;

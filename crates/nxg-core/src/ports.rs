@@ -3,14 +3,16 @@
 use std::fmt;
 use std::io::{self, Read, Write};
 
-use crate::{TermSize, Terminal};
+use crate::{Terminal, WinSize};
 
 /// The writable half of a pseudo-terminal: child input and resizing.
 ///
 /// Lives on the UI thread while the [`PtySession::reader`] is drained on a
 /// background thread.
 pub trait PtyControl: Write + Send {
-    fn resize(&mut self, size: TermSize) -> io::Result<()>;
+    /// Resizes the pty; the cell pixel size lets the child compute image
+    /// sizes (`TIOCGWINSZ` pixel fields).
+    fn resize(&mut self, size: WinSize) -> io::Result<()>;
 }
 
 /// The child process attached to a pseudo-terminal.

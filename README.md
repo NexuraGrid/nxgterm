@@ -96,13 +96,28 @@ These are handled by the terminal and never reach the shell.
 | `NXGTERM_CONFIG` | Config file path |
 | `NXGTERM_RENDERER` | `auto`, `gpu` or `cpu`; overrides `[renderer] backend` |
 
+## Images
+
+nxgterm shows inline images from programs such as Yazi, `kitten icat`,
+`chafa`, `timg` and `img2sixel`:
+
+- Kitty graphics protocol: transmit, display, place, delete and query;
+  PNG, RGB and RGBA data, sent directly (chunked, optionally zlib
+  compressed), from a file or from a temporary file. Unicode placeholders
+  (needed inside multiplexers) and animation are not supported yet.
+- Sixel, with sixel scrolling (DECSDM) and the VT340 palette.
+
+Child processes see `TERM_PROGRAM=nxgterm` and the pixel size of the
+window (`TIOCGWINSZ`, `CSI 14/16/18 t`). Decoded images are capped at
+256 MiB; the oldest are evicted first.
+
 ## Roadmap
 
 1. Workspace skeleton and CI ✅
 2. Window + PTY + text (CPU renderer) ✅
 3. GPU renderer with automatic fallback ✅
 4. Configuration, themes, fonts ✅
-5. Images: Kitty graphics protocol and Sixel
+5. Images: Kitty graphics protocol and Sixel ✅
 6. winpty fallback for Windows Server 2016
 7. Packages (AUR, deb, rpm, winget, Homebrew) and the tools profile
    (Yazi, zoxide, ngmux, Bruno CLI, curl)

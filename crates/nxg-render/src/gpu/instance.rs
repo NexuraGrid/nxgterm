@@ -45,6 +45,15 @@ pub struct GlyphSlot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AtlasFull;
 
+/// One frame's quads plus where the cell backgrounds end, so images with
+/// `z < 0` can be drawn between the backgrounds and the text.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Quads {
+    pub instances: Vec<Instance>,
+    /// `instances[..backgrounds]` are the cell backgrounds.
+    pub backgrounds: usize,
+}
+
 /// Builds the quads for one frame, in draw order: cell backgrounds, the
 /// cursor, then glyphs, offset by the layout's padding. Mirrors [`crate::CpuRenderer::render`] pixel for
 /// pixel; the default background comes from the clear color instead.
@@ -57,7 +66,7 @@ pub fn build<F>(
     layout: Layout,
     baseline: i32,
     glyph: F,
-) -> Result<Vec<Instance>, AtlasFull>
+) -> Result<Quads, AtlasFull>
 where
     F: FnMut(char, bool) -> Result<Option<GlyphSlot>, AtlasFull>,
 {
@@ -87,6 +96,7 @@ where
         }
     }
 
+    let backgrounds = instances.len();
     let cursor = term.cursor();
     if cursor.visible {
         instances.push(solid(
@@ -117,7 +127,10 @@ where
             });
         }
     }
-    Ok(instances)
+    Ok(Quads {
+        instances,
+        backgrounds,
+    })
 }
 
 /// Serializes instances in native byte order for the vertex buffer.
@@ -188,7 +201,9 @@ mod tests {
     #[test]
     fn blank_default_screen_with_hidden_cursor_is_empty() {
         let term = term(3, 2, b"\x1b[?25l");
-        let instances = build(&term, &Palette::default(), FLUSH, BASELINE, slot).unwrap();
+        let instances = build(&term, &Palette::default(), FLUSH, BASELINE, slot)
+            .unwrap()
+            .instances;
         assert!(instances.is_empty());
     }
 
@@ -196,7 +211,9 @@ mod tests {
     fn non_default_backgrounds_and_cursor_become_solid_quads() {
         let palette = Palette::default();
         let term = term(3, 2, b"\x1b[41m \x1b[0m\r\n");
-        let instances = build(&term, &palette, FLUSH, BASELINE, slot).unwrap();
+        let instances = build(&term, &palette, FLUSH, BASELINE, slot)
+            .unwrap()
+            .instances;
         assert_eq!(
             instances,
             [solid(0, 0, palette.ansi[1]), solid(0, 20, palette.cursor)]
@@ -207,7 +224,9 @@ mod tests {
     fn glyphs_are_placed_like_the_cpu_renderer() {
         let palette = Palette::default();
         let term = term(3, 2, b"\x1b[?25l\r\n xy");
-        let instances = build(&term, &palette, FLUSH, BASELINE, slot).unwrap();
+        let instances = build(&term, &palette, FLUSH, BASELINE, slot)
+            .unwrap()
+            .instances;
         // top = y + baseline - ymin - height = 20 + 15 - 2 - 6
         let glyph = |x: i32, ch: char| Instance {
             pos: [x + 1, 27],
@@ -227,7 +246,9 @@ mod tests {
             cell: CELL,
             padding: 5,
         };
-        let instances = build(&term, &palette, layout, BASELINE, slot).unwrap();
+        let instances = build(&term, &palette, layout, BASELINE, slot)
+            .unwrap()
+            .instances;
         assert_eq!(instances[0], solid(5, 5, palette.ansi[1]));
         assert_eq!(instances[1], solid(15, 5, palette.cursor));
         // top = padding + baseline - ymin - height = 5 + 15 - 2 - 6
@@ -238,7 +259,9 @@ mod tests {
     fn bold_uses_bold_face_and_bright_color() {
         let palette = Palette::default();
         let term = term(2, 1, b"\x1b[?25l\x1b[1;31mB");
-        let instances = build(&term, &palette, FLUSH, BASELINE, slot).unwrap();
+        let instances = build(&term, &palette, FLUSH, BASELINE, slot)
+            .unwrap()
+            .instances;
         assert_eq!(instances.len(), 1);
         assert_eq!(instances[0].uv, ['B' as u32, 1]);
         assert_eq!(instances[0].color, palette.ansi[9]);
@@ -248,7 +271,9 @@ mod tests {
     fn inverse_swaps_colors() {
         let palette = Palette::default();
         let term = term(2, 1, b"\x1b[?25l\x1b[7mI");
-        let instances = build(&term, &palette, FLUSH, BASELINE, slot).unwrap();
+        let instances = build(&term, &palette, FLUSH, BASELINE, slot)
+            .unwrap()
+            .instances;
         assert_eq!(instances[0], solid(0, 0, palette.foreground));
         assert_eq!(instances[1].color, palette.background);
     }
@@ -257,7 +282,9 @@ mod tests {
     fn glyph_under_cursor_takes_cell_background_after_cursor_quad() {
         let palette = Palette::default();
         let term = term(2, 1, b"C\x1b[D");
-        let instances = build(&term, &palette, FLUSH, BASELINE, slot).unwrap();
+        let instances = build(&term, &palette, FLUSH, BASELINE, slot)
+            .unwrap()
+            .instances;
         assert_eq!(instances[0], solid(0, 0, palette.cursor));
         assert_eq!(instances[1].kind, KIND_GLYPH);
         assert_eq!(instances[1].color, palette.background);
@@ -271,7 +298,8 @@ mod tests {
             asked.push(ch);
             Ok(None)
         })
-        .unwrap();
+        .unwrap()
+        .instances;
         assert!(instances.is_empty());
         assert_eq!(asked, ['a', 'b']);
     }
@@ -283,6 +311,15 @@ mod tests {
             Err(AtlasFull)
         });
         assert_eq!(result, Err(AtlasFull));
+    }
+
+    #[test]
+    fn counts_background_quads_before_cursor_and_glyphs() {
+        let palette = Palette::default();
+        let term = term(3, 1, b"\x1b[41mab\x1b[0m");
+        let quads = build(&term, &palette, FLUSH, BASELINE, slot).unwrap();
+        assert_eq!(quads.backgrounds, 2);
+        assert_eq!(quads.instances[2], solid(20, 0, palette.cursor));
     }
 
     #[test]
