@@ -93,6 +93,9 @@ pub struct Placement {
     pub rows: u32,
     /// Below text when negative, above it otherwise.
     pub z: i32,
+    /// Placed by Sixel rather than kitty: text or erasing written over
+    /// any of its cells removes it, as sixel pixels are part of the cells.
+    pub sixel: bool,
 }
 
 impl Placement {
@@ -181,6 +184,7 @@ mod tests {
             cols,
             rows,
             z: 0,
+            sixel: false,
         }
     }
 

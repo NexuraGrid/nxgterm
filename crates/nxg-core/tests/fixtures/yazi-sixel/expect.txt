@@ -1,0 +1,21 @@
+# yazi with sixel previews on a.png, b.png and c.txt: each new preview
+# blanks the previous image with spaces, which must remove its placement
+[start]
+alt true
+images 1
+
+[second]
+alt true
+images 1
+
+[third]
+alt true
+images 0
+
+[back]
+alt true
+images 1
+
+[end]
+alt false
+images 0

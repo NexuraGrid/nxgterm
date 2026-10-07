@@ -278,6 +278,7 @@ fn place(cmd: &Command, key: u64, ctx: &mut Context<'_>) -> Option<(u32, u32)> {
         cols: cmd.cols,
         rows: cmd.rows,
         z: cmd.z,
+        sixel: false,
     };
     ctx.store.place(placement);
     (!cmd.cursor_fixed).then(|| placement.span(ctx.cell))

@@ -24,6 +24,8 @@ struct Section {
     alt: Option<bool>,
     cursor: Option<(u16, u16)>,
     visible: Option<bool>,
+    /// Image placements on the active screen.
+    images: Option<usize>,
     rows: Vec<(u16, String)>,
 }
 
@@ -93,6 +95,7 @@ fn parse_expect(text: &str) -> Result<Vec<Section>, String> {
                         .map_err(|_| bad("visible true|false"))?,
                 )
             }
+            "images" => section.images = Some(value.trim().parse().map_err(|_| bad("images N"))?),
             "row" => {
                 let (idx, quoted) = value
                     .split_once(':')
@@ -134,7 +137,8 @@ fn check(term: &Terminal, section: &Section) -> Result<(), String> {
         differs("cursor", (cursor.col, cursor.row), section.cursor),
         differs("visible", cursor.visible, section.visible),
     ];
-    if let Some(msg) = scalars.into_iter().flatten().next() {
+    let images = differs("images", term.images().placements().len(), section.images);
+    if let Some(msg) = scalars.into_iter().flatten().chain(images).next() {
         return fail(msg);
     }
     for (idx, want) in &section.rows {
@@ -149,11 +153,16 @@ fn check(term: &Terminal, section: &Section) -> Result<(), String> {
     Ok(())
 }
 
+/// Cell size of the 800x384 px, 80x24 capture pty, so images span the
+/// same cells as in the recording.
+const CELL_PIXELS: (u32, u32) = (10, 16);
+
 /// Feeds `stream` into an 80x24 terminal and checks every section. A section
 /// whose checkpoint never occurs is an error, so a typo cannot pass silently.
 fn replay(stream: &[u8], expect: &str) -> Result<(), String> {
     let sections = parse_expect(expect)?;
     let mut term = Terminal::new(TermSize::new(80, 24).unwrap());
+    term.set_cell_pixels(CELL_PIXELS.0, CELL_PIXELS.1);
     let mut seen = vec![false; sections.len()];
     for seg in split_stream(stream)? {
         term.advance(&seg.data);
@@ -250,7 +259,7 @@ mod tests {
 
     #[test]
     fn expect_parses_every_directive() {
-        let text = "# comment\n[a]\nsize 5 3\nalt true\ncursor 2,1\nvisible false\nrow 0: \"hi  \"\nrow 2: \"\"\n\n[end]\nalt false\n";
+        let text = "# comment\n[a]\nsize 5 3\nalt true\ncursor 2,1\nvisible false\nimages 2\nrow 0: \"hi  \"\nrow 2: \"\"\n\n[end]\nalt false\n";
         let sections = parse_expect(text).unwrap();
         assert_eq!(sections.len(), 2);
         let a = &sections[0];
@@ -259,6 +268,7 @@ mod tests {
         assert_eq!(a.alt, Some(true));
         assert_eq!(a.cursor, Some((2, 1)));
         assert_eq!(a.visible, Some(false));
+        assert_eq!(a.images, Some(2));
         // Trailing blanks in the expectation are trimmed like the screen text.
         assert_eq!(a.rows, vec![(0, "hi".to_string()), (2, String::new())]);
         assert_eq!(sections[1].label, "end");
@@ -292,6 +302,7 @@ mod tests {
             "[m]\nalt true\n",
             "[m]\nvisible false\n",
             "[m]\nsize 81 24\n",
+            "[m]\nimages 1\n",
         ] {
             let err = replay(&stream, bad).unwrap_err();
             assert!(err.contains("[m]"), "{bad:?} -> {err}");
@@ -348,6 +359,11 @@ mod tests {
     #[test]
     fn yazi_session_replays() {
         replay_fixture("yazi");
+    }
+
+    #[test]
+    fn yazi_sixel_previews_are_replaced_and_cleared() {
+        replay_fixture("yazi-sixel");
     }
 
     #[test]
