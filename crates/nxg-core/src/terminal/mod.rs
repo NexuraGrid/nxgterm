@@ -15,6 +15,7 @@ mod scrollback;
 mod testing;
 
 pub use modes::Modes;
+use modes::MouseModes;
 use screen::Screen;
 pub use scrollback::DEFAULT_SCROLLBACK;
 use scrollback::Scrollback;
@@ -77,6 +78,8 @@ struct State {
     last_char: Option<char>,
     /// Lines scrolled off the main screen and the viewport over them.
     scrollback: Scrollback,
+    /// Mouse reporting and alternate scroll modes.
+    mouse: MouseModes,
 }
 
 impl Terminal {
@@ -100,6 +103,7 @@ impl Terminal {
                 app_cursor_keys: false,
                 last_char: None,
                 scrollback: Scrollback::new(DEFAULT_SCROLLBACK),
+                mouse: MouseModes::default(),
             },
         }
     }

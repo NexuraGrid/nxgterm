@@ -9,6 +9,7 @@ pub mod fallback;
 pub mod grid;
 pub mod image;
 pub mod kitty;
+pub mod mouse;
 pub mod ports;
 pub mod sixel;
 pub mod size;

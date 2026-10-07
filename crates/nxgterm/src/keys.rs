@@ -138,6 +138,7 @@ mod tests {
         let modes = Modes {
             app_cursor_keys: true,
             alt_screen: true,
+            ..Modes::default()
         };
         let bytes = encode(
             &Key::Character("a".into()),
@@ -150,6 +151,7 @@ mod tests {
         let alt_only = Modes {
             app_cursor_keys: false,
             alt_screen: true,
+            ..Modes::default()
         };
         let up = encode(
             &Key::Named(NamedKey::ArrowUp),

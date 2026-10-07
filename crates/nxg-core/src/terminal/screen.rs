@@ -116,6 +116,7 @@ impl State {
         self.sixel_scrolling = true;
         self.autowrap = true;
         self.app_cursor_keys = false;
+        self.mouse = Default::default();
         self.last_char = None;
         self.sixel = None;
         self.graphics = Graphics::new();
