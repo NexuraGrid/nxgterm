@@ -10,9 +10,10 @@
 //!   type <text>               keystrokes; escapes \e \r \n \t \\ \xNN
 //!   mark <label>              write an `nxg-checkpoint` marker into the stream
 //!
-//! The child runs at 80x24 with TERM=xterm-256color. Its terminal queries are
-//! answered by a real `nxg_core::Terminal`, so programs that probe the
-//! terminal (yazi) do not stall. Output is scrubbed of HOME, user, host and
+//! The child runs at 80x24 (800x384 px, so yazi enables sixel previews) with
+//! TERM=xterm-256color. Its terminal queries are answered by a real
+//! `nxg_core::Terminal`, so programs that probe the terminal (yazi) do not
+//! stall. Output is scrubbed of HOME, user, host and
 //! cwd with same-length substitutions, so cursor columns stay valid.
 
 use std::io::{Read, Write};
@@ -141,8 +142,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pair = native_pty_system().openpty(PtySize {
         rows: 24,
         cols: 80,
-        pixel_width: 0,
-        pixel_height: 0,
+        pixel_width: 800,
+        pixel_height: 384,
     })?;
     let mut cmd = CommandBuilder::new(&script.program[0]);
     cmd.args(&script.program[1..]);

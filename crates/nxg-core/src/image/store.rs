@@ -212,6 +212,24 @@ impl ImageStore {
         }
     }
 
+    /// Removes the sixel placements covering any of `cols` on `row`, which
+    /// text or an erase just overwrote, freeing their images. Kitty
+    /// placements are left alone. Cheap when no sixel is on screen, since
+    /// printing calls it for every glyph.
+    pub fn remove_sixels_over(&mut self, row: u16, cols: std::ops::Range<u16>, cell: CellPixels) {
+        if !self.placements.iter().any(|p| p.sixel) {
+            return;
+        }
+        let (row, start, end) = (i64::from(row), u32::from(cols.start), u32::from(cols.end));
+        self.remove_placements(true, |p| {
+            let (span_cols, span_rows) = p.span(cell);
+            p.sixel
+                && (i64::from(p.row)..i64::from(p.row) + i64::from(span_rows)).contains(&row)
+                && p.col < end
+                && start < p.col.saturating_add(span_cols)
+        });
+    }
+
     /// Removes every placement, keeping the images (screen clear).
     pub fn clear_placements(&mut self) {
         self.placements.clear();
@@ -309,6 +327,7 @@ mod tests {
             cols: 0,
             rows: 0,
             z: 0,
+            sixel: false,
         }
     }
 

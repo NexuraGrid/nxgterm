@@ -175,9 +175,9 @@ impl State {
     pub(super) fn erase_chars(&mut self, n: u16) {
         let blank = self.blank();
         let (col, row) = (self.screen.col, self.screen.row);
-        self.screen
-            .grid
-            .erase_cells(row, col..col.saturating_add(n), blank);
+        let cols = col..col.saturating_add(n);
+        self.screen.grid.erase_cells(row, cols.clone(), blank);
+        self.images.remove_sixels_over(row, cols, self.cell);
         self.screen.wrap_pending = false;
     }
 
@@ -213,10 +213,11 @@ impl State {
         }
     }
 
-    /// Fills `cols` of `row` with blanks.
+    /// Fills `cols` of `row` with blanks, removing the sixels under them.
     pub(super) fn erase(&mut self, row: u16, cols: std::ops::Range<u16>) {
         let blank = self.blank();
         self.screen.grid.row_mut(row)[usize::from(cols.start)..usize::from(cols.end)].fill(blank);
+        self.images.remove_sixels_over(row, cols, self.cell);
     }
 
     pub(super) fn erase_display(&mut self, mode: u16) {

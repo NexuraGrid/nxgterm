@@ -249,6 +249,7 @@ impl State {
             cols: 0,
             rows: 0,
             z: 0,
+            sixel: true,
         });
         if self.sixel_scrolling {
             let rows = self.cell.rows_for(height);
@@ -372,6 +373,7 @@ impl vte::Perform for State {
         }
         let (col, row) = (self.screen.col, self.screen.row);
         self.screen.grid.row_mut(row)[usize::from(col)] = Cell { ch, ..self.pen };
+        self.images.remove_sixels_over(row, col..col + 1, self.cell);
         self.last_char = Some(ch);
         // Without autowrap the last column is overwritten in place.
         self.screen.wrap_pending = col == self.last_col() && self.autowrap;
@@ -1017,6 +1019,66 @@ mod tests {
         assert_eq!(pos(&t), (1, 1), "cursor does not move");
         t.advance(b"\x1b[?80l\x1bPq#1~\x1b\\");
         assert_eq!(pos(&t), (1, 2));
+    }
+
+    /// A 10x5 terminal with a 30x40 px sixel (3 cols, 2 rows) at row 1, col 2.
+    fn with_sixel() -> crate::Terminal {
+        let mut t = sized(10, 5);
+        t.advance(b"\x1b[2;3H\x1bPq\"1;1;30;40#1~\x1b\\");
+        assert_eq!(t.images().placements().len(), 1);
+        t
+    }
+
+    #[test]
+    fn text_over_a_sixel_removes_it() {
+        let mut t = with_sixel();
+        t.advance(b"\x1b[s\x1b[3;3H   \x1b[u");
+        assert!(t.images().placements().is_empty());
+        assert!(t.images().is_empty(), "the orphaned sixel image is freed");
+    }
+
+    #[test]
+    fn text_beside_a_sixel_keeps_it() {
+        let mut t = with_sixel();
+        t.advance(b"\x1b[2;1Hab\x1b[2;6Hx\x1b[4;3Hyyy");
+        assert_eq!(t.images().placements().len(), 1);
+    }
+
+    #[test]
+    fn erase_in_line_over_a_sixel_removes_it() {
+        let mut t = with_sixel();
+        t.advance(b"\x1b[2;6H\x1b[K");
+        assert_eq!(t.images().placements().len(), 1, "EL 0 right of it");
+        t.advance(b"\x1b[3;1H\x1b[1K");
+        assert_eq!(t.images().placements().len(), 1, "EL 1 left of it");
+        t.advance(b"\x1b[3;5H\x1b[K");
+        assert!(t.images().placements().is_empty());
+    }
+
+    #[test]
+    fn erase_in_display_over_a_sixel_removes_it() {
+        let mut t = with_sixel();
+        t.advance(b"\x1b[4;1H\x1b[J");
+        assert_eq!(t.images().placements().len(), 1, "ED 0 below it");
+        t.advance(b"\x1b[1J");
+        assert!(t.images().placements().is_empty());
+    }
+
+    #[test]
+    fn erase_chars_over_a_sixel_removes_it() {
+        let mut t = with_sixel();
+        t.advance(b"\x1b[2;1H\x1b[2X");
+        assert_eq!(t.images().placements().len(), 1, "ECH stops short of it");
+        t.advance(b"\x1b[3X");
+        assert!(t.images().placements().is_empty());
+    }
+
+    #[test]
+    fn kitty_placements_survive_text_and_erase() {
+        let mut t = sized(10, 5);
+        t.advance(&kitty_rgba(1, 30, 40, ",C=1"));
+        t.advance(b"\x1b[1;1Hxyz\x1b[2;1H\x1b[K\x1b[1;1H\x1b[3X");
+        assert_eq!(t.images().placements().len(), 1);
     }
 
     #[test]
