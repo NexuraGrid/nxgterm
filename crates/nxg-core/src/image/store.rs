@@ -202,6 +202,12 @@ impl ImageStore {
         self.placements.clear();
     }
 
+    /// Forgets every placement, stashed ones included (RIS). Image data stays.
+    pub fn reset_placements(&mut self) {
+        self.placements.clear();
+        self.inactive.clear();
+    }
+
     /// Hides the placements of the screen being left (alternate screen
     /// entry); the new screen starts with none.
     pub fn stash_placements(&mut self) {
@@ -212,6 +218,37 @@ impl ImageStore {
     /// being left placed.
     pub fn restore_placements(&mut self) {
         self.placements = std::mem::take(&mut self.inactive);
+    }
+
+    /// Region scroll up for a partial scroll region `top..=bottom`. Only
+    /// placements anchored inside the span move; they are dropped once their
+    /// bottom edge is at or above `top`. Placements outside never move, so a
+    /// shifted one may overlap rows above the region until it is fully out.
+    pub fn scroll_region_up(&mut self, top: u16, bottom: u16, lines: u32, cell: CellPixels) {
+        let lines = i32::try_from(lines).unwrap_or(i32::MAX);
+        let span = i32::from(top)..=i32::from(bottom);
+        self.placements.retain_mut(|p| {
+            if !span.contains(&p.row) {
+                return true;
+            }
+            p.row = p.row.saturating_sub(lines);
+            let (_, rows) = p.span(cell);
+            i64::from(p.row) + i64::from(rows) > i64::from(top)
+        });
+    }
+
+    /// Region scroll down: inside placements move down and are dropped when
+    /// their anchor passes `bottom`.
+    pub fn scroll_region_down(&mut self, top: u16, bottom: u16, lines: u32) {
+        let lines = i32::try_from(lines).unwrap_or(i32::MAX);
+        let span = i32::from(top)..=i32::from(bottom);
+        self.placements.retain_mut(|p| {
+            if !span.contains(&p.row) {
+                return true;
+            }
+            p.row = p.row.saturating_add(lines);
+            p.row <= i32::from(bottom)
+        });
     }
 
     /// Moves placements up `lines` rows as the grid scrolls, dropping the
@@ -337,6 +374,65 @@ mod tests {
         store.scroll_up(1, CELL);
         assert_eq!(store.placements().len(), 1);
         assert_eq!(store.placements()[0].row, 1);
+    }
+
+    fn rows_of(store: &ImageStore) -> Vec<i32> {
+        store.placements().iter().map(|p| p.row).collect()
+    }
+
+    fn placed_at(rows: &[i32]) -> ImageStore {
+        let mut store = ImageStore::default();
+        let key = store.insert(1, 0, 2, 2, pixels(2, 2)).unwrap();
+        for &row in rows {
+            store.place(at(key, 0, row, 0));
+        }
+        store
+    }
+
+    #[test]
+    fn region_scroll_up_moves_only_placements_inside_the_span() {
+        // Region rows 2..=5: row 1 is above it and stays, row 4 moves up.
+        let mut store = placed_at(&[1, 4]);
+        store.scroll_region_up(2, 5, 1, CELL);
+        assert_eq!(rows_of(&store), [1, 3]);
+    }
+
+    #[test]
+    fn region_scroll_up_drops_placements_that_leave_the_span() {
+        // 20px tall placements span two rows; anchored at the top row of
+        // the region, one line up leaves a single visible row, two leave none.
+        let mut store = placed_at(&[2, 5, 8]);
+        store.scroll_region_up(2, 5, 1, CELL);
+        assert_eq!(rows_of(&store), [1, 4, 8], "a partly visible one stays");
+        let mut store = placed_at(&[2, 5, 8]);
+        store.scroll_region_up(2, 5, 2, CELL);
+        assert_eq!(rows_of(&store), [3, 8], "the one fully above the top goes");
+    }
+
+    #[test]
+    fn region_scroll_down_moves_inside_placements_and_drops_past_the_bottom() {
+        let mut store = placed_at(&[1, 3, 5]);
+        store.scroll_region_down(2, 5, 1);
+        assert_eq!(rows_of(&store), [1, 4], "row 5 fell off, row 1 is outside");
+    }
+
+    #[test]
+    fn region_scroll_by_zero_lines_changes_nothing() {
+        let mut store = placed_at(&[3]);
+        store.scroll_region_up(2, 5, 0, CELL);
+        store.scroll_region_down(2, 5, 0);
+        assert_eq!(rows_of(&store), [3]);
+    }
+
+    #[test]
+    fn reset_placements_clears_both_lists_but_keeps_the_images() {
+        let mut store = placed_at(&[1, 2]);
+        store.stash_placements();
+        store.place(at(1, 0, 3, 0));
+        store.reset_placements();
+        store.restore_placements();
+        assert!(store.placements().is_empty(), "stash and active both gone");
+        assert_eq!(store.len(), 1, "the image data stays");
     }
 
     #[test]

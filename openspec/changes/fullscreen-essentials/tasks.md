@@ -81,34 +81,34 @@ Spec references: `TC` = `specs/terminal-core/spec.md`, `II` = `specs/inline-imag
 
 ### Phase 2.A: Checkpoint and pure move
 
-- [ ] 2.0 Line-count checkpoint: after finishing 2.1 to 2.7, run `git diff --stat main`. If above ~700 lines, split: PR 2a = tasks 2.1 and 2.2 only (pure move plus `Region`-aware helper stubs removed), PR 2b = the rest. Record the decision in the PR description
-- [ ] 2.1 Pure move: create `terminal/edit.rs` and move `goto`, `line_feed` and the `erase*` helpers out of `mod.rs` with no behaviour change. RED/guard: the existing suite must be green before and after; no new test code needed beyond a compile-only `edit.rs` smoke test calling the moved functions via `Terminal`
+- [x] 2.0 Line-count checkpoint: after finishing 2.1 to 2.7, run `git diff --stat main`. If above ~700 lines, split: PR 2a = tasks 2.1 and 2.2 only (pure move plus `Region`-aware helper stubs removed), PR 2b = the rest. Record the decision in the PR description — S2 code diff was 847 lines vs S1; split on 2026-10-07: S2a = pure move only (task 2.1, 134 lines), S2b = tasks 2.2-2.14 (~713 lines)
+- [x] 2.1 Pure move: create `terminal/edit.rs` and move `goto`, `line_feed` and the `erase*` helpers out of `mod.rs` with no behaviour change. RED/guard: the existing suite must be green before and after; no new test code needed beyond a compile-only `edit.rs` smoke test calling the moved functions via `Terminal`
 
 ### Phase 2.B: Grid primitives and image region scroll
 
-- [ ] 2.2 RED (`grid.rs`): `scroll_up_in`/`scroll_down_in` shift only rows `[top, bottom]`, blank new rows with the given cell, clamp `n` to region height, no-op on `n == 0`, handle `top == bottom` and 1-row grids. GREEN: implement both and remove the old `Grid::scroll_up(blank)` after migrating callers to the single entry point `State::scroll_up/scroll_down(top, bottom, n)` (D7)
-- [ ] 2.3 RED (`image/store.rs`): `scroll_region_up/down` per design D9: placements anchored inside the span shift, dropped when fully outside the span (up: bottom edge `<= top`; down: anchor `> bottom`), outside placements never move; full-screen region keeps the existing `scroll_up`. GREEN: implement (II "Partial region scroll" and "Image scrolls away")
+- [x] 2.2 RED (`grid.rs`): `scroll_up_in`/`scroll_down_in` shift only rows `[top, bottom]`, blank new rows with the given cell, clamp `n` to region height, no-op on `n == 0`, handle `top == bottom` and 1-row grids. GREEN: implement both and remove the old `Grid::scroll_up(blank)` after migrating callers to the single entry point `State::scroll_up/scroll_down(top, bottom, n)` (D7)
+- [x] 2.3 RED (`image/store.rs`): `scroll_region_up/down` per design D9: placements anchored inside the span shift, dropped when fully outside the span (up: bottom edge `<= top`; down: anchor `> bottom`), outside placements never move; full-screen region keeps the existing `scroll_up`. GREEN: implement (II "Partial region scroll" and "Image scrolls away")
 
 ### Phase 2.C: Region, origin, index operations
 
-- [ ] 2.4 RED: DECSTBM tests: defaults (0/absent), clamping, invalid `top >= bottom` ignored (TC "Invalid region ignored"), valid region homes the cursor (region top-left under DECOM). GREEN: `CSI t;b r` in `edit.rs` (D6)
-- [ ] 2.5 RED: DECOM (`?6`) tests: CUP/HVP/VPA relative to `region.top` and clamped to the region, CPR relative to `region.top`, toggling homes the cursor, DECOM saved/restored by DECSC/DECRC (TC "Origin mode"). GREEN: origin math in `edit.rs`; add `?6` to `modes.rs`
-- [ ] 2.6 RED: region-aware LF/VT/FF/IND/NEL/RI: region scroll scenario (TC "Region scroll"), LF below the region does not scroll, LF at last row outside region (TC "LF outside the region does not scroll"), RI at `region.top` scrolls down, NEL = CR + IND, `wrap_pending` cleared, `advance_over_image` and `finish_sixel` inherit region behaviour. GREEN: `index`, `reverse_index`, `line_feed` in `edit.rs`; add `D E M` to `esc_dispatch`
-- [ ] 2.7 RED: CUU/CUD clamp to the region edge when the cursor starts inside it, else to the screen edge; SU/SD scroll the region by `n` (clamped), cursor unmoved. GREEN: implement in `edit.rs`; add `S`/`T` to CSI dispatch
+- [x] 2.4 RED: DECSTBM tests: defaults (0/absent), clamping, invalid `top >= bottom` ignored (TC "Invalid region ignored"), valid region homes the cursor (region top-left under DECOM). GREEN: `CSI t;b r` in `edit.rs` (D6)
+- [x] 2.5 RED: DECOM (`?6`) tests: CUP/HVP/VPA relative to `region.top` and clamped to the region, CPR relative to `region.top`, toggling homes the cursor, DECOM saved/restored by DECSC/DECRC (TC "Origin mode"). GREEN: origin math in `edit.rs`; add `?6` to `modes.rs`
+- [x] 2.6 RED: region-aware LF/VT/FF/IND/NEL/RI: region scroll scenario (TC "Region scroll"), LF below the region does not scroll, LF at last row outside region (TC "LF outside the region does not scroll"), RI at `region.top` scrolls down, NEL = CR + IND, `wrap_pending` cleared, `advance_over_image` and `finish_sixel` inherit region behaviour. GREEN: `index`, `reverse_index`, `line_feed` in `edit.rs`; add `D E M` to `esc_dispatch`
+- [x] 2.7 RED: CUU/CUD clamp to the region edge when the cursor starts inside it, else to the screen edge; SU/SD scroll the region by `n` (clamped), cursor unmoved. GREEN: implement in `edit.rs`; add `S`/`T` to CSI dispatch
 
 ### Phase 2.D: RIS and resize
 
-- [ ] 2.8 RED: RIS test "Reset from alternate screen" (TC): main active and blank, full region, dormant `None`, pen, visibility, autowrap, DECCKM, `sixel_scrolling`, `last_char`, graphics state reset, `cell` and `responses` kept, placements and stash cleared, image data kept (D13, II). GREEN: `ESC c` in `esc_dispatch` and `reset` in `screen.rs`
-- [ ] 2.9 RED: resize with alt and region active resets the region on both screens to full, clamps cursors and saved cursors (TC "Resize resets region and clamps both cursors"). GREEN: extend `State::resize`
-- [ ] 2.10 Update `unknown_and_malformed_sequences_are_ignored` again: drop `ESC D/E/M/c`, `CSI r`, `CSI S/T`, `?6` from the "ignored" list. RED first (expectations changed), GREEN after 2.4 to 2.8
+- [x] 2.8 RED: RIS test "Reset from alternate screen" (TC): main active and blank, full region, dormant `None`, pen, visibility, autowrap, DECCKM, `sixel_scrolling`, `last_char`, graphics state reset, `cell` and `responses` kept, placements and stash cleared, image data kept (D13, II). GREEN: `ESC c` in `esc_dispatch` and `reset` in `screen.rs`
+- [x] 2.9 RED: resize with alt and region active resets the region on both screens to full, clamps cursors and saved cursors (TC "Resize resets region and clamps both cursors"). GREEN: extend `State::resize`
+- [x] 2.10 Update `unknown_and_malformed_sequences_are_ignored` again: drop `ESC D/E/M/c`, `CSI r`, `CSI S/T`, `?6` from the "ignored" list. RED first (expectations changed), GREEN after 2.4 to 2.8
 
 ### Phase 2.E: Verification (S2)
 
-- [ ] 2.11 Run `cargo fmt --all --check`
-- [ ] 2.12 Run `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets`
-- [ ] 2.13 Run `cargo test --workspace`
-- [ ] 2.14 Run `cargo +1.85 check --workspace --all-targets`
-- [ ] 2.15 Confirm the S2 (or S2b) diff is under 800 changed lines
+- [x] 2.11 Run `cargo fmt --all --check`
+- [x] 2.12 Run `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets`
+- [x] 2.13 Run `cargo test --workspace`
+- [x] 2.14 Run `cargo +1.85 check --workspace --all-targets`
+- [x] 2.15 Confirm the S2 (or S2b) diff is under 800 changed lines — S2a 134, S2b ~713 (code only, excluding openspec/)
 
 **PR boundary: S2 ends here (or S2a and S2b are two PR boundaries if split in 2.0).**
 

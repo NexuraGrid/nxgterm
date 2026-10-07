@@ -192,7 +192,7 @@ impl State {
     fn advance_over_image(&mut self, cols: u32, rows: u32) {
         let rows = rows.min(u32::from(self.screen.grid.size().rows()));
         for _ in 1..rows {
-            self.line_feed();
+            self.index();
         }
         let col = u32::from(self.screen.col).saturating_add(cols);
         if col > u32::from(self.last_col()) {
@@ -241,7 +241,7 @@ impl State {
         if self.sixel_scrolling {
             let rows = self.cell.rows_for(height);
             for _ in 0..rows.min(u32::from(self.screen.grid.size().rows())) {
-                self.line_feed();
+                self.index();
             }
         }
     }
@@ -356,7 +356,7 @@ impl vte::Perform for State {
         // TODO: wide (CJK/emoji) chars occupy two cells; treated as width 1.
         if self.screen.wrap_pending {
             self.screen.col = 0;
-            self.line_feed();
+            self.index();
         }
         let (col, row) = (self.screen.col, self.screen.row);
         self.screen.grid.row_mut(row)[usize::from(col)] = Cell { ch, ..self.pen };
@@ -370,7 +370,7 @@ impl vte::Perform for State {
     fn execute(&mut self, byte: u8) {
         match byte {
             b'\r' => self.goto(0, self.screen.row),
-            b'\n' | 0x0b | 0x0c => self.line_feed(),
+            b'\n' | 0x0b | 0x0c => self.index(),
             0x08 => self.goto(self.screen.col.saturating_sub(1), self.screen.row),
             b'\t' => {
                 let next = (self.screen.col / TAB_WIDTH + 1) * TAB_WIDTH;
@@ -407,6 +407,10 @@ impl vte::Perform for State {
         match byte {
             b'7' => self.save_cursor(),
             b'8' => self.restore_cursor(),
+            b'D' => self.index(),
+            b'E' => self.next_line(),
+            b'M' => self.reverse_index(),
+            b'c' => self.reset(),
             // DECKPAM/DECKPNM: nothing here depends on the keypad mode.
             _ => {}
         }
@@ -442,13 +446,16 @@ impl vte::Perform for State {
             }
             (true, 'S') => self.graphics_attributes(first),
             (true, _) => {}
-            (false, 'A') => self.goto(col, row.saturating_sub(n)),
-            (false, 'B') => self.goto(col, row.saturating_add(n)),
+            (false, 'A') => self.cursor_up(n),
+            (false, 'B') => self.cursor_down(n),
             (false, 'C') => self.goto(col.saturating_add(n), row),
             (false, 'D') => self.goto(col.saturating_sub(n), row),
-            (false, 'H' | 'f') => self.goto(second.max(1) - 1, n - 1),
+            (false, 'H' | 'f') => self.goto_addressed(second.max(1) - 1, n - 1),
             (false, 'G') => self.goto(n - 1, row),
-            (false, 'd') => self.goto(col, n - 1),
+            (false, 'd') => self.goto_addressed(col, n - 1),
+            (false, 'r') => self.set_region(first, second),
+            (false, 'S') => self.scroll_region_up(n),
+            (false, 'T') => self.scroll_region_down(n),
             (false, 'J') => self.erase_display(first),
             (false, 'K') => self.erase_line(first),
             (false, 's') if bare => self.save_cursor(),
@@ -457,7 +464,7 @@ impl vte::Perform for State {
             // DSR. ConPTY blocks at startup until it gets the CPR reply.
             (false, 'n') if first == 5 => self.responses.extend_from_slice(b"\x1b[0n"),
             (false, 'n') if first == 6 => {
-                let reply = format!("\x1b[{};{}R", row + 1, col + 1);
+                let reply = format!("\x1b[{};{}R", self.addressed_row() + 1, col + 1);
                 self.responses.extend_from_slice(reply.as_bytes());
             }
             // DA1: a VT220 with sixel graphics (4) and ANSI color (22).
