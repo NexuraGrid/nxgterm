@@ -7,11 +7,13 @@ use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
+use std::time::Instant;
 
 use nxg_config::{Backend, Bindings, Config, FontConfig, TabBar};
 use nxg_core::fallback::{self, Init};
 use nxg_core::mouse::{MouseAction, MouseButton, MouseEvent};
 use nxg_core::ports::{ChildProcess, Clipboard, ClipboardKind, PtyControl, RenderError, Renderer};
+use nxg_core::selection::{Point, SelectionKind};
 use nxg_core::{CellPixels, TermSize, Terminal, WinSize};
 use nxg_pty::ShellCommand;
 use nxg_render::{
@@ -28,7 +30,7 @@ use winit::window::{Window, WindowId};
 use crate::bindings::Action;
 use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
-use crate::mouse::{ViewportScroll, Wheel, WheelAction};
+use crate::mouse::{Clicks, ViewportScroll, Wheel, WheelAction};
 use crate::tabs::{TabId, Tabs};
 use crate::{appearance, bindings, choice, clipboard, keys, mouse, reload, tab_bar};
 
@@ -83,6 +85,20 @@ struct Session {
     /// The command palette, while it is open: it takes the keys and the
     /// clicks, and is drawn over the grid.
     palette: Option<CommandPalette>,
+    /// Left-button presses, for double and triple clicks.
+    clicks: Clicks,
+    /// The selection being dragged with the left button.
+    drag: Option<Drag>,
+}
+
+/// A selection in the making: started by a left press, extended while the
+/// pointer moves, finished on release. A single click selects nothing
+/// until the pointer leaves the cell it pressed.
+#[derive(Debug, Clone, Copy)]
+struct Drag {
+    kind: SelectionKind,
+    anchor: Point,
+    started: bool,
 }
 
 pub struct App {
@@ -162,6 +178,8 @@ impl App {
             bar_pointer: None,
             held: None,
             palette: None,
+            clicks: Clicks::default(),
+            drag: None,
         };
         session.open_tab(config, &self.proxy)?;
         Ok(session)
@@ -194,6 +212,7 @@ impl App {
         };
         // A drag in progress ends here: the palette takes the mouse.
         session.held = None;
+        session.drag = None;
         session.window.request_redraw();
     }
 
@@ -592,7 +611,12 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                if !session.track_pointer(position.x, position.y) {
+                let moved = session.track_pointer(position.x, position.y);
+                if session.drag.is_some() {
+                    session.drag_to(position.y);
+                    return;
+                }
+                if !moved {
                     return;
                 }
                 let cell = session.pointer;
@@ -618,6 +642,37 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 };
                 let action = mouse::action(state);
+                if button == MouseButton::Left && action == MouseAction::Release {
+                    if let Some(drag) = session.drag.take() {
+                        if let (true, Some(tab)) = (drag.started, session.tabs.active()) {
+                            copy_on_select(self.clipboard.as_mut(), config, &tab.terminal);
+                        }
+                        return;
+                    }
+                }
+                let shift = self.modifiers.shift_key();
+                let selects = session
+                    .tabs
+                    .active()
+                    .is_some_and(|tab| mouse::selects(tab.terminal.modes(), shift));
+                if selects && session.bar_pointer.is_none() && action == MouseAction::Press {
+                    match button {
+                        MouseButton::Left => {
+                            let alt = self.modifiers.alt_key();
+                            session.start_drag(Instant::now(), alt);
+                            return;
+                        }
+                        MouseButton::Middle if HAS_PRIMARY => {
+                            let text = self.clipboard.get_text(ClipboardKind::Primary);
+                            match text {
+                                Ok(text) => session.paste(&text),
+                                Err(error) => eprintln!("nxgterm: {error}"),
+                            }
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
                 if let Some(col) = session.bar_pointer {
                     if action == MouseAction::Press {
                         if button == MouseButton::Left {
@@ -745,11 +800,68 @@ impl Session {
         self.send(&bytes);
     }
 
+    /// A left press on the grid: a single click clears the selection and
+    /// may start a new one, a double or triple click selects the word or
+    /// line under the pointer.
+    fn start_drag(&mut self, now: Instant, alt: bool) {
+        let (col, row) = self.pointer;
+        let Some(tab) = self.tabs.active_mut() else {
+            return;
+        };
+        let anchor = tab.terminal.point_at(col, row);
+        let clicks = self.clicks.press(now, anchor);
+        let kind = mouse::selection_kind(clicks, alt);
+        let started = clicks > 1;
+        if started {
+            tab.terminal.start_selection(kind, anchor);
+        } else {
+            tab.terminal.clear_selection();
+        }
+        self.drag = Some(Drag {
+            kind,
+            anchor,
+            started,
+        });
+        self.window.request_redraw();
+    }
+
+    /// The pointer moved to window height `y` while selecting: extends the
+    /// selection to the cell under it, scrolling the history a line when
+    /// it is above or below the grid.
+    fn drag_to(&mut self, y: f64) {
+        let layout = self.grid_layout();
+        let (col, row) = self.pointer;
+        let (Some(drag), Some(tab)) = (&mut self.drag, self.tabs.active_mut()) else {
+            return;
+        };
+        let terminal = &mut tab.terminal;
+        let scroll = mouse::drag_scroll(layout, terminal.size(), y);
+        let before = terminal.display_offset();
+        if scroll != 0 {
+            terminal.scroll_display(scroll);
+        }
+        let scrolled = terminal.display_offset() != before;
+        let at = terminal.point_at(col, row);
+        let previous = terminal.selection().map(|selection| selection.head());
+        if !drag.started && at != drag.anchor {
+            terminal.start_selection(drag.kind, drag.anchor);
+            drag.started = true;
+        }
+        if drag.started {
+            terminal.extend_selection(at);
+        }
+        let extended = terminal.selection().map(|selection| selection.head()) != previous;
+        if scrolled || extended {
+            self.window.request_redraw();
+        }
+    }
+
     /// After the active tab or the number of tabs changed: forgets the
     /// held button (and the pointer on a bar that went away), refits the
     /// grid and redraws.
     fn tab_switched(&mut self) {
         self.held = None;
+        self.drag = None;
         if !self.tab_bar.visible(self.tabs.len()) {
             self.bar_pointer = None;
         }

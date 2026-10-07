@@ -1,7 +1,10 @@
 //! Mouse input: what the wheel, buttons and pointer motion do, as pure
 //! functions of the terminal modes so the event loop only forwards.
 
+use std::time::{Duration, Instant};
+
 use nxg_core::mouse::{self, MouseAction, MouseButton, MouseEvent, MouseMods, MouseTracking};
+use nxg_core::selection::{Point, SelectionKind};
 use nxg_core::{Modes, TermSize};
 use nxg_render::{CellSize, Layout};
 use winit::dpi::PhysicalPosition;
@@ -122,6 +125,64 @@ pub fn cell_at(layout: Layout, size: TermSize, x: f64, y: f64) -> (u16, u16) {
         index(x, left, width, size.cols()),
         index(y, top, height, size.rows()),
     )
+}
+
+/// Longest gap between the clicks of a double or triple click.
+pub const MULTI_CLICK: Duration = Duration::from_millis(400);
+
+/// Counts quick clicks on one cell: 1, 2, 3, then 1 again.
+#[derive(Debug, Default)]
+pub struct Clicks {
+    last: Option<(Instant, Point)>,
+    count: u8,
+}
+
+impl Clicks {
+    /// Registers a press at `at` (absolute, so a scroll between clicks
+    /// breaks the series) and returns its count.
+    pub fn press(&mut self, now: Instant, at: Point) -> u8 {
+        let repeat = self.last.is_some_and(|(then, cell)| {
+            cell == at && now.saturating_duration_since(then) <= MULTI_CLICK
+        });
+        self.count = if repeat && self.count < 3 {
+            self.count + 1
+        } else {
+            1
+        };
+        self.last = Some((now, at));
+        self.count
+    }
+}
+
+/// The selection a click series makes: cells (a block with Alt), words,
+/// then lines.
+pub fn selection_kind(clicks: u8, alt: bool) -> SelectionKind {
+    match clicks {
+        2 => SelectionKind::Word,
+        3 => SelectionKind::Line,
+        _ if alt => SelectionKind::Block,
+        _ => SelectionKind::Simple,
+    }
+}
+
+/// Whether the left button selects text: always, unless the application
+/// tracks the mouse, where Shift takes it back as in xterm.
+pub fn selects(modes: Modes, shift: bool) -> bool {
+    modes.mouse_tracking == MouseTracking::Off || shift
+}
+
+/// Lines to scroll the viewport while a selection is dragged to window
+/// height `y`: one back above the grid, one forward below it.
+pub fn drag_scroll(layout: Layout, size: TermSize, y: f64) -> i32 {
+    let (_, top) = layout.origin(0, 0);
+    let (_, bottom) = layout.origin(0, u32::from(size.rows()));
+    if y < f64::from(top) {
+        1
+    } else if y >= f64::from(bottom) {
+        -1
+    } else {
+        0
+    }
 }
 
 /// The bytes to send for a button or motion event, if the application
@@ -357,6 +418,70 @@ mod tests {
             button_report(drag_mode, false, drag, true).unwrap(),
             b"\x1b[<32;2;3M"
         );
+    }
+
+    fn at(line: u64, col: u16) -> Point {
+        Point::new(line, col)
+    }
+
+    #[test]
+    fn quick_clicks_on_one_cell_count_up_to_three_and_start_over() {
+        let mut clicks = Clicks::default();
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        assert_eq!(clicks.press(ms(0), at(5, 2)), 1);
+        assert_eq!(clicks.press(ms(200), at(5, 2)), 2);
+        assert_eq!(clicks.press(ms(400), at(5, 2)), 3);
+        assert_eq!(clicks.press(ms(500), at(5, 2)), 1, "a fourth starts over");
+    }
+
+    #[test]
+    fn slow_clicks_or_clicks_elsewhere_count_as_new() {
+        let mut clicks = Clicks::default();
+        let t0 = Instant::now();
+        assert_eq!(clicks.press(t0, at(5, 2)), 1);
+        let late = t0 + MULTI_CLICK + Duration::from_millis(1);
+        assert_eq!(clicks.press(late, at(5, 2)), 1, "too slow");
+        let soon = late + Duration::from_millis(100);
+        assert_eq!(clicks.press(soon, at(5, 3)), 1, "another cell");
+        let soon = soon + Duration::from_millis(100);
+        assert_eq!(clicks.press(soon, at(6, 3)), 1, "another line");
+    }
+
+    #[test]
+    fn click_counts_pick_the_selection_kind() {
+        assert_eq!(selection_kind(1, false), SelectionKind::Simple);
+        assert_eq!(selection_kind(1, true), SelectionKind::Block);
+        assert_eq!(selection_kind(2, false), SelectionKind::Word);
+        assert_eq!(selection_kind(3, true), SelectionKind::Line);
+    }
+
+    #[test]
+    fn the_mouse_selects_unless_the_application_tracks_it_without_shift() {
+        assert!(selects(main(), false));
+        assert!(selects(main(), true));
+        assert!(!selects(reporting(), false));
+        assert!(selects(reporting(), true), "shift overrides reporting");
+    }
+
+    #[test]
+    fn dragging_past_the_grid_scrolls_a_line_toward_the_pointer() {
+        let layout = Layout {
+            cell: CellSize {
+                width: 10,
+                height: 20,
+            },
+            padding: 5,
+            left: 0,
+            top: 0,
+        }
+        .below(1);
+        let size = TermSize::new(4, 3).unwrap();
+        // The grid spans y 25..85.
+        assert_eq!(drag_scroll(layout, size, 24.0), 1, "above: back");
+        assert_eq!(drag_scroll(layout, size, 25.0), 0);
+        assert_eq!(drag_scroll(layout, size, 84.9), 0);
+        assert_eq!(drag_scroll(layout, size, 85.0), -1, "below: forward");
     }
 
     #[test]
