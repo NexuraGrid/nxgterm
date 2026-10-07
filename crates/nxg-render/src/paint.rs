@@ -26,11 +26,13 @@ impl CellSize {
 }
 
 /// Where the grid sits in the window: cells inset by `padding` pixels on
-/// every side.
+/// every side, and pushed down by `top` more pixels (rows drawn above the
+/// grid, such as the tab bar).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Layout {
     pub cell: CellSize,
     pub padding: u32,
+    pub top: u32,
 }
 
 impl Layout {
@@ -38,26 +40,38 @@ impl Layout {
     pub fn origin(self, col: u32, row: u32) -> (u32, u32) {
         (
             self.padding + col * self.cell.width,
-            self.padding + row * self.cell.height,
+            self.padding + self.top + row * self.cell.height,
         )
     }
 
-    /// How many whole cells fit in a `width x height` window once the
-    /// padding is taken out (at least 1x1).
-    pub fn grid_size(self, width: u32, height: u32) -> TermSize {
-        let inset = self.padding.saturating_mul(2);
-        self.cell
-            .grid_size(width.saturating_sub(inset), height.saturating_sub(inset))
+    /// The layout for a grid below `rows` rows of this one, for a header
+    /// such as the tab bar drawn at this layout.
+    pub fn below(self, rows: u16) -> Self {
+        Self {
+            top: self.top + u32::from(rows) * self.cell.height,
+            ..self
+        }
     }
 
-    /// Window size in pixels that fits `size` cells plus the padding.
+    /// How many whole cells fit in a `width x height` window once the
+    /// padding and the top are taken out (at least 1x1).
+    pub fn grid_size(self, width: u32, height: u32) -> TermSize {
+        let inset = self.padding.saturating_mul(2);
+        self.cell.grid_size(
+            width.saturating_sub(inset),
+            height.saturating_sub(inset).saturating_sub(self.top),
+        )
+    }
+
+    /// Window size in pixels that fits `size` cells plus the padding and the
+    /// top.
     pub fn window_size(self, size: TermSize) -> (u32, u32) {
         let inset = self.padding.saturating_mul(2);
         let span =
             |cells: u16, cell: u32| u32::from(cells).saturating_mul(cell).saturating_add(inset);
         (
             span(size.cols(), self.cell.width),
-            span(size.rows(), self.cell.height),
+            span(size.rows(), self.cell.height).saturating_add(self.top),
         )
     }
 }
@@ -117,6 +131,7 @@ mod tests {
     const FLUSH: Layout = Layout {
         cell: CELL,
         padding: 0,
+        top: 0,
     };
 
     fn term(cols: u16, rows: u16, input: &[u8]) -> Terminal {
@@ -141,12 +156,14 @@ mod tests {
         let layout = Layout {
             cell: CELL,
             padding: 3,
+            top: 0,
         };
         assert_eq!(layout.origin(0, 0), (3, 3));
         assert_eq!(layout.origin(2, 1), (7, 5));
         let flush = Layout {
             cell: CELL,
             padding: 0,
+            top: 0,
         };
         assert_eq!(flush.origin(2, 1), (4, 2));
     }
@@ -157,7 +174,11 @@ mod tests {
             width: 8,
             height: 16,
         };
-        let layout = Layout { cell, padding: 4 };
+        let layout = Layout {
+            cell,
+            padding: 4,
+            top: 0,
+        };
         assert_eq!(layout.grid_size(808, 488), TermSize::new(100, 30).unwrap());
         assert_eq!(layout.grid_size(807, 487), TermSize::new(99, 29).unwrap());
         // Smaller than the padding itself: still at least one cell.
@@ -170,11 +191,36 @@ mod tests {
             width: 9,
             height: 19,
         };
-        let layout = Layout { cell, padding: 6 };
+        let layout = Layout {
+            cell,
+            padding: 6,
+            top: 0,
+        };
         let size = TermSize::new(100, 30).unwrap();
         assert_eq!(layout.window_size(size), (912, 582));
         let (w, h) = layout.window_size(size);
         assert_eq!(layout.grid_size(w, h), size);
+    }
+
+    #[test]
+    fn top_pushes_the_grid_down_and_takes_rows_away() {
+        let cell = CellSize {
+            width: 8,
+            height: 16,
+        };
+        let layout = Layout {
+            cell,
+            padding: 4,
+            top: 16,
+        };
+        assert_eq!(layout.origin(0, 0), (4, 20));
+        assert_eq!(layout.origin(1, 2), (12, 52));
+        assert_eq!(layout.grid_size(808, 504), TermSize::new(100, 30).unwrap());
+        let size = TermSize::new(100, 30).unwrap();
+        assert_eq!(layout.window_size(size), (808, 504));
+        // Not even one row left under the top: still one row.
+        assert_eq!(layout.grid_size(808, 20), TermSize::new(100, 1).unwrap());
+        assert_eq!(layout.below(2).top, 48, "below adds whole rows");
     }
 
     #[test]
@@ -221,6 +267,7 @@ mod tests {
         let layout = Layout {
             cell: CELL,
             padding: 1,
+            top: 0,
         };
         let mut pixels = vec![0; 4 * 4];
         let mut frame = Frame::new(&mut pixels, 4, 4).unwrap();

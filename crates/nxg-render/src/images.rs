@@ -32,7 +32,7 @@ pub fn grid_clip(term: &Terminal, layout: Layout) -> (u32, u32, u32, u32) {
     let size = term.size();
     (
         layout.padding,
-        layout.padding,
+        layout.padding + layout.top,
         u32::from(size.cols()).saturating_mul(layout.cell.width),
         u32::from(size.rows()).saturating_mul(layout.cell.height),
     )
@@ -57,7 +57,7 @@ pub fn draws(term: &Terminal, layout: Layout, above: bool) -> Vec<ImageDraw> {
             let rect = p.pixel_rect(cell);
             let dest = PixelRect {
                 x: rect.x + i64::from(layout.padding),
-                y: rect.y + i64::from(layout.padding) + scrolled,
+                y: rect.y + i64::from(layout.padding + layout.top) + scrolled,
                 width: rect.width.min(MAX_DEST),
                 height: rect.height.min(MAX_DEST),
             };
@@ -157,6 +157,7 @@ pub(crate) mod tests {
             height: 2,
         },
         padding: 1,
+        top: 0,
     };
 
     /// A `w x h` image of `color` pixels displayed through kitty at the
@@ -210,6 +211,16 @@ pub(crate) mod tests {
         assert_eq!(d.len(), 1);
         assert_eq!((d[0].dest.x, d[0].dest.y, d[0].dest.width), (3, 3, 3));
         assert_eq!(grid_clip(&t, LAYOUT), (1, 1, 8, 4));
+    }
+
+    #[test]
+    fn draws_and_clip_move_down_by_the_top() {
+        let mut t = term(4, 2);
+        show(&mut t, 1, 1, [0; 4], "");
+        let layout = Layout { top: 2, ..LAYOUT };
+        let d = draws(&t, layout, true);
+        assert_eq!((d[0].dest.x, d[0].dest.y), (1, 3));
+        assert_eq!(grid_clip(&t, layout), (1, 3, 8, 4));
     }
 
     fn render(t: &Terminal, above: bool) -> Vec<u32> {

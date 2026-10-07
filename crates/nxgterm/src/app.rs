@@ -528,6 +528,7 @@ fn layout(renderer: &dyn WindowRenderer, padding: u32) -> Layout {
     Layout {
         cell: CellSize { width, height },
         padding,
+        top: 0,
     }
 }
 
@@ -650,6 +651,14 @@ impl Renderer for Detached {
 
 impl WindowRenderer for Detached {
     fn set_style(&mut self, _style: Style) {}
+
+    fn draw_with_header(
+        &mut self,
+        _header: Option<&Terminal>,
+        terminal: &Terminal,
+    ) -> Result<(), RenderError> {
+        self.draw(terminal)
+    }
 }
 
 /// Drains child output on a background thread until EOF or error.

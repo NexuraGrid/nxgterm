@@ -299,6 +299,7 @@ mod tests {
                 height: 20,
             },
             padding: 5,
+            top: 0,
         };
         let size = TermSize::new(4, 3).unwrap();
         assert_eq!(cell_at(layout, size, 5.0, 5.0), (0, 0));

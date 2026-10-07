@@ -31,6 +31,18 @@ fn headless_gpu() -> Option<Gpu> {
 
 /// Renders `term` offscreen and reads it back as 0RGB pixels.
 fn render_offscreen(gpu: &Gpu, painter: &mut Painter, term: &Terminal, w: u32, h: u32) -> Vec<u32> {
+    render_offscreen_with(gpu, painter, None, term, w, h)
+}
+
+/// [`render_offscreen`] with `header` rows above the grid.
+fn render_offscreen_with(
+    gpu: &Gpu,
+    painter: &mut Painter,
+    header: Option<&Terminal>,
+    term: &Terminal,
+    w: u32,
+    h: u32,
+) -> Vec<u32> {
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("offscreen"),
         size: wgpu::Extent3d {
@@ -46,7 +58,7 @@ fn render_offscreen(gpu: &Gpu, painter: &mut Painter, term: &Terminal, w: u32, h
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    painter.render(gpu, &view, w, h, term);
+    painter.render(gpu, &view, w, h, header, term);
 
     let row = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -125,18 +137,23 @@ fn gpu_output_matches_cpu_renderer() {
     let cell = cpu.cell_size();
     term.set_cell_pixels(cell.width, cell.height);
     add_images(&mut term);
+    // A header row (like the tab bar) checks that both push the grid and
+    // its images down the same way.
+    let mut header = Terminal::new(TermSize::new(8, 1).unwrap());
+    header.advance(b"\x1b[?25l\x1b[7m 1: sh \x1b[0m\x1b[90m 2:");
+    let header = Some(&header);
     // A margin right and below the padded grid checks the clear color too.
-    let (w, h) = cpu.layout().window_size(term.size());
+    let (w, h) = cpu.layout().below(1).window_size(term.size());
     let (w, h) = (w + 3, h + 2);
 
     let mut expected = vec![0; (w * h) as usize];
-    cpu.render(&term, &mut Frame::new(&mut expected, w, h).unwrap());
+    cpu.render_with_header(header, &term, &mut Frame::new(&mut expected, w, h).unwrap());
 
     let mut painter = Painter::new(&gpu, FORMAT, style(gpu_font));
     assert_eq!(painter.cell_size(), cell);
-    let actual = render_offscreen(&gpu, &mut painter, &term, w, h);
+    let actual = render_offscreen_with(&gpu, &mut painter, header, &term, w, h);
     // Draw twice to exercise cached atlas slots and buffer reuse.
-    let again = render_offscreen(&gpu, &mut painter, &term, w, h);
+    let again = render_offscreen_with(&gpu, &mut painter, header, &term, w, h);
     assert_eq!(actual, again);
     assert_eq!(gpu.failure(), None);
 

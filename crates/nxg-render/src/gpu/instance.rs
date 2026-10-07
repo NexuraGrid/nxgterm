@@ -169,6 +169,7 @@ mod tests {
     const FLUSH: Layout = Layout {
         cell: CELL,
         padding: 0,
+        top: 0,
     };
 
     fn term(cols: u16, rows: u16, input: &[u8]) -> Terminal {
@@ -245,6 +246,7 @@ mod tests {
         let layout = Layout {
             cell: CELL,
             padding: 5,
+            top: 0,
         };
         let instances = build(&term, &palette, layout, BASELINE, slot)
             .unwrap()

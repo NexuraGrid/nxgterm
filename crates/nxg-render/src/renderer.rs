@@ -31,12 +31,35 @@ impl CpuRenderer {
     }
 
     /// Draws `term` into `frame`; pixels outside the grid (the padding
-    /// included) get the background. Order: cell backgrounds, images with
-    /// `z < 0`, cursor, glyphs, then the other images.
+    /// included) get the background.
     pub fn render(&mut self, term: &Terminal, frame: &mut Frame<'_>) {
+        self.render_with_header(None, term, frame);
+    }
+
+    /// Draws the rows of `header` at the top of the grid area and `term`
+    /// below them; see [`Layout::below`]. The header's cursor is drawn like
+    /// any other, so callers hide it.
+    pub fn render_with_header(
+        &mut self,
+        header: Option<&Terminal>,
+        term: &Terminal,
+        frame: &mut Frame<'_>,
+    ) {
         let layout = self.layout();
+        frame.clear(self.style.palette.background);
+        let Some(header) = header else {
+            self.paint(term, frame, layout);
+            return;
+        };
+        self.paint(header, frame, layout);
+        self.paint(term, frame, layout.below(header.size().rows()));
+    }
+
+    /// Paints `term` at `layout` over what `frame` holds. Order: cell
+    /// backgrounds, images with `z < 0`, cursor, glyphs, then the other
+    /// images.
+    fn paint(&mut self, term: &Terminal, frame: &mut Frame<'_>, layout: Layout) {
         let palette = &self.style.palette;
-        frame.clear(palette.background);
         paint::paint_backgrounds(term, frame, layout, palette);
         images::paint(term, frame, layout, false);
         paint::paint_cursor(term, frame, layout, palette);
@@ -153,6 +176,31 @@ mod tests {
             Some(bg),
             "padding after the cell"
         );
+    }
+
+    #[test]
+    fn a_header_takes_the_top_rows_and_pushes_the_grid_down() {
+        let Some(style) = style(1) else { return };
+        let mut renderer = CpuRenderer::new(style);
+        let cell = renderer.cell_size();
+        let mut header = Terminal::new(TermSize::new(1, 1).unwrap());
+        header.advance(b"\x1b[?25l\x1b[41m \x1b[0m");
+        let mut term = Terminal::new(TermSize::new(1, 1).unwrap());
+        term.advance(b"\x1b[?25l\x1b[44m \x1b[0m");
+        let layout = renderer.layout().below(1);
+        let (w, h) = layout.window_size(term.size());
+        assert_eq!(h, 2 * cell.height + 2);
+        let mut pixels = vec![0; (w * h) as usize];
+        let mut frame = Frame::new(&mut pixels, w, h).unwrap();
+        renderer.render_with_header(Some(&header), &term, &mut frame);
+        let palette = Palette::default();
+        assert_eq!(frame.pixel(1, 1), Some(palette.ansi[1]), "header row");
+        assert_eq!(
+            frame.pixel(1, 1 + cell.height),
+            Some(palette.ansi[4]),
+            "grid below the header"
+        );
+        assert_eq!(frame.pixel(0, 0), Some(palette.background), "padding");
     }
 
     #[test]
