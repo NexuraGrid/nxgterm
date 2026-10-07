@@ -53,6 +53,15 @@ impl State {
                 "stashed placement references a missing image"
             );
         }
+        let offset = self.scrollback.offset;
+        assert!(
+            offset <= self.scrollback.len(),
+            "viewport offset {offset} beyond the history"
+        );
+        assert!(
+            offset == 0 || !self.alt_active,
+            "viewport scrolled back on the alternate screen"
+        );
         let _ = Region::full(0);
     }
 }
@@ -176,6 +185,13 @@ mod tests {
             t.state.screen.wrap_pending = true;
         });
         assert!(msg.contains("wrap"));
+    }
+
+    #[test]
+    fn invariants_catch_a_viewport_beyond_the_history_or_on_the_alternate_screen() {
+        // The healthy terminal is on the alternate screen with no history.
+        let msg = failure_after(|t| t.state.scrollback.offset = 1);
+        assert!(msg.contains("viewport"), "{msg}");
     }
 
     #[test]

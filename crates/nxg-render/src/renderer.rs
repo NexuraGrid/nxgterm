@@ -40,9 +40,9 @@ impl CpuRenderer {
         paint::paint_backgrounds(term, frame, layout, palette);
         images::paint(term, frame, layout, false);
         paint::paint_cursor(term, frame, layout, palette);
-        let cursor = term.cursor();
+        let cursor = term.display_cursor();
         for row in 0..term.size().rows() {
-            for (col, c) in term.row(row).iter().enumerate() {
+            for (col, c) in term.display_row(row).iter().enumerate() {
                 if c.ch == ' ' {
                     continue;
                 }

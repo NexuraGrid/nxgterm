@@ -74,6 +74,10 @@ theme = "nxg-dark"
 [renderer]
 # auto (GPU, falling back to CPU), gpu or cpu. NXGTERM_RENDERER overrides it.
 backend = "auto"
+
+[scrollback]
+# Lines kept after they scroll off the top of the screen; 0 disables it.
+lines = 10000
 "##;
 
 /// The whole configuration file.
@@ -85,6 +89,7 @@ pub struct Config {
     pub colors: ColorsConfig,
     pub shell: ShellConfig,
     pub renderer: RendererConfig,
+    pub scrollback: ScrollbackConfig,
 }
 
 /// `[font]`
@@ -169,6 +174,20 @@ pub struct ShellConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct RendererConfig {
     pub backend: Backend,
+}
+
+/// `[scrollback]`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ScrollbackConfig {
+    /// History lines kept; 0 disables the scrollback.
+    pub lines: usize,
+}
+
+impl Default for ScrollbackConfig {
+    fn default() -> Self {
+        Self { lines: 10_000 }
+    }
 }
 
 /// Which renderer to use.
@@ -306,6 +325,7 @@ mod tests {
         assert_eq!(config.colors.theme.theme().name, "nxg-dark");
         assert_eq!(config.shell, ShellConfig::default());
         assert_eq!(config.renderer.backend, Backend::Auto);
+        assert_eq!(config.scrollback.lines, 10_000);
     }
 
     #[test]
@@ -327,6 +347,8 @@ mod tests {
             args = ["-NoLogo"]
             [renderer]
             backend = "cpu"
+            [scrollback]
+            lines = 0
             "##,
         )
         .unwrap();
@@ -342,6 +364,7 @@ mod tests {
         assert_eq!(config.shell.program.as_deref(), Some("pwsh.exe"));
         assert_eq!(config.shell.args, ["-NoLogo"]);
         assert_eq!(config.renderer.backend, Backend::Cpu);
+        assert_eq!(config.scrollback.lines, 0);
     }
 
     #[test]
@@ -418,10 +441,17 @@ mod tests {
         );
         let error = parse_error("[fonts]\n");
         assert!(error.contains("fonts"), "{error}");
+        let error = parse_error("[scrollback]\nline = 5\n");
+        assert!(error.contains("line"), "{error}");
     }
 
     #[test]
     fn invalid_values_are_rejected() {
+        let error = parse_error("[scrollback]\nlines = -1\n");
+        assert!(
+            error.contains("scrollback") || error.contains("line 2"),
+            "{error}"
+        );
         let error = parse_error("[colors]\nforeground = \"blue\"\n");
         assert!(error.contains("invalid color `blue`"), "{error}");
         assert!(parse("[colors]\nansi = [\"#000000\"]").is_err(), "needs 16");

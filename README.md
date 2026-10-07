@@ -171,14 +171,17 @@ args = ["-NoLogo"]
 
 [renderer]
 backend = "auto"            # auto | gpu | cpu
+
+[scrollback]
+lines = 10000               # history kept on the main screen; 0 disables it
 ```
 
 Built-in themes: `nxg-dark` (default), `nxg-light`, `tokyo-night`,
 `catppuccin-mocha`, `gruvbox-dark`, `dracula`, `nord`, `one-dark`.
 
-The file is reloaded when saved. Font, colors and padding apply at once;
-`[shell]`, `[renderer]` and the initial `columns`/`rows` apply on the next
-start. An invalid file is reported on stderr (with the line and the reason,
+The file is reloaded when saved. Font, colors, padding and the scrollback
+limit apply at once; `[shell]`, `[renderer]` and the initial
+`columns`/`rows` apply on the next start. An invalid file is reported on stderr (with the line and the reason,
 unknown keys included) and the previous settings stay in effect; at startup
 the defaults are used instead.
 
@@ -191,6 +194,20 @@ the defaults are used instead.
 | `Ctrl+0` | Reset font size to the configured one |
 
 These are handled by the terminal and never reach the shell.
+
+### Scrolling and the mouse
+
+| Input | Action |
+|---|---|
+| Mouse wheel | Scroll the history, 3 lines per notch |
+| `Shift+PageUp` / `Shift+PageDown` | Scroll the history by a page |
+| `Shift+Home` / `Shift+End` | Jump to the oldest line / back to the bottom |
+
+New output or typing returns to the bottom. In full-screen programs (the
+alternate screen) the wheel sends arrow keys instead, unless the program
+turns that off (mode 1007). Programs that ask for mouse reports (modes
+1000, 1002, 1003; SGR 1006 or urxvt 1015 encoding) receive clicks, motion
+and the wheel; hold `Shift` to scroll the terminal instead.
 
 ### Environment
 

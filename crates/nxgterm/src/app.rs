@@ -10,6 +10,7 @@ use std::thread;
 
 use nxg_config::{Backend, Config};
 use nxg_core::fallback::{self, Init};
+use nxg_core::mouse::{MouseAction, MouseButton, MouseEvent};
 use nxg_core::ports::{ChildProcess, PtyControl, RenderError, Renderer};
 use nxg_core::{CellPixels, TermSize, Terminal, WinSize};
 use nxg_pty::ShellCommand;
@@ -23,7 +24,8 @@ use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
-use crate::{appearance, bindings, choice, keys, reload};
+use crate::mouse::{ViewportScroll, Wheel, WheelAction};
+use crate::{appearance, bindings, choice, keys, mouse, reload};
 
 /// Events posted to the event loop from background threads.
 #[derive(Debug)]
@@ -53,6 +55,12 @@ struct Session {
     /// Consecutive skipped frames; bounds retries so a surface that keeps
     /// failing (e.g. occluded) does not spin the event loop.
     skipped_frames: u8,
+    /// Wheel movement not yet worth a whole line.
+    wheel: Wheel,
+    /// The cell under the pointer.
+    pointer: (u16, u16),
+    /// The button held down, for drag reports.
+    held: Option<MouseButton>,
 }
 
 pub struct App {
@@ -128,6 +136,7 @@ impl App {
 
         let mut terminal = Terminal::new(size);
         terminal.set_cell_pixels(cell.width, cell.height);
+        terminal.set_scrollback_limit(config.scrollback.lines);
         Ok(Session {
             window,
             renderer,
@@ -138,6 +147,9 @@ impl App {
             terminal,
             skipped_frames: 0,
             pty: pty.control,
+            wheel: Wheel::default(),
+            pointer: (0, 0),
+            held: None,
         })
     }
 
@@ -179,6 +191,10 @@ impl App {
             }
             if changes.restyle {
                 session.restyle(&new);
+            }
+            if changes.scrollback {
+                session.terminal.set_scrollback_limit(new.scrollback.lines);
+                session.window.request_redraw();
             }
         }
         eprintln!("nxgterm: config reloaded");
@@ -244,6 +260,13 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 }
                 let modes = session.terminal.modes();
+                let rows = session.terminal.size().rows();
+                if let Some(scroll) =
+                    mouse::viewport_key(&event.logical_key, self.modifiers, modes, rows)
+                {
+                    session.scroll_viewport(scroll);
+                    return;
+                }
                 let bytes = keys::encode(
                     &event.logical_key,
                     event.text.as_deref(),
@@ -251,9 +274,76 @@ impl ApplicationHandler<UserEvent> for App {
                     modes,
                 );
                 if let Some(bytes) = bytes {
-                    if let Err(error) = session.pty.write_all(&bytes) {
-                        eprintln!("nxgterm: pty write failed: {error}");
+                    // Typing shows what is being typed into.
+                    session.scroll_viewport(ViewportScroll::Bottom);
+                    session.send(&bytes);
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let cell = layout(session.renderer.as_ref(), session.padding).cell;
+                let lines = session.wheel.lines(delta, cell.height);
+                let modes = session.terminal.modes();
+                match mouse::wheel_action(modes, self.modifiers.shift_key(), lines) {
+                    Some(WheelAction::Report { button, count }) => {
+                        let (col, row) = session.pointer;
+                        let event = MouseEvent {
+                            button,
+                            action: MouseAction::Press,
+                            col,
+                            row,
+                            mods: mouse::mouse_mods(self.modifiers),
+                        };
+                        if let Some(bytes) = nxg_core::mouse::encode(event, modes.mouse_encoding) {
+                            session.send(&bytes.repeat(count as usize));
+                        }
                     }
+                    Some(WheelAction::Keys(bytes)) => session.send(&bytes),
+                    Some(WheelAction::Scroll(lines)) => {
+                        session.scroll_viewport(ViewportScroll::Lines(lines));
+                    }
+                    None => {}
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let layout = layout(session.renderer.as_ref(), session.padding);
+                let size = session.terminal.size();
+                let cell = mouse::cell_at(layout, size, position.x, position.y);
+                if cell == session.pointer {
+                    return;
+                }
+                session.pointer = cell;
+                let event = MouseEvent {
+                    button: session.held.unwrap_or(MouseButton::None),
+                    action: MouseAction::Motion,
+                    col: cell.0,
+                    row: cell.1,
+                    mods: mouse::mouse_mods(self.modifiers),
+                };
+                let modes = session.terminal.modes();
+                let shift = self.modifiers.shift_key();
+                let held = session.held.is_some();
+                if let Some(bytes) = mouse::button_report(modes, shift, event, held) {
+                    session.send(&bytes);
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let Some(button) = mouse::button(button) else {
+                    return;
+                };
+                let action = mouse::action(state);
+                session.held = (action == MouseAction::Press).then_some(button);
+                let (col, row) = session.pointer;
+                let event = MouseEvent {
+                    button,
+                    action,
+                    col,
+                    row,
+                    mods: mouse::mouse_mods(self.modifiers),
+                };
+                let modes = session.terminal.modes();
+                let shift = self.modifiers.shift_key();
+                if let Some(bytes) = mouse::button_report(modes, shift, event, false) {
+                    session.send(&bytes);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -269,6 +359,26 @@ impl ApplicationHandler<UserEvent> for App {
 const MAX_FRAME_RETRIES: u8 = 3;
 
 impl Session {
+    /// Writes input for the child.
+    fn send(&mut self, bytes: &[u8]) {
+        if let Err(error) = self.pty.write_all(bytes) {
+            eprintln!("nxgterm: pty write failed: {error}");
+        }
+    }
+
+    /// Moves the scrollback viewport, redrawing when it changed.
+    fn scroll_viewport(&mut self, scroll: ViewportScroll) {
+        let before = self.terminal.display_offset();
+        match scroll {
+            ViewportScroll::Lines(lines) => self.terminal.scroll_display(lines),
+            ViewportScroll::Top => self.terminal.scroll_display(i32::MAX),
+            ViewportScroll::Bottom => self.terminal.scroll_display_to_bottom(),
+        }
+        if self.terminal.display_offset() != before {
+            self.window.request_redraw();
+        }
+    }
+
     fn redraw(&mut self, config: &Config) -> Result<(), Box<dyn Error>> {
         match self.renderer.draw(&self.terminal) {
             Ok(()) => {

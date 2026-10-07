@@ -87,7 +87,7 @@ pub fn paint_backgrounds(
 ) {
     let cell = layout.cell;
     for row in 0..term.size().rows() {
-        for (col, c) in term.row(row).iter().enumerate() {
+        for (col, c) in term.display_row(row).iter().enumerate() {
             let (_, bg) = cell_colors(c, palette);
             let (x, y) = layout.origin(col as u32, u32::from(row));
             frame.fill_rect(x, y, cell.width, cell.height, bg);
@@ -97,7 +97,7 @@ pub fn paint_backgrounds(
 
 /// Draws a block cursor when it is visible.
 pub fn paint_cursor(term: &Terminal, frame: &mut Frame<'_>, layout: Layout, palette: &Palette) {
-    let cursor = term.cursor();
+    let cursor = term.display_cursor();
     if cursor.visible {
         let (x, y) = layout.origin(u32::from(cursor.col), u32::from(cursor.row));
         let cell = layout.cell;
@@ -258,5 +258,17 @@ mod tests {
         let mut frame = Frame::new(&mut pixels, 4, 2).unwrap();
         paint_cursor(&term, &mut frame, FLUSH, &palette);
         assert!(pixels.iter().all(|&p| p == 0));
+    }
+
+    #[test]
+    fn scrolled_back_viewport_paints_history_and_no_cursor() {
+        let palette = Palette::default();
+        let mut term = term(2, 1, b"\x1b[48;2;1;2;3m  \x1b[0m\r\n");
+        term.scroll_display(1);
+        let mut pixels = vec![0; 4 * 2];
+        let mut frame = Frame::new(&mut pixels, 4, 2).unwrap();
+        paint_backgrounds(&term, &mut frame, FLUSH, &palette);
+        paint_cursor(&term, &mut frame, FLUSH, &palette);
+        assert_eq!(pixels, [rgb(1, 2, 3); 8]);
     }
 }

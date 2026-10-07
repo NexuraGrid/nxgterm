@@ -88,7 +88,7 @@ where
 
     let mut instances = Vec::new();
     for row in 0..rows {
-        for (col, c) in term.row(row).iter().enumerate() {
+        for (col, c) in term.display_row(row).iter().enumerate() {
             let (_, bg) = paint::cell_colors(c, palette);
             if bg != palette.background {
                 instances.push(solid(cell_pos(col, row), bg));
@@ -97,7 +97,7 @@ where
     }
 
     let backgrounds = instances.len();
-    let cursor = term.cursor();
+    let cursor = term.display_cursor();
     if cursor.visible {
         instances.push(solid(
             cell_pos(usize::from(cursor.col), cursor.row),
@@ -106,7 +106,7 @@ where
     }
 
     for row in 0..rows {
-        for (col, c) in term.row(row).iter().enumerate() {
+        for (col, c) in term.display_row(row).iter().enumerate() {
             if c.ch == ' ' {
                 continue;
             }
@@ -337,5 +337,23 @@ mod tests {
         let word = |i: usize| u32::from_ne_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap());
         let words: Vec<u32> = (0..8).map(word).collect();
         assert_eq!(words, [u32::MAX, 2, 3, 4, 5, 6, 0x0001_0203, 1]);
+    }
+
+    #[test]
+    fn scrolled_back_viewport_draws_history_rows_and_no_cursor() {
+        let mut term = term(3, 2, b"a\r\nb\r\nc");
+        term.scroll_display(1);
+        let instances = build(&term, &Palette::default(), FLUSH, BASELINE, slot)
+            .unwrap()
+            .instances;
+        let chars: Vec<(char, i32)> = instances
+            .iter()
+            .map(|i| (char::from_u32(i.uv[0]).unwrap(), i.pos[1]))
+            .collect();
+        assert_eq!(
+            chars,
+            [('a', 7), ('b', 27)],
+            "no cursor quad, history on top"
+        );
     }
 }

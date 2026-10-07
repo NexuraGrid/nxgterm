@@ -10,6 +10,7 @@ mod bindings;
 mod choice;
 mod cli;
 mod keys;
+mod mouse;
 mod reload;
 mod watch;
 

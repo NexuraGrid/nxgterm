@@ -1,15 +1,69 @@
 //! Private (DEC) modes: `CSI ? Pm h` / `CSI ? Pm l`.
 
 use super::{State, Terminal};
+use crate::mouse::{MouseEncoding, MouseTracking};
 
 /// The terminal modes the embedding application needs to read. A plain value,
-/// so the key encoder stays a pure function of it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// so the key encoder stays a pure function of it. The default is the
+/// power-on state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Modes {
     /// DECCKM: arrows and Home/End are sent as `ESC O x` instead of `ESC [ x`.
     pub app_cursor_keys: bool,
     /// Whether the alternate screen is showing.
     pub alt_screen: bool,
+    /// Which mouse events the application wants (1000/1002/1003).
+    pub mouse_tracking: MouseTracking,
+    /// How they are encoded (1006 SGR, 1015 urxvt, else X10).
+    pub mouse_encoding: MouseEncoding,
+    /// 1007: on the alternate screen the wheel sends arrow keys. On by
+    /// default, so pagers scroll without opting in; apps can turn it off.
+    pub alternate_scroll: bool,
+}
+
+impl Default for Modes {
+    fn default() -> Self {
+        Self {
+            app_cursor_keys: false,
+            alt_screen: false,
+            mouse_tracking: MouseTracking::Off,
+            mouse_encoding: MouseEncoding::X10,
+            alternate_scroll: true,
+        }
+    }
+}
+
+/// Mouse modes as set; global like DECCKM, not swapped with the screens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct MouseModes {
+    pub tracking: MouseTracking,
+    pub sgr: bool,
+    pub urxvt: bool,
+    pub alternate_scroll: bool,
+}
+
+impl Default for MouseModes {
+    fn default() -> Self {
+        Self {
+            tracking: MouseTracking::Off,
+            sgr: false,
+            urxvt: false,
+            alternate_scroll: true,
+        }
+    }
+}
+
+impl MouseModes {
+    /// SGR wins when both extended encodings are set, as in xterm.
+    fn encoding(self) -> MouseEncoding {
+        if self.sgr {
+            MouseEncoding::Sgr
+        } else if self.urxvt {
+            MouseEncoding::Urxvt
+        } else {
+            MouseEncoding::X10
+        }
+    }
 }
 
 impl Terminal {
@@ -18,6 +72,9 @@ impl Terminal {
             app_cursor_keys: self.state.app_cursor_keys,
             // Derived, not stored twice: the screens are the source of truth.
             alt_screen: self.state.alt_active,
+            mouse_tracking: self.state.mouse.tracking,
+            mouse_encoding: self.state.mouse.encoding(),
+            alternate_scroll: self.state.mouse.alternate_scroll,
         }
     }
 }
@@ -53,6 +110,18 @@ impl State {
                 self.leave_alt(false);
                 self.restore_cursor();
             }
+            1000 | 1002 | 1003 if on => {
+                self.mouse.tracking = match mode {
+                    1000 => MouseTracking::Click,
+                    1002 => MouseTracking::Drag,
+                    _ => MouseTracking::Motion,
+                };
+            }
+            // xterm keeps one tracking setting: resetting any of them ends it.
+            1000 | 1002 | 1003 => self.mouse.tracking = MouseTracking::Off,
+            1006 => self.mouse.sgr = on,
+            1007 => self.mouse.alternate_scroll = on,
+            1015 => self.mouse.urxvt = on,
             _ => {}
         }
     }
@@ -64,6 +133,7 @@ mod tests {
     use super::Modes;
     use crate::TermSize;
     use crate::grid::Region;
+    use crate::mouse::{MouseEncoding, MouseTracking};
 
     #[test]
     fn unknown_private_modes_change_nothing() {
@@ -307,7 +377,10 @@ mod tests {
             t.modes(),
             Modes {
                 app_cursor_keys: false,
-                alt_screen: false
+                alt_screen: false,
+                mouse_tracking: MouseTracking::Off,
+                mouse_encoding: MouseEncoding::X10,
+                alternate_scroll: true,
             }
         );
         assert_eq!(t.modes(), Modes::default());
@@ -354,7 +427,7 @@ mod tests {
         t.advance(b"\x1b[?1h\x1b=");
         let expected = Modes {
             app_cursor_keys: true,
-            alt_screen: false,
+            ..Modes::default()
         };
         assert_eq!(t.modes(), expected);
         t.advance(b"\x1b>");
@@ -365,6 +438,64 @@ mod tests {
     fn ris_clears_cursor_key_mode_and_leaves_the_alt_screen() {
         let mut t = term(5, 2);
         t.advance(b"\x1b[?1h\x1b[?1049h\x1bc");
+        assert_eq!(t.modes(), Modes::default());
+    }
+
+    #[test]
+    fn mouse_tracking_modes_select_what_is_reported() {
+        let mut t = term(5, 2);
+        for (mode, tracking) in [
+            (1000, MouseTracking::Click),
+            (1002, MouseTracking::Drag),
+            (1003, MouseTracking::Motion),
+        ] {
+            t.advance(format!("\x1b[?{mode}h").as_bytes());
+            assert_eq!(t.modes().mouse_tracking, tracking);
+        }
+    }
+
+    #[test]
+    fn resetting_any_tracking_mode_turns_reporting_off_like_xterm() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?1002h\x1b[?1000l");
+        assert_eq!(t.modes().mouse_tracking, MouseTracking::Off);
+    }
+
+    #[test]
+    fn sgr_encoding_wins_over_urxvt_and_both_fall_back_to_x10() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?1015h");
+        assert_eq!(t.modes().mouse_encoding, MouseEncoding::Urxvt);
+        t.advance(b"\x1b[?1006h");
+        assert_eq!(t.modes().mouse_encoding, MouseEncoding::Sgr);
+        t.advance(b"\x1b[?1006l");
+        assert_eq!(t.modes().mouse_encoding, MouseEncoding::Urxvt);
+        t.advance(b"\x1b[?1015l");
+        assert_eq!(t.modes().mouse_encoding, MouseEncoding::X10);
+    }
+
+    #[test]
+    fn alternate_scroll_starts_on_and_can_be_turned_off() {
+        let mut t = term(5, 2);
+        assert!(t.modes().alternate_scroll);
+        t.advance(b"\x1b[?1007l");
+        assert!(!t.modes().alternate_scroll);
+        t.advance(b"\x1b[?1007h");
+        assert!(t.modes().alternate_scroll);
+    }
+
+    #[test]
+    fn mouse_modes_are_global_across_the_screens() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?1049h\x1b[?1000;1006h\x1b[?1049l");
+        assert_eq!(t.modes().mouse_tracking, MouseTracking::Click);
+        assert_eq!(t.modes().mouse_encoding, MouseEncoding::Sgr);
+    }
+
+    #[test]
+    fn ris_resets_the_mouse_modes() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?1003;1006;1015h\x1b[?1007l\x1bc");
         assert_eq!(t.modes(), Modes::default());
     }
 }

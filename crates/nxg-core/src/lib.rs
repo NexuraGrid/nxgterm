@@ -9,6 +9,7 @@ pub mod fallback;
 pub mod grid;
 pub mod image;
 pub mod kitty;
+pub mod mouse;
 pub mod ports;
 pub mod sixel;
 pub mod size;
@@ -16,4 +17,4 @@ pub mod terminal;
 
 pub use cell::{Cell, Color, Flags};
 pub use size::{CellPixels, SizeError, TermSize, WinSize};
-pub use terminal::{Cursor, Modes, Terminal};
+pub use terminal::{Cursor, DEFAULT_SCROLLBACK, Modes, Terminal};

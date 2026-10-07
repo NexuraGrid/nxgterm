@@ -55,7 +55,8 @@ impl State {
     }
 
     /// Scrolls rows `top..=bottom` up by `n`, taking placements along. The
-    /// one entry point for scrolling, so scrollback has a single hook.
+    /// one entry point for scrolling; [`State::scroll_up_saving`] wraps it
+    /// for the operations that feed the scrollback.
     pub(super) fn scroll_up(&mut self, top: u16, bottom: u16, n: u16) {
         let n = n.min(bottom - top + 1);
         let blank = self.blank();
@@ -80,7 +81,7 @@ impl State {
     /// SU: scroll the region, leaving the cursor.
     pub(super) fn scroll_region_up(&mut self, n: u16) {
         let Region { top, bottom } = self.screen.region;
-        self.scroll_up(top, bottom, n);
+        self.scroll_up_saving(top, bottom, n);
     }
 
     /// SD: scroll the region, leaving the cursor.
@@ -94,7 +95,7 @@ impl State {
     pub(super) fn index(&mut self) {
         let Region { top, bottom } = self.screen.region;
         if self.screen.row == bottom {
-            self.scroll_up(top, bottom, 1);
+            self.scroll_up_saving(top, bottom, 1);
         } else if self.screen.row < self.last_row() {
             self.screen.row += 1;
         }
@@ -237,6 +238,9 @@ impl State {
                 (0..rows).for_each(|r| self.erase(r, 0..cols));
                 // Like kitty, a full clear removes image placements.
                 self.images.clear_placements();
+                if mode == 3 {
+                    self.scrollback.clear();
+                }
             }
             _ => {}
         }
