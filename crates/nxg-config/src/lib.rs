@@ -54,7 +54,7 @@ size = 14.0
 
 [window]
 # Space around the grid, in pixels at 100% display scale.
-padding = 4
+padding = 8
 # Initial size in character cells.
 columns = 100
 rows = 30
@@ -208,7 +208,7 @@ pub struct WindowConfig {
 impl Default for WindowConfig {
     fn default() -> Self {
         Self {
-            padding: 4,
+            padding: 8,
             columns: NonZeroU16::new(100).expect("non-zero"),
             rows: NonZeroU16::new(30).expect("non-zero"),
             tab_bar: TabBar::Auto,
@@ -528,7 +528,7 @@ mod tests {
         assert_eq!(config.font.family, None);
         assert!(config.font.fallback.is_empty());
         assert_eq!(config.font.size, 14.0);
-        assert_eq!(config.window.padding, 4);
+        assert_eq!(config.window.padding, 8);
         assert_eq!(
             (config.window.columns.get(), config.window.rows.get()),
             (100, 30)
