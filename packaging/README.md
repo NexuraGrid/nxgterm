@@ -11,8 +11,8 @@ Everything here is published from a GitHub Release, which
 | `nxgterm-<v>-x86_64-linux.tar.gz`, `nxgterm-<v>-aarch64-linux.tar.gz` | Ubuntu 22.04 (glibc 2.35) | binary, licenses, README, desktop file, metainfo, icon, `profile/` |
 | `nxgterm_<v>-1_amd64.deb`, `nxgterm_<v>-1_arm64.deb` | cargo-deb | `/usr/bin/nxgterm`, desktop integration, `/usr/share/nxgterm/profile/` |
 | `nxgterm-<v>-1.x86_64.rpm`, `nxgterm-<v>-1.aarch64.rpm` | cargo-generate-rpm | same layout as the `.deb` |
-| `nxgterm-<v>-x86_64-windows.zip` | Windows (MSVC) | `nxgterm.exe`, licenses, README, `profile\` |
-| `nxgterm-<v>-x86_64.msi` | cargo-wix (WiX 3) | Program Files, Start Menu shortcut, optional PATH entry, `profile\` |
+| `nxgterm-<v>-x86_64-windows.zip` | Windows (MSVC) | `nxgterm.exe`, bundled ConPTY (`conpty.dll`, `x64\OpenConsole.exe`), licenses, README, `profile\` |
+| `nxgterm-<v>-x86_64.msi` | cargo-wix (WiX 3) | the zip's files in Program Files, Start Menu shortcut, optional PATH entry |
 | `nxgterm-<v>-universal-macos.dmg`, `.tar.gz` | macOS (lipo of x86_64 + arm64) | `nxgterm.app`; the profile is in `Contents/Resources/profile/` |
 | `nxgterm-<v>-source.tar.gz` | `git archive` | source for the AUR and Fedora builds |
 | `SHA256SUMS` | | checksums of all of the above |
@@ -145,3 +145,8 @@ The signing and notarization steps run only when these are set.
   missing resource compiler fails the build.
 - The MSI and the exe are not Authenticode-signed, so SmartScreen may warn on
   first run.
+- Both the zip and the MSI ship Microsoft's standalone ConPTY, which inline
+  images need. The release job fetches it with
+  [`windows/conpty/fetch-conpty.ps1`](windows/conpty/README.md) (pinned
+  version, SHA-256 verified) into `target\conpty`, where `main.wxs` reads it;
+  run the same script before a local `cargo wix`.
