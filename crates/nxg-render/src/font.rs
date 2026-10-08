@@ -77,6 +77,8 @@ type FaceData = (Vec<u8>, u32);
 #[derive(Clone)]
 pub struct FontFaces {
     family: String,
+    /// The requested family that was found, as requested.
+    requested: Option<String>,
     regular: FaceData,
     bold: Option<FaceData>,
     fallback_families: Vec<String>,
@@ -88,6 +90,7 @@ impl fmt::Debug for FontFaces {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FontFaces")
             .field("family", &self.family)
+            .field("requested", &self.requested)
             .field("bold", &self.bold.is_some())
             .field("fallbacks", &self.fallback_families)
             .finish_non_exhaustive()
@@ -95,15 +98,16 @@ impl fmt::Debug for FontFaces {
 }
 
 impl FontFaces {
-    /// Finds `family` among the system fonts, falling back to the system
-    /// monospace font and then a list of common monospace families. The
-    /// bold face comes from the same family as the regular one, or is
-    /// absent (bold text then uses the regular face).
+    /// Uses the first of the `families` found among the system fonts (see
+    /// [`first_available`]), falling back to the system monospace font and
+    /// then a list of common monospace families. The bold face comes from
+    /// the same family as the regular one, or is absent (bold text then
+    /// uses the regular face).
     ///
     /// Glyphs missing from that family are looked up in the installed
     /// `fallback` families, then in the installed built-in ones (see
     /// [`fallback_order`]); missing families are skipped.
-    pub fn system(family: Option<&str>, fallback: &[String]) -> Result<Self, FontError> {
+    pub fn system(families: &[String], fallback: &[String]) -> Result<Self, FontError> {
         let mut db = Database::new();
         db.load_system_fonts();
         // The generic alias comes from fontconfig on Linux; elsewhere fontdb
@@ -113,7 +117,6 @@ impl FontFaces {
         } else if cfg!(target_os = "macos") {
             db.set_monospace_family("Menlo");
         }
-        let families = family_order(family);
         let query = |families: &[Family<'_>], weight| {
             db.query(&Query {
                 families,
@@ -121,6 +124,10 @@ impl FontFaces {
                 ..Query::default()
             })
         };
+        let requested = first_available(families, |name| {
+            query(&[Family::Name(name)], Weight::NORMAL).is_some()
+        });
+        let families = family_order(requested);
         let load = |id| db.with_face_data(id, |data, index| (data.to_vec(), index));
         let regular_id = query(&families, Weight::NORMAL).ok_or(FontError::NotFound)?;
         let regular = load(regular_id).ok_or(FontError::NotFound)?;
@@ -158,6 +165,7 @@ impl FontFaces {
         }
         Ok(Self {
             family: name,
+            requested: requested.map(str::to_owned),
             regular,
             bold,
             fallback_families,
@@ -173,6 +181,12 @@ impl FontFaces {
     /// The family actually found, e.g. to report a missing requested one.
     pub fn family(&self) -> &str {
         &self.family
+    }
+
+    /// The requested family in use (trimmed, as requested), or `None` when
+    /// none was found and the system monospace font is used instead.
+    pub fn requested_family(&self) -> Option<&str> {
+        self.requested.as_deref()
     }
 
     /// Whether this is the family called `name` (case-insensitive).
@@ -246,6 +260,16 @@ pub(crate) fn parse_face(data: Vec<u8>, index: u32) -> Result<fontdue::Font, Fon
     fontdue::Font::from_bytes(data, settings).map_err(FontError::Invalid)
 }
 
+/// The first of `requested` (trimmed, blank ones skipped) for which
+/// `available` holds, e.g. the first installed family of a configured list.
+fn first_available(requested: &[String], available: impl Fn(&str) -> bool) -> Option<&str> {
+    requested
+        .iter()
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty())
+        .find(|name| available(name))
+}
+
 /// Families to query, in order: `requested` (if any), the generic
 /// monospace alias, then [`FALLBACK_FAMILIES`].
 fn family_order(requested: Option<&str>) -> Vec<Family<'_>> {
@@ -284,7 +308,7 @@ impl fmt::Debug for Font {
 impl Font {
     /// The system monospace font (see [`FontFaces::system`]) at `px`.
     pub fn system(px: f32) -> Result<Self, FontError> {
-        FontFaces::system(None, &[])?.font(px)
+        FontFaces::system(&[], &[])?.font(px)
     }
 
     /// Builds a font from raw font file bytes and a collection index.
@@ -444,19 +468,45 @@ mod tests {
     }
 
     #[test]
+    fn first_available_family_wins_in_order() {
+        let installed = ["Fira Code", "Hack"];
+        let available = |name: &str| installed.contains(&name);
+        let requested = names(&["JetBrainsMono Nerd Font", " Hack ", "Fira Code"]);
+        assert_eq!(first_available(&requested, available), Some("Hack"));
+        let requested = names(&["", "Fira Code", "Hack"]);
+        assert_eq!(first_available(&requested, available), Some("Fira Code"));
+        assert_eq!(first_available(&names(&["Nope", "  "]), available), None);
+        assert_eq!(first_available(&[], available), None);
+    }
+
+    #[test]
     fn unknown_family_falls_back_to_a_monospace_font() {
-        let Ok(faces) = FontFaces::system(Some("No Such Font Family 1234"), &[]) else {
+        let missing = names(&["No Such Font Family 1234", "Nor This One 5678"]);
+        let Ok(faces) = FontFaces::system(&missing, &[]) else {
             return;
         };
         assert!(!faces.is_family("No Such Font Family 1234"));
+        assert_eq!(faces.requested_family(), None);
         assert!(!faces.family().is_empty());
-        let fallback = FontFaces::system(None, &[]).unwrap();
+        let fallback = FontFaces::system(&[], &[]).unwrap();
         assert_eq!(faces.family(), fallback.family());
     }
 
     #[test]
+    fn first_installed_family_of_a_list_is_used() {
+        let Ok(system) = FontFaces::system(&[], &[]) else {
+            return;
+        };
+        let installed = system.family().to_owned();
+        let requested = names(&["No Such Font Family 1234", &installed]);
+        let faces = FontFaces::system(&requested, &[]).unwrap();
+        assert_eq!(faces.requested_family(), Some(installed.as_str()));
+        assert!(faces.is_family(&installed));
+    }
+
+    #[test]
     fn faces_build_fonts_at_any_size() {
-        let Ok(faces) = FontFaces::system(None, &[]) else {
+        let Ok(faces) = FontFaces::system(&[], &[]) else {
             return;
         };
         let small = faces.font(10.0).unwrap().cell_size();

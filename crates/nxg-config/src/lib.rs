@@ -42,8 +42,10 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# nxgterm configuration.
 # the opacity from 1.0, which apply on the next start.
 
 [font]
-# Font family. When unset or not installed, the system monospace font is used.
+# Font family, or a list of families tried in order: the first installed one
+# is used. When unset or none is installed, the system monospace font is used.
 # family = "JetBrains Mono"
+# family = ["JetBrainsMono Nerd Font", "Fira Code"]
 # Families searched, in order, for characters the font above lacks, such as
 # the Nerd Font icons printed by eza or yazi. After this list, installed
 # "Symbols Nerd Font Mono", "Symbols Nerd Font", any other Nerd Font,
@@ -186,9 +188,11 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FontConfig {
-    /// Preferred family; `None` means the system monospace font.
-    #[serde(deserialize_with = "non_empty")]
-    pub family: Option<String>,
+    /// Preferred families, in order: the first installed one is used.
+    /// Empty (or none installed) means the system monospace font. A
+    /// single name or a list; blank names are dropped.
+    #[serde(deserialize_with = "one_or_more_names")]
+    pub family: Vec<String>,
     /// Families searched, in order, for glyphs the primary font lacks
     /// (e.g. Nerd Font icons); blank names are dropped.
     #[serde(deserialize_with = "names")]
@@ -201,7 +205,7 @@ pub struct FontConfig {
 impl Default for FontConfig {
     fn default() -> Self {
         Self {
-            family: None,
+            family: Vec::new(),
             fallback: Vec::new(),
             size: DEFAULT_FONT_SIZE,
         }
@@ -485,14 +489,32 @@ fn non_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String
     Ok(value.filter(|s| !s.trim().is_empty()))
 }
 
+/// A name or a list of names; trims each one and drops the blank ones.
+fn one_or_more_names<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged, expecting = "a string or an array of strings")]
+    enum OneOrMore {
+        One(String),
+        More(Vec<String>),
+    }
+    let names = match OneOrMore::deserialize(deserializer)? {
+        OneOrMore::One(name) => vec![name],
+        OneOrMore::More(names) => names,
+    };
+    Ok(trimmed(names))
+}
+
 /// Trims each name and drops the blank ones.
 fn names<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
-    let names = Vec::<String>::deserialize(deserializer)?;
-    Ok(names
+    Ok(trimmed(Vec::<String>::deserialize(deserializer)?))
+}
+
+fn trimmed(names: Vec<String>) -> Vec<String> {
+    names
         .into_iter()
         .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty())
-        .collect())
+        .collect()
 }
 
 /// An integer or a float, as TOML has both.
@@ -594,7 +616,7 @@ mod tests {
     #[test]
     fn defaults_match_the_documentation() {
         let config = Config::default();
-        assert_eq!(config.font.family, None);
+        assert!(config.font.family.is_empty());
         assert!(config.font.fallback.is_empty());
         assert_eq!(config.font.size, 14.0);
         assert_eq!(config.window.padding, 8);
@@ -718,7 +740,7 @@ mod tests {
             "##,
         )
         .unwrap();
-        assert_eq!(config.font.family.as_deref(), Some("JetBrains Mono"));
+        assert_eq!(config.font.family, ["JetBrains Mono"]);
         assert_eq!(config.font.size, 12.0);
         assert_eq!(config.window.padding, 0);
         assert_eq!(
@@ -745,8 +767,23 @@ mod tests {
     #[test]
     fn blank_strings_mean_unset() {
         let config = parse("[font]\nfamily = \"  \"\n[shell]\nprogram = \"\"\n").unwrap();
-        assert_eq!(config.font.family, None);
+        assert!(config.font.family.is_empty());
         assert_eq!(config.shell.program, None);
+    }
+
+    #[test]
+    fn font_family_takes_a_name_or_a_list() {
+        let family =
+            |value: &str| parse(&format!("[font]\nfamily = {value}\n")).map(|c| c.font.family);
+        assert_eq!(family("\" Iosevka \"").unwrap(), ["Iosevka"]);
+        assert_eq!(
+            family(r#"["JetBrainsMono Nerd Font", "Fira Code"]"#).unwrap(),
+            ["JetBrainsMono Nerd Font", "Fira Code"]
+        );
+        assert!(family("[]").unwrap().is_empty());
+        assert_eq!(family(r#"["", "  ", " Hack "]"#).unwrap(), ["Hack"]);
+        let error = family("12").unwrap_err().to_string();
+        assert!(error.contains("a string or an array of strings"), "{error}");
     }
 
     #[test]

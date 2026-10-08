@@ -1406,14 +1406,20 @@ fn layout(renderer: &dyn WindowRenderer, padding: u32) -> Layout {
 /// Font files for the configured family and fallbacks, reporting the
 /// ones that are not installed and the fallback faces in use.
 fn load_faces(font: &FontConfig) -> Result<FontFaces, FontError> {
-    let faces = FontFaces::system(font.family.as_deref(), &font.fallback)?;
-    if let Some(family) = &font.family {
-        if !faces.is_family(family) {
-            eprintln!(
-                "nxgterm: font family `{family}` not found; using `{}`",
-                faces.family()
-            );
-        }
+    let faces = FontFaces::system(&font.family, &font.fallback)?;
+    let requested = faces.requested_family();
+    let skipped: Vec<&str> = font
+        .family
+        .iter()
+        .map(String::as_str)
+        .take_while(|&family| Some(family) != requested)
+        .collect();
+    if !skipped.is_empty() {
+        eprintln!(
+            "nxgterm: font family `{}` not found; using `{}`",
+            skipped.join("`, `"),
+            faces.family()
+        );
     }
     let found = faces.fallback_families();
     for family in &font.fallback {
