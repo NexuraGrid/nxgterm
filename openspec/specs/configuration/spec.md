@@ -60,7 +60,7 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | `window.padding` | u16 logical pixels | `8` |
 | `window.columns`, `window.rows` | non-zero u16 initial cells | `100`, `30` |
 | `window.tab_bar` | `auto` (two or more tabs), `always`, `never` | `auto` |
-| `window.decorations` | `native` (system title bar) or `integrated` (the tab bar is the title bar) | `native` |
+| `window.decorations` | `integrated` (the tab bar is the title bar) or `native` (system title bar) | `integrated` |
 | `window.opacity` | integer or float opacity of the default background, clamped to 0.0-1.0; `nan`/`inf` are errors | `1.0` |
 | `window.blur` | bool; ask the system to blur behind a translucent background | `false` |
 | `colors.theme` | built-in theme name, case-insensitive | `catppuccin-mocha` |
@@ -233,8 +233,8 @@ bar and borders and the tab bar MUST behave as `window.tab_bar` says. With
 - THEN the window resizes and the program receives no button report
 
 #### Scenario: Decorations changed while running
-- GIVEN a running terminal with native decorations
-- WHEN `decorations = "integrated"` is saved
+- GIVEN a running terminal with integrated decorations
+- WHEN `decorations = "native"` is saved
 - THEN stderr shows `nxgterm: window decorations changes apply on restart`
 
 ### Requirement: Display scale

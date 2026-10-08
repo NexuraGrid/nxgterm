@@ -194,7 +194,7 @@ padding = 8                 # pixels around the grid at 100% scale
 columns = 100               # initial size in cells
 rows = 30
 tab_bar = "auto"            # auto (2+ tabs) | always | never
-decorations = "native"      # native | integrated (the tab bar is the title bar)
+decorations = "integrated"  # integrated (the tab bar is the title bar) | native
 opacity = 1.0               # default background opacity, 0.0-1.0
 blur = false                # blur behind a translucent background
 
@@ -324,8 +324,8 @@ labelled ` N: program `, the current tab highlighted; click a label to
 switch to it. Labels are the program name; titles set by programs (OSC 0/2)
 are not shown yet.
 
-With `window.decorations = "integrated"` the tab bar replaces the system
-title bar, as in Windows Terminal or a browser. It always shows, even with
+With `window.decorations = "integrated"` (the default) the tab bar replaces
+the system title bar, as in Windows Terminal or a browser. It always shows, even with
 one tab, and has a `+` button after the last tab that opens a new one. Drag
 its empty part to move the window and double-click it to maximize or
 restore. On Windows and Linux it draws minimize, maximize/restore and close
