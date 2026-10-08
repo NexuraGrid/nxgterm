@@ -62,9 +62,9 @@ rows = 30
 tab_bar = "auto"
 
 [colors]
-# Built-in theme: nxg-dark, nxg-light, tokyo-night, catppuccin-mocha,
+# Built-in theme: catppuccin-mocha, nxg-dark, nxg-light, tokyo-night,
 # gruvbox-dark, dracula, nord, one-dark.
-theme = "nxg-dark"
+theme = "catppuccin-mocha"
 # Optional overrides on top of the theme, as "#rrggbb" (or "#rgb"):
 # foreground = "#c0caf5"
 # background = "#1a1b26"
@@ -533,13 +533,16 @@ mod tests {
             (config.window.columns.get(), config.window.rows.get()),
             (100, 30)
         );
-        assert_eq!(config.colors.theme.theme().name, "nxg-dark");
+        assert_eq!(config.colors.theme.theme().name, "catppuccin-mocha");
         assert_eq!(config.shell, ShellConfig::default());
         assert_eq!(config.renderer.backend, Backend::Auto);
         assert_eq!(config.scrollback.lines, 10_000);
         assert_eq!(config.window.tab_bar, TabBar::Auto);
         assert!(config.selection.copy_on_select);
-        assert_eq!(config.colors.resolve().selection_background, None);
+        assert_eq!(
+            config.colors.resolve().selection_background,
+            Some(Rgb::hex(0x585b70))
+        );
     }
 
     #[test]
@@ -672,16 +675,19 @@ mod tests {
     }
 
     #[test]
-    fn selection_colors_are_unset_unless_configured() {
+    fn selection_colors_come_from_the_theme_unless_configured() {
         let colors = parse("[colors]\nselection_background = \"#334455\"")
             .unwrap()
             .colors
             .resolve();
         assert_eq!(colors.selection_background, Some(Rgb::hex(0x334455)));
-        assert_eq!(colors.selection_foreground, None);
-        for theme in THEMES {
-            assert_eq!(theme.colors.selection_background, None, "{}", theme.name);
-        }
+        assert_eq!(colors.selection_foreground, Some(Rgb::hex(0xcdd6f4)));
+        let swapped = parse("[colors]\ntheme = \"nxg-dark\"")
+            .unwrap()
+            .colors
+            .resolve();
+        assert_eq!(swapped.selection_foreground, None);
+        assert_eq!(swapped.selection_background, None);
     }
 
     #[test]
@@ -690,7 +696,7 @@ mod tests {
         assert!(error.contains("/cfg/nxgterm.toml"), "{error}");
         assert!(error.contains("line 2"), "{error}");
         assert!(error.contains("unknown theme `solarized`"), "{error}");
-        assert!(error.contains("available: nxg-dark"), "{error}");
+        assert!(error.contains("available: catppuccin-mocha"), "{error}");
     }
 
     #[test]

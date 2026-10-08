@@ -64,9 +64,16 @@ mod tests {
     use nxg_config::{Config, MAX_FONT_SIZE, MIN_FONT_SIZE, THEMES};
 
     #[test]
-    fn default_config_keeps_the_original_palette() {
-        let colors = Config::default().colors.resolve();
+    fn nxg_dark_keeps_the_original_palette() {
+        let colors = THEMES.iter().find(|t| t.name == "nxg-dark").unwrap().colors;
         assert_eq!(palette(&colors), Palette::default());
+    }
+
+    #[test]
+    fn default_config_draws_catppuccin_mocha() {
+        let palette = palette(&Config::default().colors.resolve());
+        assert_eq!(palette.background, rgb(0x1e, 0x1e, 0x2e));
+        assert_eq!(palette.selection_background, Some(rgb(0x58, 0x5b, 0x70)));
     }
 
     #[test]
