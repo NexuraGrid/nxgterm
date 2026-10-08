@@ -61,12 +61,12 @@ columns = 100
 rows = 30
 # Tab bar above the grid: auto (only with two or more tabs), always or never.
 tab_bar = "auto"
-# Window decorations: "native" (the system title bar, with the tab bar below
-# it) or "integrated" (the tab bar is the title bar: it always shows, drag it
-# to move the window and double-click it to maximize; on Windows and Linux it
-# draws minimize, maximize and close buttons and the window edges resize it,
-# on macOS the native window buttons stay on its left).
-decorations = "native"
+# Window decorations: "integrated" (the tab bar is the title bar: it always
+# shows, drag it to move the window and double-click it to maximize; on
+# Windows and Linux it draws minimize, maximize and close buttons and the
+# window edges resize it, on macOS the native window buttons stay on its
+# left) or "native" (the system title bar, with the tab bar below it).
+decorations = "integrated"
 # Opacity of the default background, from 0.0 (invisible) to 1.0 (opaque).
 # Text, the cursor, colored backgrounds, the selection, the tab bar and
 # images stay opaque. Below 1.0 the window is created transparent; it needs
@@ -243,7 +243,7 @@ impl Default for WindowConfig {
             columns: NonZeroU16::new(100).expect("non-zero"),
             rows: NonZeroU16::new(30).expect("non-zero"),
             tab_bar: TabBar::Auto,
-            decorations: Decorations::Native,
+            decorations: Decorations::Integrated,
             opacity: 1.0,
             blur: false,
         }
@@ -373,9 +373,9 @@ impl TabBar {
 #[serde(rename_all = "lowercase")]
 pub enum Decorations {
     /// The system title bar and borders.
-    #[default]
     Native,
     /// No system title bar: the tab bar takes its place.
+    #[default]
     Integrated,
 }
 
@@ -607,7 +607,7 @@ mod tests {
         assert_eq!(config.renderer.backend, Backend::Auto);
         assert_eq!(config.scrollback.lines, 10_000);
         assert_eq!(config.window.tab_bar, TabBar::Auto);
-        assert_eq!(config.window.decorations, Decorations::Native);
+        assert_eq!(config.window.decorations, Decorations::Integrated);
         assert_eq!(config.window.opacity, 1.0);
         assert!(!config.window.translucent());
         assert!(!config.window.blur);

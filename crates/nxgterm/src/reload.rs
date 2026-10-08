@@ -119,7 +119,7 @@ mod tests {
             c.shell.program = Some("zsh".into());
             c.renderer.backend = Backend::Cpu;
             c.window.columns = NonZeroU16::new(80).unwrap();
-            c.window.decorations = nxg_config::Decorations::Integrated;
+            c.window.decorations = nxg_config::Decorations::Native;
         });
         assert!(!changes.restyle);
         assert_eq!(
