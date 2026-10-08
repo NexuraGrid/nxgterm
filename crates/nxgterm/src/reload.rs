@@ -44,6 +44,9 @@ pub fn diff(old: &Config, new: &Config) -> Changes {
     if (old.window.columns, old.window.rows) != (new.window.columns, new.window.rows) {
         on_restart.push("window size");
     }
+    if old.window.decorations != new.window.decorations {
+        on_restart.push("window decorations");
+    }
     Changes {
         font_faces,
         font_size,
@@ -116,9 +119,13 @@ mod tests {
             c.shell.program = Some("zsh".into());
             c.renderer.backend = Backend::Cpu;
             c.window.columns = NonZeroU16::new(80).unwrap();
+            c.window.decorations = nxg_config::Decorations::Integrated;
         });
         assert!(!changes.restyle);
-        assert_eq!(changes.on_restart, ["shell", "renderer", "window size"]);
+        assert_eq!(
+            changes.on_restart,
+            ["shell", "renderer", "window size", "window decorations"]
+        );
     }
 
     #[test]
