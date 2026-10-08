@@ -91,6 +91,12 @@ directory when Yazi exits) and, on Linux and macOS, `~/.local/bin` on `PATH` to 
 `~/.config/fish/conf.d/nxgterm-profile.fish` and the PowerShell profiles,
 between `# >>> nxgterm profile >>>` and `# <<< nxgterm profile <<<` markers.
 
+On Windows, Yazi detects file types with `file.exe`, which Windows does not
+ship. `install.ps1` points the user variable `YAZI_FILE_ONE` at the copy in
+Git for Windows (`<Git>\usr\bin\file.exe`), installing Git first if it is
+missing. Without it, Yazi previews fail with "Cannot find `file`". Open a
+new terminal afterwards so the variable takes effect.
+
 ## Architecture
 
 Hexagonal: a platform-agnostic core defines ports, and adapters implement them per platform.
@@ -322,6 +328,12 @@ window (`TIOCGWINSZ`, `CSI 14/16/18 t`). Decoded images are capped at
 6. winpty fallback for Windows Server 2016 ✅
 7. Packages (AUR, deb, rpm, winget, Homebrew) and the tools profile
    (Yazi, zoxide, ngmux, Bruno CLI, curl) ✅
+8. 0.2.0: scrollback, mouse wheel and mouse reporting, font fallback for
+   icons, configurable key bindings, tabs, command palette ✅
+9. 0.3.0: text selection, copy and paste, bracketed paste ✅
+
+Planned work is tracked in
+[`openspec/RECOMMENDATIONS.md`](openspec/RECOMMENDATIONS.md).
 
 ## Development
 

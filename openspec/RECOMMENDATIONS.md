@@ -16,16 +16,16 @@ Each item is meant to become its own OpenSpec change
 | 2 | P0 | Windows Server 2016 VM and macOS test passes | pty, packaging |
 | 3 | P0 | ~~Alternate screen, scroll regions and full-screen app essentials~~ Done in `fullscreen-essentials` (2026-10-07) | terminal-core |
 | 4 | P0 | Harden kitty file transmission (`t=f`/`t=t`) | inline-images |
-| 5 | P1 | Scrollback with mouse wheel | terminal-core, rendering |
-| 6 | P1 | Selection, copy/paste and bracketed paste | terminal-core, configuration |
+| 5 | P1 | ~~Scrollback with mouse wheel~~ Done in 0.2.0 | terminal-core, rendering |
+| 6 | P1 | ~~Selection, copy/paste and bracketed paste~~ Done in 0.3.0 | terminal-core, configuration |
 | 7 | P1 | Wide characters and emoji (unicode-width) | terminal-core, rendering |
-| 8 | P1 | Font fallback for missing glyphs; italic and underline | rendering |
-| 9 | P1 | Mouse reporting and full key encoding | terminal-core |
+| 8 | P1 | ~~Font fallback for missing glyphs~~ (0.2.0); italic and underline still open | rendering |
+| 9 | P1 | ~~Mouse reporting~~ (0.2.0); full key encoding still open | terminal-core |
 | 10 | P1 | OSC support: title, OSC 7, OSC 8, OSC 52 | terminal-core |
 | 11 | P1 | Kitty unicode placeholders (images inside ngmux/tmux) | inline-images |
 | 12 | P1 | Performance: benchmark, damage tracking, frame pacing | rendering |
 | 13 | P1 | Code signing: Authenticode and Apple notarization | packaging |
-| 14 | P1 | Publish to AUR, COPR, winget and Homebrew | packaging |
+| 14 | P1 | Publish to AUR, COPR, winget and Homebrew (manifests ready for 0.3.0) | packaging |
 | 15 | P1 | Live GUI tests (screenshot tests) | rendering |
 | 16 | P1 | Move `std::fs` out of `nxg-core` behind a port | terminal-core, inline-images |
 | 17 | P1 | Keep CI actions current | packaging |
@@ -34,7 +34,7 @@ Each item is meant to become its own OpenSpec change
 | 20 | P2 | terminfo entry | pty, packaging |
 | 21 | P2 | wgpu upgrade path once the MSRV can move | rendering |
 | 22 | P2 | Dedupe `miniz_oxide` and drop the unused workspace dependency | (build) |
-| 23 | P2 | Decide on tabs/splits vs relying on ngmux | (product) |
+| 23 | P2 | ~~Tabs~~ native in 0.2.0; splits vs ngmux still open | (product) |
 | 24 | P2 | Configuration documentation and small CLI gaps | configuration |
 | 25 | P2 | Character sets, tab stops, DECCOLM, DECALN, DECSCNM and double-size lines | terminal-core |
 | 26 | P2 | Numeric keypad mode (DECKPAM/DECKPNM) | terminal-core |
@@ -115,6 +115,8 @@ the user's NTLM hash. `t=t` also deletes any matching file under temp dirs.
 
 ### 5. Scrollback with mouse wheel
 
+**Status: Done** (0.2.0, PR #8: scrollback, mouse wheel, `[scrollback] lines`)
+
 **Why.** Lines that scroll off the top are lost.
 **Do.** Ring-buffer scrollback in `nxg-core` (configurable `[scrollback] lines`,
 default ~10,000), a viewport offset, mouse wheel and Shift+PageUp/PageDown
@@ -122,6 +124,8 @@ in the app, snap to bottom on input. Images keep their anchor in history or
 are dropped explicitly (document which). Not on the alternate screen.
 
 ### 6. Selection, copy/paste and bracketed paste
+
+**Status: Done** (0.3.0, PR #14: cell/word/line selection, clipboard port, bracketed paste with sanitizing)
 
 **Why.** Basic usability; paste is impossible today.
 **Do.** Mouse selection (cell, word, line), selection highlight in both
@@ -140,6 +144,8 @@ the previous cell.
 
 ### 8. Font fallback for missing glyphs; italic and underline
 
+**Status: Partial.** Per-glyph font fallback shipped in 0.2.0 (PR #9); italic and underline are still not drawn.
+
 **Why.** Characters missing from the chosen font (Nerd Font icons used by
 Yazi, CJK, emoji) render as `.notdef`; italic and underline are parsed
 (`Flags::ITALIC`, `Flags::UNDERLINE`) but never drawn.
@@ -149,6 +155,8 @@ selection; underline (and later undercurl, strikethrough) drawn by both
 renderers with matching tests.
 
 ### 9. Mouse reporting and full key encoding
+
+**Status: Partial.** Mouse reporting shipped in 0.2.0 (PR #8); F-keys and xterm modifier encoding for named keys are still missing.
 
 **Why.** No mouse modes (`?1000/1002/1003/1006`); `keys.rs` lacks F1-F12,
 modified arrows/Home/End (`CSI 1;5A`), keypad, and Ctrl on non-letters.
@@ -195,6 +203,8 @@ enroll in the Apple Developer Program and set the six `MACOS_*` secrets the
 workflow already supports. Update the README and cask caveats afterwards.
 
 ### 14. Publish to AUR, COPR, winget and Homebrew
+
+**Status: Partial.** Manifests carry real 0.3.0 checksums (PR #17); publishing to each channel is still pending.
 
 **Why.** Manifests carry placeholder checksums; README install commands do
 not work yet.
@@ -271,6 +281,8 @@ that `png` uses (dropping `flate2`) or align versions when `png` updates.
 Add `cargo deny check bans` (duplicates as warnings) to CI.
 
 ### 23. Tabs and splits: decide
+
+**Status: Partial.** Native tabs shipped in 0.2.0 (PR #11); splits vs relying on ngmux is still undecided.
 
 nxgterm has one window and one shell; ngmux provides multiplexing. Record
 the decision (ADR in a change's `design.md`): either "no tabs/splits,
