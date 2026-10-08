@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           nxgterm
-Version:        0.4.0
+Version:        0.5.0
 Release:        1%{?dist}
 Summary:        Fast, configurable, cross-platform terminal emulator
 
@@ -79,6 +79,10 @@ cargo test --release --locked --workspace
 %{_datadir}/%{name}/
 
 %changelog
+* Thu Oct 08 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.5.0-1
+- Catppuccin Mocha default theme, title bar matching the theme, wider
+  padding, window icon; winpty license in the Windows packages
+
 * Thu Oct 08 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.4.0-1
 - Windows: bundle Microsoft's ConPTY so inline images work, and point
   Yazi at Git's file.exe in the tools profile
