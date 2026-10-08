@@ -66,6 +66,19 @@ pub fn blends(mode: CompositeAlphaMode) -> bool {
     )
 }
 
+/// How the DX12 backend presents to a window. Only a swapchain on a
+/// DirectComposition visual can blend with what is behind the window, so
+/// a `translucent` window gets one; others keep wgpu's default swapchain
+/// on the window handle, which developer tools (RenderDoc, PIX) handle
+/// best. Ignored by the other backends.
+pub fn dx12_presentation(translucent: bool) -> wgpu::Dx12SwapchainKind {
+    if translucent {
+        wgpu::Dx12SwapchainKind::DxgiFromVisual
+    } else {
+        wgpu::Dx12SwapchainKind::DxgiFromHwnd
+    }
+}
+
 /// The alpha of the default background: `opacity` when the surface
 /// `blends` with what is behind the window, 1.0 otherwise.
 pub fn background_alpha(blends: bool, opacity: f32) -> f32 {
@@ -169,6 +182,14 @@ mod tests {
     }
 
     #[test]
+    fn only_translucent_windows_present_through_a_composition_visual() {
+        use wgpu::Dx12SwapchainKind::{DxgiFromHwnd, DxgiFromVisual};
+        assert_eq!(dx12_presentation(true), DxgiFromVisual);
+        assert_eq!(dx12_presentation(false), DxgiFromHwnd);
+        assert_eq!(dx12_presentation(false), Default::default());
+    }
+
+    #[test]
     fn opaque_windows_keep_the_opaque_mode() {
         assert_eq!(alpha_mode(&[PreMultiplied, Opaque], false), Opaque);
         assert_eq!(alpha_mode(&[Inherit, PreMultiplied], false), Inherit);
@@ -184,7 +205,7 @@ mod tests {
 
     #[test]
     fn translucent_windows_fall_back_to_opaque_surfaces() {
-        // DX12 window handles and OpenGL offer only Opaque in wgpu 26.
+        // DX12 window handles and OpenGL offer only Opaque.
         assert_eq!(alpha_mode(&[Opaque], true), Opaque);
         assert_eq!(alpha_mode(&[Inherit, Opaque], true), Opaque);
         assert!(!blends(alpha_mode(&[Opaque, Inherit], true)));

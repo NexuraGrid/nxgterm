@@ -33,10 +33,16 @@ impl GpuRenderer {
     where
         W: wgpu::WindowHandle + HasDisplayHandle + Clone + fmt::Debug + 'static,
     {
+        // Asking for a blending surface only when the window starts
+        // translucent keeps opaque windows exactly as they were.
+        let translucent = style.background_opacity < 1.0;
         // The display handle lets EGL pick the right platform (Wayland).
-        let descriptor =
-            wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone()));
-        let instance = wgpu::Instance::new(descriptor);
+        let mut descriptor =
+            wgpu::InstanceDescriptor::new_with_display_handle(Box::new(window.clone()));
+        descriptor.backend_options.dx12.presentation_system =
+            format::dx12_presentation(translucent);
+        // The WGPU_* environment variables still override these choices.
+        let instance = wgpu::Instance::new(descriptor.with_env());
         let surface = instance
             .create_surface(window)
             .map_err(|error| GpuError(format!("cannot create surface: {error}")))?;
@@ -44,9 +50,7 @@ impl GpuRenderer {
         let caps = surface.get_capabilities(&gpu.adapter);
         let format = format::choose(&caps.formats)
             .ok_or_else(|| GpuError(format!("{}: no surface formats", gpu.describe())))?;
-        // Asking for a blending mode only when the window starts
-        // translucent keeps opaque windows exactly as they were.
-        let alpha_mode = format::alpha_mode(&caps.alpha_modes, style.background_opacity < 1.0);
+        let alpha_mode = format::alpha_mode(&caps.alpha_modes, translucent);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
