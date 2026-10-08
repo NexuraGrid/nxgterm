@@ -184,6 +184,8 @@ defaults.
 Every key is optional:
 
 ```toml
+import = ["fonts.toml"]     # other files merged first; see Imports below
+
 [font]
 family = "JetBrains Mono"   # or a list, e.g. ["JetBrainsMono Nerd Font", "Fira Code"]:
                             # the first installed one wins, else the system monospace font
@@ -200,7 +202,7 @@ opacity = 1.0               # default background opacity, 0.0-1.0
 blur = false                # blur behind a translucent background
 
 [colors]
-theme = "catppuccin-mocha"
+theme = "catppuccin-mocha"  # a built-in theme, or themes/<name>.toml (see below)
 # Optional overrides on top of the theme:
 # foreground = "#c0caf5"
 # background = "#1a1b26"
@@ -230,6 +232,45 @@ copy_on_select = true       # selected text goes to PRIMARY (Linux only)
 Built-in themes: `catppuccin-mocha` (default), `nxg-dark` (xterm colors),
 `nxg-light`, `tokyo-night`, `gruvbox-dark`, `dracula`, `nord`, `one-dark`.
 
+Theme files: `theme = "my-theme"` reads `themes/my-theme.toml` in the
+directory of `nxgterm.toml` (e.g. `~/.config/nxgterm/themes/my-theme.toml`)
+before looking for a built-in theme of that name. A theme file holds the same
+keys as the `[colors]` overrides, at its top level or under `[colors]`; the
+ones it leaves out come from `catppuccin-mocha`, and `[colors]` overrides in
+the config still apply on top:
+
+```toml
+# ~/.config/nxgterm/themes/my-theme.toml
+foreground = "#d8dee9"
+background = "#1d2128"
+cursor = "#88c0d0"
+ansi = [
+  "#3b4252", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#88c0d0", "#e5e9f0",
+  "#4c566a", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#8fbcbb", "#eceff4",
+]
+selection_background = "#434c5e"
+```
+
+An unknown name is an error listing the built-in themes and the theme files
+found.
+
+Imports: `import = ["fonts.toml", "colors.toml"]` at the top of a config file
+merges those files first, in order, then the file's own values override
+theirs, as with Alacritty's `general.import`. Tables merge key by key (so an
+imported `[keybindings]` adds to the main file's); any other value, lists
+included, is replaced by the later one. Paths are relative to the importing
+file's directory, `~` is the home directory, and absolute paths work too.
+Imported files can import others (up to 8 levels); a cycle or a missing file
+is an error naming the file, like any other config error.
+
+```toml
+# ~/.config/nxgterm/nxgterm.toml
+import = ["fonts.toml", "~/dotfiles/nxgterm/colors.toml"]
+
+[font]
+size = 13.0   # wins over fonts.toml
+```
+
 `opacity` below 1.0 makes the default background translucent, like
 Alacritty and WezTerm: the padding and cells with the theme background let
 the desktop show through, while text, the cursor, colored cells, the
@@ -241,7 +282,9 @@ OpenGL backend, usually with Vulkan on Windows, and with the CPU renderer the
 background stays opaque and a line on stderr says so. `blur = true` blurs what is behind the window on
 macOS, KDE Plasma (Wayland) and Windows 11 (Acrylic).
 
-The file is reloaded when saved. Font, colors, padding, the tab bar, opacity,
+The file is reloaded when saved, and so are its imports and its theme file
+(a directory that does not exist yet, such as a new `themes` directory, is
+watched from the next reload). Font, colors, padding, the tab bar, opacity,
 blur, the scrollback limit and key bindings apply at once; `[shell]`, `[renderer]`, the initial
 `columns`/`rows`, `decorations` and lowering `opacity` from 1.0 (the window is created
 transparent only then) apply on the next start. An invalid file is reported on stderr (with the line and the reason,

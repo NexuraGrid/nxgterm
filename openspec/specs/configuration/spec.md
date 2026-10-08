@@ -6,7 +6,7 @@ The optional TOML configuration (`nxg-config`, pure and OS-free), where it
 is found, how it is validated, the built-in themes, the command-line
 interface, live reload, and the key bindings (`nxgterm`).
 
-Sources: `crates/nxg-config/src/{lib,path,theme,color,keybindings}.rs`,
+Sources: `crates/nxg-config/src/{lib,load,path,theme,color,keybindings}.rs`,
 `crates/nxgterm/src/{main,cli,reload,watch,bindings,appearance}.rs`.
 
 ## Requirements
@@ -54,6 +54,7 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 
 | Key | Type | Default |
 |---|---|---|
+| `import` | list of config files merged first, in order (see Imports) | `[]` |
 | `font.family` | string or list of strings, first installed one wins; blank names dropped | system monospace |
 | `font.fallback` | list of family names searched per missing glyph; blank names dropped | `[]` (built-in defaults still apply) |
 | `font.size` | integer or float points, clamped to 6-72; non-finite = 14 | `14.0` |
@@ -63,7 +64,7 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | `window.decorations` | `integrated` (the tab bar is the title bar) or `native` (system title bar) | `integrated` |
 | `window.opacity` | integer or float opacity of the default background, clamped to 0.0-1.0; `nan`/`inf` are errors | `1.0` |
 | `window.blur` | bool; ask the system to blur behind a translucent background | `false` |
-| `colors.theme` | built-in theme name, case-insensitive | `catppuccin-mocha` |
+| `colors.theme` | theme file name in `themes/`, else built-in theme name (case-insensitive) | `catppuccin-mocha` |
 | `colors.foreground`/`background`/`cursor` | `#rrggbb` or `#rgb` | from theme |
 | `colors.ansi` | exactly 16 colors (normal 0-7, bright 8-15) | from theme |
 | `colors.selection_foreground`/`selection_background` | `#rrggbb` or `#rgb`; unset swaps the colors of selected cells | from theme (unset for most) |
@@ -104,6 +105,41 @@ xterm cube and grayscale ramp regardless of theme.
 - WHEN colors are resolved
 - THEN the foreground is `#010203` and the background is nord's
 
+### Requirement: Theme files
+
+`theme = "<name>"` MUST first read `<config dir>/themes/<name>.toml`, where
+the config dir is the directory of the main config file, and only then fall
+back to the built-in theme of that name; names that are not plain file
+names (with a path separator, `.` or `..`) MUST skip the file lookup. A
+theme file MUST accept the `[colors]` override keys at its top level or
+under `[colors]`, reject other keys, and take the keys it leaves out from
+the default theme. The config's own `[colors]` overrides MUST apply on top.
+An unknown name MUST be an error at the `theme` line of the file that set
+it, listing the built-in themes and the theme files found.
+
+#### Scenario: Custom theme
+- GIVEN `themes/custom-theme.toml` with only `foreground = "#010203"`
+- WHEN the config sets `theme = "custom-theme"`
+- THEN the foreground is `#010203` and the other colors are catppuccin-mocha's
+
+### Requirement: Imports
+
+A top-level `import` list MUST merge the named files first, in order, with
+the importing file's own values overriding them; tables MUST merge key by
+key and any other value (lists included) MUST be replaced by the later one.
+Paths MUST be relative to the importing file's directory, with a leading `~`
+expanded to the home directory; absolute paths MUST work. Imported files MAY
+import others; cycles and nesting deeper than 8 levels MUST be errors, and so
+MUST a missing or unreadable import, naming the importing file and the
+import. Every file MUST be checked alone first, so errors name the file and
+line they are in.
+
+#### Scenario: Main file wins
+- GIVEN `import = ["a.toml", "b.toml"]`, both setting `font.size`, and the
+  main file setting `window.padding` like `a.toml`
+- WHEN the config is loaded
+- THEN the size is `b.toml`'s and the padding the main file's
+
 ### Requirement: Invalid config handling
 
 Parse errors MUST name the file path, the line and the reason (unknown key,
@@ -126,9 +162,10 @@ running settings MUST stay unchanged.
 
 ### Requirement: Live reload
 
-The parent directory of the config file MUST be watched (so editors that
-save by rename are handled), events for other files, reads and access-time
-updates MUST be ignored, and bursts MUST be debounced to one reload after
+The parent directories of the config file, its imports and its theme file
+MUST be watched (so editors that save by rename are handled; directories
+that do not exist yet are tried again after each reload), events for other
+files, reads and access-time updates MUST be ignored, and bursts MUST be debounced to one reload after
 200 ms of quiet. Font family, fallback families, font size, colors, padding,
 `window.tab_bar` and `window.opacity` (on a window created transparent) MUST
 apply immediately (restyle and refit the grid); `window.blur` MUST be asked of

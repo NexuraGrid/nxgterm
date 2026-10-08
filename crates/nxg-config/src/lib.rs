@@ -1,5 +1,5 @@
-//! Configuration: the TOML file, its defaults, the built-in themes and the
-//! key bindings.
+//! Configuration: the TOML file, its imports, its defaults, the built-in
+//! themes and theme files, and the key bindings.
 //!
 //! Pure: no window, GPU or OS APIs. Every key is optional; a missing file
 //! or section means the defaults, and unknown keys are errors so typos do
@@ -7,6 +7,7 @@
 
 pub mod color;
 pub mod keybindings;
+pub mod load;
 pub mod path;
 pub mod theme;
 
@@ -19,6 +20,7 @@ use serde::{Deserialize, Deserializer};
 
 pub use color::Rgb;
 pub use keybindings::{Bindings, KeybindingsConfig};
+pub use load::Loaded;
 pub use path::{Platform, config_path, has_env_override};
 pub use theme::{Colors, THEMES, Theme, ThemeName};
 
@@ -40,6 +42,11 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# nxgterm configuration.
 # reported as errors. Changes are applied live when the file is saved, except
 # [shell], [renderer], the window size, the window decorations and lowering
 # the opacity from 1.0, which apply on the next start.
+
+# Other config files merged first, in order; this file's own values win over
+# theirs. Paths are relative to this file's directory; "~" is the home
+# directory. Imported files can import others. A missing file is an error.
+# import = ["fonts.toml", "~/dotfiles/nxgterm-colors.toml"]
 
 [font]
 # Font family, or a list of families tried in order: the first installed one
@@ -81,7 +88,10 @@ blur = false
 
 [colors]
 # Built-in theme: catppuccin-mocha, nxg-dark, nxg-light, tokyo-night,
-# gruvbox-dark, dracula, nord, one-dark.
+# gruvbox-dark, dracula, nord, one-dark. Or a theme file: theme = "my-theme"
+# reads themes/my-theme.toml next to this file (it wins over a built-in theme
+# of the same name). A theme file holds the overrides below, at its top level
+# or under [colors]; the colors it leaves out come from catppuccin-mocha.
 theme = "catppuccin-mocha"
 # Optional overrides on top of the theme, as "#rrggbb" (or "#rgb"):
 # foreground = "#c0caf5"
@@ -174,6 +184,9 @@ copy_on_select = true
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    /// Files merged under this one, as written; [`Config::load`] applies
+    /// them and leaves this empty.
+    pub import: Vec<String>,
     pub font: FontConfig,
     pub window: WindowConfig,
     pub colors: ColorsConfig,
@@ -254,7 +267,7 @@ impl Default for WindowConfig {
     }
 }
 
-/// `[colors]`: a built-in theme plus optional overrides.
+/// `[colors]`: a built-in theme or theme file plus optional overrides.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ColorsConfig {
@@ -270,7 +283,7 @@ pub struct ColorsConfig {
 impl ColorsConfig {
     /// The theme's colors with the overrides applied.
     pub fn resolve(&self) -> Colors {
-        let theme = self.theme.theme().colors;
+        let theme = self.theme.colors();
         Colors {
             foreground: self.foreground.unwrap_or(theme.foreground),
             background: self.background.unwrap_or(theme.background),
@@ -407,6 +420,13 @@ pub enum ConfigError {
     /// The file is not valid TOML or does not match the schema. `message`
     /// carries the line, column and offending snippet.
     Parse { path: PathBuf, message: String },
+    /// An `import` of the file at `path` cannot be used: unreadable, a
+    /// cycle or nested too deep.
+    Import {
+        path: PathBuf,
+        import: PathBuf,
+        reason: String,
+    },
 }
 
 impl fmt::Display for ConfigError {
@@ -421,6 +441,16 @@ impl fmt::Display for ConfigError {
                     message.trim_end()
                 )
             }
+            Self::Import {
+                path,
+                import,
+                reason,
+            } => write!(
+                f,
+                "invalid config {}: cannot import {}: {reason}",
+                path.display(),
+                import.display()
+            ),
         }
     }
 }
@@ -429,25 +459,35 @@ impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
-            Self::Parse { .. } => None,
+            Self::Parse { .. } | Self::Import { .. } => None,
         }
     }
 }
 
 impl Config {
-    /// Parses `text`; `path` only labels errors.
+    /// Parses `text`, the contents of the main config file at `path`: its
+    /// imports are read relative to it and its theme files from the
+    /// `themes` directory next to it (see [`load::load`]).
     pub fn parse(text: &str, path: &Path) -> Result<Self, ConfigError> {
-        toml::from_str(text).map_err(|error| ConfigError::Parse {
-            path: path.to_owned(),
-            message: error.to_string(),
-        })
+        Self::parse_with_files(text, path).map(|loaded| loaded.config)
+    }
+
+    /// [`Config::parse`], with the files the config was built from.
+    pub fn parse_with_files(text: &str, path: &Path) -> Result<Loaded, ConfigError> {
+        let home = path::home_dir(Platform::current(), |name| std::env::var_os(name));
+        load::load(text, path, home.as_deref())
     }
 
     /// Reads and parses the file at `path`. A missing file yields
     /// `Ok(None)` so callers can fall back to the defaults.
     pub fn load(path: &Path) -> Result<Option<Self>, ConfigError> {
+        Ok(Self::load_with_files(path)?.map(|loaded| loaded.config))
+    }
+
+    /// [`Config::load`], with the files the config was built from.
+    pub fn load_with_files(path: &Path) -> Result<Option<Loaded>, ConfigError> {
         match std::fs::read_to_string(path) {
-            Ok(text) => Self::parse(&text, path).map(Some),
+            Ok(text) => Self::parse_with_files(&text, path).map(Some),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(source) => Err(ConfigError::Io {
                 path: path.to_owned(),
@@ -624,7 +664,7 @@ mod tests {
             (config.window.columns.get(), config.window.rows.get()),
             (100, 30)
         );
-        assert_eq!(config.colors.theme.theme().name, "catppuccin-mocha");
+        assert_eq!(config.colors.theme.name(), "catppuccin-mocha");
         assert_eq!(config.shell, ShellConfig::default());
         assert_eq!(config.renderer.backend, Backend::Auto);
         assert_eq!(config.scrollback.lines, 10_000);
@@ -747,7 +787,7 @@ mod tests {
             (config.window.columns.get(), config.window.rows.get()),
             (80, 24)
         );
-        assert_eq!(config.colors.theme.theme().name, "dracula");
+        assert_eq!(config.colors.theme.name(), "dracula");
         assert_eq!(config.colors.background, Some(Rgb::hex(0)));
         assert_eq!(config.shell.program.as_deref(), Some("pwsh.exe"));
         assert_eq!(config.shell.args, ["-NoLogo"]);
