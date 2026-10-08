@@ -38,8 +38,8 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# nxgterm configuration.
 #
 # Every key is optional; the values below are the defaults. Unknown keys are
 # reported as errors. Changes are applied live when the file is saved, except
-# [shell], [renderer], the window size and lowering the opacity from 1.0,
-# which apply on the next start.
+# [shell], [renderer], the window size, the window decorations and lowering
+# the opacity from 1.0, which apply on the next start.
 
 [font]
 # Font family. When unset or not installed, the system monospace font is used.
@@ -61,6 +61,12 @@ columns = 100
 rows = 30
 # Tab bar above the grid: auto (only with two or more tabs), always or never.
 tab_bar = "auto"
+# Window decorations: "native" (the system title bar, with the tab bar below
+# it) or "integrated" (the tab bar is the title bar: it always shows, drag it
+# to move the window and double-click it to maximize; on Windows and Linux it
+# draws minimize, maximize and close buttons and the window edges resize it,
+# on macOS the native window buttons stay on its left).
+decorations = "native"
 # Opacity of the default background, from 0.0 (invisible) to 1.0 (opaque).
 # Text, the cursor, colored backgrounds, the selection, the tab bar and
 # images stay opaque. Below 1.0 the window is created transparent; it needs
@@ -213,6 +219,8 @@ pub struct WindowConfig {
     pub rows: NonZeroU16,
     /// When the tab bar is shown.
     pub tab_bar: TabBar,
+    /// The system title bar, or the tab bar as the title bar.
+    pub decorations: Decorations,
     /// Opacity of the default background, already clamped with
     /// [`clamp_opacity`]; 1.0 keeps the window opaque.
     #[serde(deserialize_with = "opacity")]
@@ -235,6 +243,7 @@ impl Default for WindowConfig {
             columns: NonZeroU16::new(100).expect("non-zero"),
             rows: NonZeroU16::new(30).expect("non-zero"),
             tab_bar: TabBar::Auto,
+            decorations: Decorations::Native,
             opacity: 1.0,
             blur: false,
         }
@@ -357,6 +366,17 @@ impl TabBar {
             Self::Never => false,
         }
     }
+}
+
+/// How the window is framed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Decorations {
+    /// The system title bar and borders.
+    #[default]
+    Native,
+    /// No system title bar: the tab bar takes its place.
+    Integrated,
 }
 
 /// Clamps a font size to [`MIN_FONT_SIZE`]..=[`MAX_FONT_SIZE`]; a
@@ -587,6 +607,7 @@ mod tests {
         assert_eq!(config.renderer.backend, Backend::Auto);
         assert_eq!(config.scrollback.lines, 10_000);
         assert_eq!(config.window.tab_bar, TabBar::Auto);
+        assert_eq!(config.window.decorations, Decorations::Native);
         assert_eq!(config.window.opacity, 1.0);
         assert!(!config.window.translucent());
         assert!(!config.window.blur);
@@ -606,6 +627,16 @@ mod tests {
         assert_eq!(tab_bar("always").unwrap(), TabBar::Always);
         assert_eq!(tab_bar("never").unwrap(), TabBar::Never);
         assert!(tab_bar("sometimes").is_err());
+    }
+
+    #[test]
+    fn decorations_take_native_or_integrated() {
+        let decorations = |value: &str| {
+            parse(&format!("[window]\ndecorations = \"{value}\"\n")).map(|c| c.window.decorations)
+        };
+        assert_eq!(decorations("native").unwrap(), Decorations::Native);
+        assert_eq!(decorations("integrated").unwrap(), Decorations::Integrated);
+        assert!(decorations("none").is_err());
     }
 
     #[test]

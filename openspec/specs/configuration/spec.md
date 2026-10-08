@@ -60,6 +60,7 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | `window.padding` | u16 logical pixels | `8` |
 | `window.columns`, `window.rows` | non-zero u16 initial cells | `100`, `30` |
 | `window.tab_bar` | `auto` (two or more tabs), `always`, `never` | `auto` |
+| `window.decorations` | `native` (system title bar) or `integrated` (the tab bar is the title bar) | `native` |
 | `window.opacity` | integer or float opacity of the default background, clamped to 0.0-1.0; `nan`/`inf` are errors | `1.0` |
 | `window.blur` | bool; ask the system to blur behind a translucent background | `false` |
 | `colors.theme` | built-in theme name, case-insensitive | `catppuccin-mocha` |
@@ -134,7 +135,7 @@ apply immediately (restyle and refit the grid); `window.blur` MUST be asked of
 the system again; `scrollback.lines` MUST apply
 immediately, dropping the oldest lines beyond a lower limit; `[keybindings]`
 MUST apply to the next key press. Changes to `[shell]`,
-`[renderer]` and `window.columns`/`rows` MUST be reported as
+`[renderer]`, `window.columns`/`rows` and `window.decorations` MUST be reported as
 `nxgterm: <section> changes apply on restart`; an opacity below 1.0 on a
 window created opaque MUST be reported as
 `nxgterm: window opacity changes apply on restart`. A deleted file MUST reload as
@@ -192,6 +193,49 @@ protocol, the Acrylic system backdrop on Windows 11.
 - GIVEN a terminal started with `opacity = 1.0`
 - WHEN `opacity = 0.9` is saved
 - THEN stderr shows `nxgterm: window opacity changes apply on restart` and the window stays opaque
+
+### Requirement: Integrated title bar
+
+With `window.decorations = "native"` the window MUST keep the system title
+bar and borders and the tab bar MUST behave as `window.tab_bar` says. With
+`integrated`, applied at start, the tab bar MUST be the window's title bar:
+
+- It MUST always show, whatever `window.tab_bar` says, and the initial window
+  size MUST include its row.
+- On Windows and Linux the window MUST be created without decorations (on
+  Windows with the undecorated drop shadow) and the bar MUST end with
+  minimize, maximize/restore and close buttons that act when the left button
+  is released over the one it was pressed on; the button under the pointer
+  MUST be highlighted, close in red.
+- On macOS the window MUST keep its frame with a transparent, hidden title
+  and full-size content; the bar MUST leave room on its left for the native
+  window buttons and MUST NOT draw its own.
+- A `+` button after the last tab, when it fits, MUST open a new tab.
+- A left press on the empty bar MUST move the window; a second one within
+  the double-click time MUST maximize or restore it instead. A right press
+  there SHOULD open the system window menu (Windows).
+- Outside macOS and while not maximized or fullscreen, a left press within
+  5 logical pixels of a window edge (corners twice as far along the edges)
+  MUST resize the window from that edge or corner, and the pointer MUST
+  show the matching resize cursor there. These presses MUST NOT reach the
+  selection, the command palette or terminal mouse reporting.
+- Clicking a tab label MUST still switch to it, and key bindings MUST NOT
+  change.
+
+#### Scenario: One tab with an integrated title bar on Windows
+- GIVEN `[window] decorations = "integrated"` on Windows
+- WHEN nxgterm starts with one tab
+- THEN the window has no system title bar, the bar shows ` 1: pwsh `, `+` and the three window buttons, and the grid is below it
+
+#### Scenario: Resizing from an edge
+- GIVEN an integrated title bar on Linux and a program with mouse reporting on
+- WHEN the left button is pressed on the right window edge and dragged
+- THEN the window resizes and the program receives no button report
+
+#### Scenario: Decorations changed while running
+- GIVEN a running terminal with native decorations
+- WHEN `decorations = "integrated"` is saved
+- THEN stderr shows `nxgterm: window decorations changes apply on restart`
 
 ### Requirement: Display scale
 

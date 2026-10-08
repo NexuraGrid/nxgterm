@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
-use nxg_config::{Backend, Bindings, Config, FontConfig, TabBar};
+use nxg_config::{Backend, Bindings, Config, Decorations, FontConfig, TabBar};
 use nxg_core::fallback::{self, Init};
 use nxg_core::mouse::{MouseAction, MouseButton, MouseEvent};
 use nxg_core::ports::{ChildProcess, Clipboard, ClipboardKind, PtyControl, RenderError, Renderer};
@@ -21,17 +21,18 @@ use nxg_render::{
     WindowRenderer,
 };
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::keyboard::ModifiersState;
-use winit::window::{Window, WindowId};
+use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 
 use crate::bindings::Action;
 use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
 use crate::mouse::{Clicks, ViewportScroll, Wheel, WheelAction};
 use crate::tabs::{TabId, Tabs};
+use crate::title_bar::{self, Button, Chrome, Region};
 use crate::{appearance, bindings, choice, clipboard, icon, keys, mouse, reload, tab_bar};
 
 /// Events posted to the event loop from background threads.
@@ -74,6 +75,21 @@ struct Session {
     tabs: Tabs<Tab>,
     /// When the tab bar shows; the grid is one row shorter while it does.
     tab_bar: TabBar,
+    /// The tab bar is the window's title bar (`window.decorations =
+    /// "integrated"` at start): it always shows, moves the window and,
+    /// except on macOS, has the window buttons and resizing edges.
+    integrated: bool,
+    /// The pointer in window pixels.
+    cursor: (f64, f64),
+    /// The window edge under the pointer, shown with a resize cursor.
+    resize_hover: Option<ResizeDirection>,
+    /// The bar button under the pointer, drawn highlighted.
+    bar_hover: Option<Region>,
+    /// The bar button pressed with the left button: it acts when released
+    /// over it.
+    bar_pressed: Option<Region>,
+    /// The last left press on the empty bar, for double clicks.
+    bar_drag_press: Option<Instant>,
     /// Consecutive skipped frames; bounds retries so a surface that keeps
     /// failing (e.g. occluded) does not spin the event loop.
     skipped_frames: u8,
@@ -152,6 +168,7 @@ impl App {
         let config = &self.config;
         let transparent = config.window.translucent();
         let blur = appearance::blur(transparent, config.window.blur);
+        let integrated = config.window.decorations == Decorations::Integrated;
         // A DirectComposition swapchain (translucent DX12 windows) shows
         // white until its first present: show the window after one frame.
         let show_after_first_frame = cfg!(windows) && transparent;
@@ -161,11 +178,23 @@ impl App {
             .with_window_icon(icon::window_icon())
             .with_theme(Some(appearance::window_theme(&config.colors.resolve())))
             .with_transparent(transparent)
-            .with_blur(blur);
+            .with_blur(blur)
+            // macOS keeps its frame and window buttons, under the content.
+            .with_decorations(!integrated || MACOS);
         #[cfg(windows)]
         let attributes = {
             use winit::platform::windows::WindowAttributesExtWindows;
-            attributes.with_system_backdrop(appearance::backdrop(blur))
+            attributes
+                .with_system_backdrop(appearance::backdrop(blur))
+                .with_undecorated_shadow(integrated)
+        };
+        #[cfg(target_os = "macos")]
+        let attributes = {
+            use winit::platform::macos::WindowAttributesExtMacOS;
+            attributes
+                .with_titlebar_transparent(integrated)
+                .with_fullsize_content_view(integrated)
+                .with_title_hidden(integrated)
         };
         let window = Arc::new(event_loop.create_window(attributes)?);
         let scale = window.scale_factor();
@@ -173,7 +202,11 @@ impl App {
         let style = build_style(&faces, config, config.font.size, scale)?;
 
         let initial = TermSize::new(config.window.columns.get(), config.window.rows.get())?;
-        let (width, height) = style.layout().window_size(initial);
+        // The integrated bar is part of the window: add its row.
+        let (width, height) = style
+            .layout()
+            .below(u16::from(integrated))
+            .window_size(initial);
         // May be ignored (tiling window managers) or applied later through
         // a `Resized` event; the grid follows the actual size either way.
         let _ = window.request_inner_size(PhysicalSize::new(width, height));
@@ -193,6 +226,12 @@ impl App {
             padding,
             tabs: Tabs::new(),
             tab_bar: config.window.tab_bar,
+            integrated,
+            cursor: (0.0, 0.0),
+            resize_hover: None,
+            bar_hover: None,
+            bar_pressed: None,
+            bar_drag_press: None,
             skipped_frames: 0,
             wheel: Wheel::default(),
             pointer: (0, 0),
@@ -324,6 +363,83 @@ impl App {
             _ => return None,
         };
         Some(outcome)
+    }
+
+    /// Handles what the integrated title bar does with the mouse, before
+    /// the palette, the selection or the terminal see it: a left press on a
+    /// window edge resizes, one on the empty bar moves the window (twice
+    /// quickly: maximizes or restores), and the window and new-tab buttons
+    /// act when released over. A right press on the empty bar opens the
+    /// window menu (Windows only). Returns whether the event was used up;
+    /// pointer motion never is.
+    fn chrome_mouse(&mut self, event_loop: &ActiveEventLoop, event: &WindowEvent) -> bool {
+        let Some(session) = &mut self.session else {
+            return false;
+        };
+        if !session.integrated {
+            return false;
+        }
+        let (x, y) = session.cursor;
+        let pressed = match *event {
+            WindowEvent::CursorMoved { position, .. } => {
+                session.hover(position.x, position.y);
+                return false;
+            }
+            WindowEvent::CursorLeft { .. } => {
+                session.unhover();
+                return false;
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: winit::event::MouseButton::Right,
+                ..
+            } if session.bar_region_at(x, y) == Some(Region::Drag) => {
+                session.window.show_window_menu(PhysicalPosition::new(x, y));
+                return true;
+            }
+            WindowEvent::MouseInput {
+                state,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => state == ElementState::Pressed,
+            _ => return false,
+        };
+        if pressed {
+            if let Some(direction) = session.resize_edge_at(x, y) {
+                // Fails only where unsupported; then nothing happens.
+                let _ = session.window.drag_resize_window(direction);
+                return true;
+            }
+            return match session.bar_region_at(x, y) {
+                Some(Region::Drag) => {
+                    session.drag_bar(Instant::now());
+                    true
+                }
+                Some(region @ (Region::NewTab | Region::Button(_))) => {
+                    session.bar_pressed = Some(region);
+                    true
+                }
+                Some(Region::Tab(_)) | None => false,
+            };
+        }
+        let Some(region) = session.bar_pressed.take() else {
+            return false;
+        };
+        if session.bar_region_at(x, y) != Some(region) {
+            return true; // Released elsewhere: cancelled.
+        }
+        let window = &session.window;
+        match region {
+            Region::NewTab => {
+                session.palette = None;
+                self.new_tab();
+            }
+            Region::Button(Button::Minimize) => window.set_minimized(true),
+            Region::Button(Button::Maximize) => window.set_maximized(!window.is_maximized()),
+            Region::Button(Button::Close) => event_loop.exit(),
+            Region::Tab(_) | Region::Drag => {}
+        }
+        true
     }
 
     /// Handles a key press: a bound action, or bytes for the pty.
@@ -608,6 +724,9 @@ impl ApplicationHandler<UserEvent> for App {
             if self.session.as_ref().is_some_and(|s| s.tabs.is_empty()) {
                 event_loop.exit();
             }
+            return;
+        }
+        if self.chrome_mouse(event_loop, &event) {
             return;
         }
         if let Some(outcome) = self.palette_mouse(&event) {
@@ -912,7 +1031,7 @@ impl Session {
     fn tab_switched(&mut self) {
         self.held = None;
         self.drag = None;
-        if !self.tab_bar.visible(self.tabs.len()) {
+        if !self.bar_visible(self.tabs.len()) {
             self.bar_pointer = None;
         }
         self.sync_grid_size();
@@ -941,9 +1060,15 @@ impl Session {
         self.grid_layout_for(self.tabs.len())
     }
 
+    /// Whether the tab bar shows with `tabs` tabs open: always when it is
+    /// the title bar.
+    fn bar_visible(&self, tabs: usize) -> bool {
+        self.integrated || self.tab_bar.visible(tabs)
+    }
+
     /// [`Session::grid_layout`] with `tabs` tabs open.
     fn grid_layout_for(&self, tabs: usize) -> Layout {
-        let bar = u16::from(self.tab_bar.visible(tabs));
+        let bar = u16::from(self.bar_visible(tabs));
         layout(self.renderer.as_ref(), self.padding).below(bar)
     }
 
@@ -974,15 +1099,102 @@ impl Session {
         Some(self.palette.as_ref()?.rect(size))
     }
 
-    /// The tab bar labels for a bar `cols` columns wide.
-    fn bar_labels(&self, cols: u16) -> Vec<tab_bar::Label> {
+    /// What the tab bar holds besides the labels.
+    fn chrome(&self) -> Chrome {
+        if !self.integrated {
+            return Chrome::NATIVE;
+        }
+        let inset = if MACOS {
+            let cell = layout(self.renderer.as_ref(), self.padding).cell;
+            title_bar::macos_inset(self.scale, self.padding, cell.width)
+        } else {
+            0
+        };
+        Chrome {
+            inset,
+            new_tab: true,
+            buttons: !MACOS,
+        }
+    }
+
+    /// The tab bar laid out `cols` columns wide.
+    fn bar(&self, cols: u16) -> title_bar::Bar {
         let titles: Vec<&str> = self.tabs.iter().map(|tab| tab.title.as_str()).collect();
-        tab_bar::layout(&titles, self.tabs.active_index(), cols)
+        title_bar::layout(&titles, self.tabs.active_index(), cols, self.chrome())
+    }
+
+    /// What is on the tab bar at window pixel `x`, `y`, if it shows there.
+    fn bar_region_at(&self, x: f64, y: f64) -> Option<Region> {
+        let col = self.bar_column_at(x, y)?;
+        let cols = self.tabs.active()?.terminal.size().cols();
+        Some(self.bar(cols).region_at(col))
+    }
+
+    /// The window edge a press at pixel `x`, `y` resizes: only for the
+    /// integrated title bar outside macOS (which keeps its own frame), and
+    /// not while maximized or fullscreen.
+    fn resize_edge_at(&self, x: f64, y: f64) -> Option<ResizeDirection> {
+        if !self.integrated || MACOS {
+            return None;
+        }
+        let window = &self.window;
+        if window.is_maximized() || window.fullscreen().is_some() {
+            return None;
+        }
+        let size = window.inner_size();
+        let border = title_bar::resize_border(self.scale);
+        title_bar::resize_edge(x, y, f64::from(size.width), f64::from(size.height), border)
+    }
+
+    /// Follows the pointer at pixel `x`, `y` for the integrated title bar:
+    /// a resize cursor over the window edges, a highlight on the button
+    /// under it.
+    fn hover(&mut self, x: f64, y: f64) {
+        self.cursor = (x, y);
+        let edge = self.resize_edge_at(x, y);
+        if edge != self.resize_hover {
+            self.resize_hover = edge;
+            let icon = edge.map_or(CursorIcon::Default, CursorIcon::from);
+            self.window.set_cursor(icon);
+        }
+        let button = match edge {
+            Some(_) => None,
+            None => self
+                .bar_region_at(x, y)
+                .filter(|region| matches!(region, Region::NewTab | Region::Button(_))),
+        };
+        if button != self.bar_hover {
+            self.bar_hover = button;
+            self.window.request_redraw();
+        }
+    }
+
+    /// The pointer left the window: no edge or button is hovered.
+    fn unhover(&mut self) {
+        if self.resize_hover.take().is_some() {
+            self.window.set_cursor(CursorIcon::Default);
+        }
+        if self.bar_hover.take().is_some() {
+            self.window.request_redraw();
+        }
+    }
+
+    /// A left press on the empty title bar: moves the window, or toggles
+    /// maximized when it is the second press of a double click.
+    fn drag_bar(&mut self, now: Instant) {
+        if title_bar::double_click(self.bar_drag_press, now) {
+            self.bar_drag_press = None;
+            self.window.set_maximized(!self.window.is_maximized());
+        } else {
+            self.bar_drag_press = Some(now);
+            // Fails only where unsupported; then nothing happens.
+            let _ = self.window.drag_window();
+        }
     }
 
     /// The tab bar column at window pixel `x`, `y`, if the bar shows there.
     fn bar_column_at(&self, x: f64, y: f64) -> Option<u16> {
-        if !self.tab_bar.visible(self.tabs.len()) {
+        if !self.bar_visible(self.tabs.len()) {
             return None;
         }
         let cols = self.tabs.active()?.terminal.size().cols();
@@ -995,8 +1207,8 @@ impl Session {
         let Some(tab) = self.tabs.active() else {
             return;
         };
-        let labels = self.bar_labels(tab.terminal.size().cols());
-        if let Some(index) = tab_bar::tab_at(&labels, col) {
+        let bar = self.bar(tab.terminal.size().cols());
+        if let Region::Tab(index) = bar.region_at(col) {
             if index != self.tabs.active_index() && self.tabs.select(index) {
                 self.tab_switched();
             }
@@ -1007,9 +1219,10 @@ impl Session {
         let Some(tab) = self.tabs.active() else {
             return Ok(());
         };
-        let bar = self.tab_bar.visible(self.tabs.len()).then(|| {
+        let bar = self.bar_visible(self.tabs.len()).then(|| {
             let cols = tab.terminal.size().cols();
-            tab_bar::render(&self.bar_labels(cols), cols)
+            let maximized = self.integrated && self.window.is_maximized();
+            title_bar::render(&self.bar(cols), self.bar_hover, maximized)
         });
         let palette = self.palette.as_ref().map(|palette| {
             let rect = palette.rect(tab.terminal.size());

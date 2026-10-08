@@ -17,6 +17,7 @@ mod mouse;
 mod reload;
 mod tab_bar;
 mod tabs;
+mod title_bar;
 mod watch;
 
 use std::env;
