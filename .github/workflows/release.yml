@@ -117,12 +117,21 @@ jobs:
           tool: cargo-wix
       - name: Build
         run: cargo build --release --locked -p nxgterm
+      # Microsoft's standalone ConPTY passes Kitty graphics and Sixel through;
+      # the inbox one drops them. Pinned and SHA-256 verified; see
+      # packaging/windows/conpty/README.md. The MSI reads target\conpty too.
+      - name: Bundled ConPTY
+        shell: pwsh
+        run: ./packaging/windows/conpty/fetch-conpty.ps1 -Destination target\conpty
       - name: Portable zip
         shell: pwsh
         run: |
           $name = "nxgterm-$env:VERSION-x86_64-windows"
-          New-Item -ItemType Directory -Force -Path "stage\$name\profile", dist | Out-Null
+          New-Item -ItemType Directory -Force -Path "stage\$name\profile", "stage\$name\x64", dist | Out-Null
           Copy-Item target\release\nxgterm.exe, LICENSE-MIT, LICENSE-APACHE, README.md "stage\$name\"
+          Copy-Item target\conpty\conpty.dll "stage\$name\"
+          Copy-Item target\conpty\x64\OpenConsole.exe "stage\$name\x64\"
+          Copy-Item packaging\windows\conpty\LICENSE "stage\$name\LICENSE-conpty"
           Copy-Item profile\install.ps1, profile\install.sh "stage\$name\profile\"
           Compress-Archive -Path "stage\$name" -DestinationPath "dist\$name.zip"
       - name: Ensure WiX Toolset 3
@@ -142,6 +151,15 @@ jobs:
         shell: pwsh
         run: |
           .\target\release\nxgterm.exe --version
+          # The zip must carry the bundled ConPTY in the layout conpty.dll expects.
+          $name = "nxgterm-$env:VERSION-x86_64-windows"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead("dist\$name.zip")
+          $entries = $zip.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
+          $zip.Dispose()
+          foreach ($file in 'nxgterm.exe', 'conpty.dll', 'x64/OpenConsole.exe', 'LICENSE-conpty') {
+            if ($entries -notcontains "$name/$file") { throw "$name.zip is missing $file" }
+          }
           Get-ChildItem dist
       - uses: actions/upload-artifact@v4
         with:
