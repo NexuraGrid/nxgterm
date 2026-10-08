@@ -9,9 +9,11 @@ pub struct Changes {
     pub font_faces: bool,
     /// Configured font size changed: drop any zoom and use the new size.
     pub font_size: bool,
-    /// Font, colors, padding or the tab bar mode changed: give the renderer
-    /// a new style and recompute the grid size.
+    /// Font, colors, padding, the tab bar mode or the background opacity
+    /// changed: give the renderer a new style and recompute the grid size.
     pub restyle: bool,
+    /// `window.blur` changed: ask the system again.
+    pub blur: bool,
     /// The scrollback limit changed: apply it to the terminal.
     pub scrollback: bool,
     /// `[keybindings]` changed: rebuild the bindings.
@@ -27,7 +29,9 @@ pub fn diff(old: &Config, new: &Config) -> Changes {
     let restyle = old.font != new.font
         || old.colors != new.colors
         || old.window.padding != new.window.padding
-        || old.window.tab_bar != new.window.tab_bar;
+        || old.window.tab_bar != new.window.tab_bar
+        || old.window.opacity != new.window.opacity;
+    let blur = old.window.blur != new.window.blur;
     let scrollback = old.scrollback != new.scrollback;
     let keybindings = old.keybindings != new.keybindings;
     let mut on_restart = Vec::new();
@@ -44,6 +48,7 @@ pub fn diff(old: &Config, new: &Config) -> Changes {
         font_faces,
         font_size,
         restyle,
+        blur,
         scrollback,
         keybindings,
         on_restart,
@@ -85,6 +90,14 @@ mod tests {
             with(|c| c.window.tab_bar = nxg_config::TabBar::Never),
             expected
         );
+        assert_eq!(with(|c| c.window.opacity = 0.8), expected);
+    }
+
+    #[test]
+    fn blur_applies_live_without_a_restyle() {
+        let changes = with(|c| c.window.blur = true);
+        assert!(changes.blur && !changes.restyle);
+        assert!(changes.on_restart.is_empty());
     }
 
     #[test]

@@ -21,7 +21,10 @@ pub struct GpuRenderer {
 impl GpuRenderer {
     /// Creates a surface for `window` (`width x height` pixels) on the best
     /// hardware adapter. Fails on software-only adapters so the caller can
-    /// fall back to the CPU renderer.
+    /// fall back to the CPU renderer. When the style's background opacity
+    /// is below 1.0 it asks for a surface the system blends with what is
+    /// behind the window; [`WindowRenderer::translucent`] tells whether it
+    /// got one (the window itself must have been created transparent).
     pub fn new<W>(window: W, width: u32, height: u32, style: Style) -> Result<Self, GpuError>
     where
         W: wgpu::WindowHandle + 'static,
@@ -34,14 +37,9 @@ impl GpuRenderer {
         let caps = surface.get_capabilities(&gpu.adapter);
         let format = format::choose(&caps.formats)
             .ok_or_else(|| GpuError(format!("{}: no surface formats", gpu.describe())))?;
-        let alpha_mode = if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
-            wgpu::CompositeAlphaMode::Opaque
-        } else {
-            caps.alpha_modes
-                .first()
-                .copied()
-                .unwrap_or(wgpu::CompositeAlphaMode::Auto)
-        };
+        // Asking for a blending mode only when the window starts
+        // translucent keeps opaque windows exactly as they were.
+        let alpha_mode = format::alpha_mode(&caps.alpha_modes, style.background_opacity < 1.0);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -52,7 +50,8 @@ impl GpuRenderer {
             alpha_mode,
             view_formats: Vec::new(),
         };
-        let painter = Painter::new(&gpu, format, style);
+        let mut painter = Painter::new(&gpu, format, style);
+        painter.set_translucent(format::blends(alpha_mode));
         let mut renderer = Self {
             surface,
             config,
@@ -107,6 +106,10 @@ impl Renderer for GpuRenderer {
 impl WindowRenderer for GpuRenderer {
     fn set_style(&mut self, style: Style) {
         self.painter.set_style(style);
+    }
+
+    fn translucent(&self) -> bool {
+        format::blends(self.config.alpha_mode)
     }
 
     fn draw_layers(

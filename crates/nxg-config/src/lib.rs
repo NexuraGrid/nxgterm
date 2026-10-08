@@ -38,7 +38,8 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# nxgterm configuration.
 #
 # Every key is optional; the values below are the defaults. Unknown keys are
 # reported as errors. Changes are applied live when the file is saved, except
-# [shell], [renderer] and the window size, which apply on the next start.
+# [shell], [renderer], the window size and lowering the opacity from 1.0,
+# which apply on the next start.
 
 [font]
 # Font family. When unset or not installed, the system monospace font is used.
@@ -60,6 +61,15 @@ columns = 100
 rows = 30
 # Tab bar above the grid: auto (only with two or more tabs), always or never.
 tab_bar = "auto"
+# Opacity of the default background, from 0.0 (invisible) to 1.0 (opaque).
+# Text, the cursor, colored backgrounds, the selection, the tab bar and
+# images stay opaque. Below 1.0 the window is created transparent; it needs
+# the GPU renderer and a surface that supports it (macOS, Wayland, X11 with a
+# compositor; not Windows yet), otherwise the background stays opaque.
+opacity = 1.0
+# Ask the system to blur what is behind a translucent background (macOS,
+# KDE Plasma on Wayland, Windows 11 Acrylic).
+blur = false
 
 [colors]
 # Built-in theme: catppuccin-mocha, nxg-dark, nxg-light, tokyo-night,
@@ -193,7 +203,7 @@ impl Default for FontConfig {
 }
 
 /// `[window]`
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WindowConfig {
     /// Pixels around the grid at scale 1.0.
@@ -203,6 +213,19 @@ pub struct WindowConfig {
     pub rows: NonZeroU16,
     /// When the tab bar is shown.
     pub tab_bar: TabBar,
+    /// Opacity of the default background, already clamped with
+    /// [`clamp_opacity`]; 1.0 keeps the window opaque.
+    #[serde(deserialize_with = "opacity")]
+    pub opacity: f32,
+    /// Ask the system to blur what is behind a translucent background.
+    pub blur: bool,
+}
+
+impl WindowConfig {
+    /// Whether the default background is drawn translucent.
+    pub fn translucent(&self) -> bool {
+        self.opacity < 1.0
+    }
 }
 
 impl Default for WindowConfig {
@@ -212,6 +235,8 @@ impl Default for WindowConfig {
             columns: NonZeroU16::new(100).expect("non-zero"),
             rows: NonZeroU16::new(30).expect("non-zero"),
             tab_bar: TabBar::Auto,
+            opacity: 1.0,
+            blur: false,
         }
     }
 }
@@ -344,6 +369,12 @@ pub fn clamp_font_size(size: f32) -> f32 {
     }
 }
 
+/// Clamps a background opacity to 0.0..=1.0; `None` when it is not a
+/// finite number.
+pub fn clamp_opacity(opacity: f64) -> Option<f32> {
+    opacity.is_finite().then(|| opacity.clamp(0.0, 1.0) as f32)
+}
+
 /// Why a config file could not be used.
 #[derive(Debug)]
 pub enum ConfigError {
@@ -444,18 +475,36 @@ fn names<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::E
         .collect())
 }
 
+/// An integer or a float, as TOML has both.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Number {
+    Int(i64),
+    Float(f64),
+}
+
+impl Number {
+    fn get(self) -> f64 {
+        match self {
+            Self::Int(n) => n as f64,
+            Self::Float(n) => n,
+        }
+    }
+}
+
+/// Accepts integers or floats, clamps them and rejects `nan` and `inf`.
+fn opacity<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
+    let value = Number::deserialize(deserializer)?.get();
+    clamp_opacity(value).ok_or_else(|| {
+        serde::de::Error::custom(format!(
+            "invalid opacity `{value}`, expected a number from 0.0 to 1.0"
+        ))
+    })
+}
+
 /// Accepts integers or floats and clamps them.
 fn font_size<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Number {
-        Int(i64),
-        Float(f64),
-    }
-    let size = match Number::deserialize(deserializer)? {
-        Number::Int(n) => n as f32,
-        Number::Float(n) => n as f32,
-    };
+    let size = Number::deserialize(deserializer)?.get() as f32;
     Ok(clamp_font_size(size))
 }
 
@@ -538,6 +587,9 @@ mod tests {
         assert_eq!(config.renderer.backend, Backend::Auto);
         assert_eq!(config.scrollback.lines, 10_000);
         assert_eq!(config.window.tab_bar, TabBar::Auto);
+        assert_eq!(config.window.opacity, 1.0);
+        assert!(!config.window.translucent());
+        assert!(!config.window.blur);
         assert!(config.selection.copy_on_select);
         assert_eq!(
             config.colors.resolve().selection_background,
@@ -554,6 +606,39 @@ mod tests {
         assert_eq!(tab_bar("always").unwrap(), TabBar::Always);
         assert_eq!(tab_bar("never").unwrap(), TabBar::Never);
         assert!(tab_bar("sometimes").is_err());
+    }
+
+    #[test]
+    fn opacity_takes_integers_or_floats_and_is_clamped() {
+        let window = |text: &str| parse(&format!("[window]\n{text}\n")).map(|c| c.window);
+        let translucent = window("opacity = 0.85\nblur = true").unwrap();
+        assert_eq!(translucent.opacity, 0.85);
+        assert!(translucent.translucent() && translucent.blur);
+        assert_eq!(window("opacity = 0").unwrap().opacity, 0.0);
+        assert_eq!(window("opacity = 1").unwrap().opacity, 1.0);
+        assert_eq!(window("opacity = 1.5").unwrap().opacity, 1.0);
+        assert_eq!(window("opacity = -0.2").unwrap().opacity, 0.0);
+        assert!(!window("opacity = 2").unwrap().translucent());
+    }
+
+    #[test]
+    fn non_finite_opacity_is_rejected() {
+        for value in ["nan", "inf", "-inf"] {
+            let error = parse_error(&format!("[window]\nopacity = {value}\n"));
+            assert!(error.contains("invalid opacity"), "{error}");
+            assert!(error.contains("line 2"), "{error}");
+        }
+        assert!(parse("[window]\nopacity = \"half\"").is_err());
+        assert!(parse("[window]\nblur = \"yes\"").is_err());
+    }
+
+    #[test]
+    fn clamp_opacity_handles_bounds_and_non_finite() {
+        assert_eq!(clamp_opacity(0.5), Some(0.5));
+        assert_eq!(clamp_opacity(-1.0), Some(0.0));
+        assert_eq!(clamp_opacity(7.0), Some(1.0));
+        assert_eq!(clamp_opacity(f64::NAN), None);
+        assert_eq!(clamp_opacity(f64::NEG_INFINITY), None);
     }
 
     #[test]

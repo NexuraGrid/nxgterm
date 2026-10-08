@@ -32,6 +32,58 @@ pub fn window_theme(colors: &Colors) -> Theme {
     }
 }
 
+/// Whether to ask the system to blur behind the window: only a window
+/// created transparent shows anything behind it.
+pub fn blur(transparent_window: bool, blur: bool) -> bool {
+    transparent_window && blur
+}
+
+/// Asks the system to blur what is behind the window, or stops. macOS and
+/// KDE Plasma on Wayland do it through winit; Windows 11 draws its Acrylic
+/// backdrop (older Windows ignores it); elsewhere it does nothing.
+pub fn apply_blur(window: &winit::window::Window, blur: bool) {
+    window.set_blur(blur);
+    #[cfg(windows)]
+    {
+        use winit::platform::windows::WindowExtWindows;
+        window.set_system_backdrop(backdrop(blur));
+    }
+}
+
+/// The Windows 11 system backdrop: Acrylic (blurred) when `blur`, else the
+/// default one winit sets.
+#[cfg(windows)]
+pub fn backdrop(blur: bool) -> winit::platform::windows::BackdropType {
+    use winit::platform::windows::BackdropType;
+    if blur {
+        BackdropType::TransientWindow
+    } else {
+        BackdropType::Auto
+    }
+}
+
+/// Why a background `opacity` below 1.0 does not show, if it does not: the
+/// window was created opaque (only a restart makes it transparent) or the
+/// `renderer` cannot blend with what is behind the window.
+pub fn opacity_notice(
+    opacity: f32,
+    transparent_window: bool,
+    renderer: &str,
+    translucent: bool,
+) -> Option<String> {
+    if opacity >= 1.0 {
+        None
+    } else if !transparent_window {
+        Some("window opacity changes apply on restart".into())
+    } else if !translucent {
+        Some(format!(
+            "the {renderer} renderer cannot draw a translucent window here; the background stays opaque"
+        ))
+    } else {
+        None
+    }
+}
+
 /// Font size in physical pixels for `size` points at `scale`.
 pub fn font_px(size: f32, scale: f64) -> f32 {
     (f64::from(size) * valid_scale(scale)) as f32
@@ -110,6 +162,36 @@ mod tests {
         let mut colors = theme("nxg-light");
         colors.background = Rgb::hex(0x202020);
         assert_eq!(window_theme(&colors), Theme::Dark, "background override");
+    }
+
+    #[test]
+    fn blur_needs_a_transparent_window() {
+        assert!(blur(true, true));
+        assert!(!blur(false, true), "nothing shows behind an opaque window");
+        assert!(!blur(true, false));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn blur_on_windows_is_the_acrylic_backdrop() {
+        use winit::platform::windows::BackdropType;
+        assert_eq!(backdrop(true), BackdropType::TransientWindow);
+        assert_eq!(backdrop(false), BackdropType::default());
+    }
+
+    #[test]
+    fn opacity_notice_says_why_the_background_stays_opaque() {
+        assert_eq!(opacity_notice(1.0, false, "cpu", false), None, "opaque");
+        assert_eq!(opacity_notice(0.8, true, "gpu", true), None, "translucent");
+        assert_eq!(
+            opacity_notice(0.8, false, "gpu", false).as_deref(),
+            Some("window opacity changes apply on restart")
+        );
+        let cpu = opacity_notice(0.8, true, "cpu", false).unwrap();
+        assert!(
+            cpu.contains("cpu renderer") && cpu.contains("opaque"),
+            "{cpu}"
+        );
     }
 
     #[test]

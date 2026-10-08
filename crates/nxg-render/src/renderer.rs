@@ -115,6 +115,7 @@ mod tests {
             font,
             palette: Palette::default(),
             padding,
+            background_opacity: 1.0,
         })
     }
 
@@ -148,6 +149,7 @@ mod tests {
                 font,
                 palette: Palette::default(),
                 padding: 0,
+                background_opacity: 1.0,
             });
             let cell = renderer.cell_size();
             let mut term = Terminal::new(TermSize::new(1, 1).unwrap());

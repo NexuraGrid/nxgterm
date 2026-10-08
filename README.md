@@ -194,6 +194,8 @@ padding = 8                 # pixels around the grid at 100% scale
 columns = 100               # initial size in cells
 rows = 30
 tab_bar = "auto"            # auto (2+ tabs) | always | never
+opacity = 1.0               # default background opacity, 0.0-1.0
+blur = false                # blur behind a translucent background
 
 [colors]
 theme = "catppuccin-mocha"
@@ -226,9 +228,20 @@ copy_on_select = true       # selected text goes to PRIMARY (Linux only)
 Built-in themes: `catppuccin-mocha` (default), `nxg-dark` (xterm colors),
 `nxg-light`, `tokyo-night`, `gruvbox-dark`, `dracula`, `nord`, `one-dark`.
 
-The file is reloaded when saved. Font, colors, padding, the tab bar, the
-scrollback limit and key bindings apply at once; `[shell]`, `[renderer]` and the initial
-`columns`/`rows` apply on the next start. An invalid file is reported on stderr (with the line and the reason,
+`opacity` below 1.0 makes the default background translucent, like
+Alacritty and WezTerm: the padding and cells with the theme background let
+the desktop show through, while text, the cursor, colored cells, the
+selection, the tab bar, the command palette and images stay opaque. It needs
+the GPU renderer and a surface that can blend: it works on macOS, on Wayland
+and on X11 with a compositor (Vulkan). On Windows (DX12/OpenGL surfaces), with
+the OpenGL backend and with the CPU renderer the background stays opaque and
+a line on stderr says so. `blur = true` blurs what is behind the window on
+macOS, KDE Plasma (Wayland) and Windows 11 (Acrylic).
+
+The file is reloaded when saved. Font, colors, padding, the tab bar, opacity,
+blur, the scrollback limit and key bindings apply at once; `[shell]`, `[renderer]`, the initial
+`columns`/`rows` and lowering `opacity` from 1.0 (the window is created
+transparent only then) apply on the next start. An invalid file is reported on stderr (with the line and the reason,
 unknown keys included) and the previous settings stay in effect; at startup
 the defaults are used instead.
 

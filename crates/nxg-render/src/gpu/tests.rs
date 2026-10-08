@@ -45,6 +45,22 @@ fn render_offscreen_with(
     w: u32,
     h: u32,
 ) -> Vec<u32> {
+    render_rgba(gpu, painter, header, term, overlay, w, h)
+        .into_iter()
+        .map(|[r, g, b, _]| rgb(r, g, b))
+        .collect()
+}
+
+/// [`render_offscreen_with`], keeping the alpha: RGBA pixels.
+fn render_rgba(
+    gpu: &Gpu,
+    painter: &mut Painter,
+    header: Option<&Terminal>,
+    term: &Terminal,
+    overlay: Option<Overlay<'_>>,
+    w: u32,
+    h: u32,
+) -> Vec<[u8; 4]> {
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("offscreen"),
         size: wgpu::Extent3d {
@@ -98,7 +114,7 @@ fn render_offscreen_with(
     for y in 0..h {
         let start = (y * row) as usize;
         for px in data[start..start + (w * 4) as usize].chunks_exact(4) {
-            pixels.push(rgb(px[0], px[1], px[2]));
+            pixels.push([px[0], px[1], px[2], px[3]]);
         }
     }
     pixels
@@ -134,6 +150,7 @@ fn gpu_output_matches_cpu_renderer() {
         font,
         palette: palette.clone(),
         padding: 3,
+        background_opacity: 1.0,
     };
     let mut cpu = CpuRenderer::new(style(cpu_font));
     let cell = cpu.cell_size();
@@ -237,6 +254,7 @@ fn image_textures_follow_the_terminal_images() {
         font,
         palette: Palette::default(),
         padding: 0,
+        background_opacity: 1.0,
     };
     let mut painter = Painter::new(&gpu, FORMAT, style);
     let mut term = Terminal::new(TermSize::new(4, 2).unwrap());
@@ -264,6 +282,7 @@ fn set_style_applies_new_palette_and_padding() {
         font,
         palette: Palette::default(),
         padding: 0,
+        background_opacity: 1.0,
     };
     let mut painter = Painter::new(&gpu, FORMAT, style.clone());
     let mut term = Terminal::new(TermSize::new(1, 1).unwrap());
@@ -280,5 +299,61 @@ fn set_style_applies_new_palette_and_padding() {
     let second = render_offscreen(&gpu, &mut painter, &term, 4, 4);
     assert_eq!(second[0], blue, "padding takes the new background");
     assert_eq!(second[2 * 4 + 2], red, "the cell moved by the padding");
+    assert_eq!(gpu.failure(), None);
+}
+
+#[test]
+fn translucent_targets_get_a_premultiplied_default_background_only() {
+    let Some(gpu) = headless_gpu() else { return };
+    let Ok(font) = Font::system(DEFAULT_PX) else {
+        eprintln!("skipping GPU test: no system monospace font");
+        return;
+    };
+    let palette = Palette {
+        background: rgb(0x40, 0x80, 0xc0),
+        ..Palette::default()
+    };
+    let style = Style {
+        font,
+        palette: palette.clone(),
+        padding: 2,
+        background_opacity: 0.5,
+    };
+    let mut painter = Painter::new(&gpu, FORMAT, style);
+    let cell = painter.cell_size();
+    // A tab bar row of default cells, then a red cell and a default one.
+    let mut header = Terminal::new(TermSize::new(2, 1).unwrap());
+    header.advance(b"\x1b[?25l");
+    let mut term = Terminal::new(TermSize::new(2, 1).unwrap());
+    term.advance(b"\x1b[?25l\x1b[41m \x1b[0m");
+    let (w, h) = (cell.width * 2 + 4, cell.height * 2 + 4);
+    let at = |pixels: &[[u8; 4]], x: u32, y: u32| pixels[(y * w + x) as usize];
+    let grid_y = 2 + cell.height;
+    let red = Palette::default().ansi[1];
+    let red = [(red >> 16) as u8, (red >> 8) as u8, red as u8, 255];
+
+    painter.set_translucent(true);
+    let pixels = render_rgba(&gpu, &mut painter, Some(&header), &term, None, w, h);
+    let half = [0x20, 0x40, 0x60, 0x80];
+    let close = |a: [u8; 4], b: [u8; 4]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 1);
+    assert!(
+        close(at(&pixels, 0, 0), half),
+        "padding: {:?}",
+        at(&pixels, 0, 0)
+    );
+    assert!(
+        close(at(&pixels, 2 + cell.width, grid_y), half),
+        "default cell"
+    );
+    assert_eq!(at(&pixels, 2, grid_y), red, "colored cell stays opaque");
+    assert_eq!(
+        at(&pixels, 2, 2),
+        [0x40, 0x80, 0xc0, 255],
+        "tab bar stays opaque"
+    );
+
+    painter.set_translucent(false);
+    let opaque = render_rgba(&gpu, &mut painter, Some(&header), &term, None, w, h);
+    assert_eq!(at(&opaque, 0, 0), [0x40, 0x80, 0xc0, 255], "opaque surface");
     assert_eq!(gpu.failure(), None);
 }
