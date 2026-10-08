@@ -194,6 +194,7 @@ padding = 8                 # pixels around the grid at 100% scale
 columns = 100               # initial size in cells
 rows = 30
 tab_bar = "auto"            # auto (2+ tabs) | always | never
+decorations = "native"      # native | integrated (the tab bar is the title bar)
 opacity = 1.0               # default background opacity, 0.0-1.0
 blur = false                # blur behind a translucent background
 
@@ -241,7 +242,7 @@ macOS, KDE Plasma (Wayland) and Windows 11 (Acrylic).
 
 The file is reloaded when saved. Font, colors, padding, the tab bar, opacity,
 blur, the scrollback limit and key bindings apply at once; `[shell]`, `[renderer]`, the initial
-`columns`/`rows` and lowering `opacity` from 1.0 (the window is created
+`columns`/`rows`, `decorations` and lowering `opacity` from 1.0 (the window is created
 transparent only then) apply on the next start. An invalid file is reported on stderr (with the line and the reason,
 unknown keys included) and the previous settings stay in effect; at startup
 the defaults are used instead.
@@ -322,6 +323,20 @@ With two or more tabs (see `window.tab_bar`) a bar takes the top row,
 labelled ` N: program `, the current tab highlighted; click a label to
 switch to it. Labels are the program name; titles set by programs (OSC 0/2)
 are not shown yet.
+
+With `window.decorations = "integrated"` the tab bar replaces the system
+title bar, as in Windows Terminal or a browser. It always shows, even with
+one tab, and has a `+` button after the last tab that opens a new one. Drag
+its empty part to move the window and double-click it to maximize or
+restore. On Windows and Linux it draws minimize, maximize/restore and close
+buttons on the right (close turns red under the pointer), the window keeps a
+drop shadow on Windows, and the outer 5 pixels (at 100% scale) of the window
+resize it, except while maximized; right-clicking the empty bar opens the
+window menu on Windows. On macOS the native window buttons stay at the left
+of the bar and the system resizes the window. Without the system title bar
+some desktop features are gone: the Windows 11 snap layouts shown when
+hovering the maximize button (dragging to a screen edge still snaps, and
+Win+arrow keys work) and, on Linux, the window manager's title bar menu.
 
 ### Scrolling and the mouse
 
