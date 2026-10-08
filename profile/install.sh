@@ -4,6 +4,8 @@
 # Installs Yazi, zoxide, ngmux, Bruno CLI (bru) and curl with the system
 # package manager (pacman, apt, dnf or Homebrew), falling back to official
 # GitHub release binaries in ~/.local/bin where a distribution has no package.
+# Gives Yazi the Catppuccin Mocha flavor (nxgterm's default theme) without
+# touching an existing theme.toml.
 # Optional and idempotent: tools that are already installed are skipped.
 #
 #   curl -fsSL https://raw.githubusercontent.com/NexuraGrid/nxgterm/main/profile/install.sh | sh -s -- --yes
@@ -13,9 +15,18 @@
 set -u
 
 PROFILE_VERSION="0.1.0"
-ALL_TOOLS="curl zoxide yazi ngmux bruno"
+ALL_TOOLS="curl zoxide yazi yazi-theme ngmux bruno"
 NGMUX_INSTALLER_URL="https://raw.githubusercontent.com/NexuraGrid/ng_mux/main/install.sh"
 BRUNO_NPM_PACKAGE="@usebruno/cli"
+# The official Catppuccin Mocha flavor (MIT), pinned to a commit of
+# yazi-rs/flavors; every file is checked against its SHA-256 below.
+FLAVOR_NAME="catppuccin-mocha"
+FLAVOR_COMMIT="1183892c904f7f0efdf4473e856ed308b7bea98d"
+FLAVOR_BASE_URL="https://raw.githubusercontent.com/yazi-rs/flavors/$FLAVOR_COMMIT/$FLAVOR_NAME.yazi"
+FLAVOR_FILES="flavor.toml:d4417565d5a15110e66369c88385f7176586b03b3dbb396a383c768cc767a80e
+tmtheme.xml:395566f08ceb301b936b91c077690ef94f7aeb651b121553f201c99c2bd4aa77
+LICENSE:06a2b04a7ed4f030a87d10b884fc1a2215c5e91b371f69dfe173448e834f3752
+LICENSE-tmtheme:814096d2c34cc216c624738a49356f32b7237733b4f7edb0685f4e50ef5074ba"
 MARK_BEGIN="# >>> nxgterm profile >>>"
 MARK_END="# <<< nxgterm profile <<<"
 
@@ -56,10 +67,14 @@ Options:
   -h, --help              Print this help and exit
   --version               Print the profile version and exit
 
-Tools: curl, zoxide, yazi, ngmux, bruno (alias: bru).
+Tools: curl, zoxide, yazi, yazi-theme, ngmux, bruno (alias: bru).
+yazi-theme installs Yazi's Catppuccin Mocha flavor and, only when no
+theme.toml exists, creates one that enables it. It is selected whenever yazi
+is (skip it with --skip yazi-theme).
 
 Environment:
   NXGTERM_PROFILE_BIN_DIR   Where release binaries go (default: ~/.local/bin)
+  YAZI_CONFIG_HOME          Yazi's config directory (default: ~/.config/yazi)
   GITHUB_TOKEN              Optional token for GitHub API calls (rate limits)
 EOF
 }
@@ -136,7 +151,14 @@ parse_args() {
 	done
 }
 
+# selected <tool>: yazi-theme follows yazi unless it is named in --only/--skip.
 selected() {
+	if [ "$1" = yazi-theme ]; then
+		case " $SKIP " in *" yazi-theme "*) return 1 ;; esac
+		case " $ONLY " in *" yazi-theme "*) return 0 ;; esac
+		selected yazi
+		return
+	fi
 	if [ -n "$ONLY" ]; then
 		case " $ONLY " in *" $1 "*) ;; *) return 1 ;; esac
 	fi
@@ -469,6 +491,98 @@ install_yazi() {
 	fi
 }
 
+# yazi_config_dir: where Yazi reads its configuration (as Yazi resolves it).
+yazi_config_dir() {
+	case "${YAZI_CONFIG_HOME:-}" in
+	/*)
+		printf '%s' "$YAZI_CONFIG_HOME"
+		return
+		;;
+	esac
+	case "${XDG_CONFIG_HOME:-}" in
+	/*) printf '%s' "$XDG_CONFIG_HOME/yazi" ;;
+	*) printf '%s' "$HOME/.config/yazi" ;;
+	esac
+}
+
+# install_flavor <dir>: downloads the pinned flavor files, verifies each
+# SHA-256 and only then copies them into <dir>.
+install_flavor() {
+	if_dest=$1
+	if [ "$DRY_RUN" = 1 ]; then
+		say "[dry-run] download $FLAVOR_NAME.yazi (yazi-rs/flavors@$(printf '%.7s' "$FLAVOR_COMMIT")), verify its SHA-256 sums, install it into $if_dest"
+		return 0
+	fi
+	if_dir="$(work_dir)/flavor"
+	mkdir -p "$if_dir" || return 1
+	say "+ download $FLAVOR_BASE_URL/"
+	for if_entry in $FLAVOR_FILES; do
+		if_file=${if_entry%%:*}
+		if_want=${if_entry#*:}
+		fetch "$FLAVOR_BASE_URL/$if_file" "$if_dir/$if_file" || return 1
+		if_got=$(sha256_of "$if_dir/$if_file") || {
+			warn "need sha256sum or shasum to verify $if_file"
+			return 1
+		}
+		if [ "$if_got" != "$if_want" ]; then
+			warn "checksum mismatch for $if_file (expected $if_want, got $if_got)"
+			return 1
+		fi
+	done
+	say "  sha256 ok: flavor.toml, tmtheme.xml, LICENSE, LICENSE-tmtheme"
+	mkdir -p "$if_dest" || return 1
+	for if_entry in $FLAVOR_FILES; do
+		cp "$if_dir/${if_entry%%:*}" "$if_dest/" || return 1
+	done
+	say "  installed $if_dest"
+}
+
+# install_yazi_theme: the Catppuccin Mocha flavor, plus a theme.toml that
+# enables it only when the user has none (an existing one is never changed).
+install_yazi_theme() {
+	yt_conf=$(yazi_config_dir)
+	yt_flavor="$yt_conf/flavors/$FLAVOR_NAME.yazi"
+	yt_theme="$yt_conf/theme.toml"
+	yt_did=""
+	if [ -f "$yt_flavor/flavor.toml" ]; then
+		say "  flavor already present: $yt_flavor"
+	elif install_flavor "$yt_flavor"; then
+		yt_did="flavor"
+	else
+		record yazi-theme failed "could not install the $FLAVOR_NAME flavor"
+		return
+	fi
+	if [ -f "$yt_theme" ]; then
+		if grep -q "\"$FLAVOR_NAME\"" "$yt_theme" 2>/dev/null; then
+			yt_status="already present"
+			[ -n "$yt_did" ] && yt_status=$(done_status)
+			record yazi-theme "$yt_status" "$yt_theme uses $FLAVOR_NAME"
+			return
+		fi
+		say "  $yt_theme exists; left untouched. To use the flavor, add:"
+		say "    [flavor]"
+		say "    dark = \"$FLAVOR_NAME\""
+		record yazi-theme skipped "$yt_theme exists; add: [flavor] dark = \"$FLAVOR_NAME\""
+		return
+	fi
+	if [ "$DRY_RUN" = 1 ]; then
+		say "[dry-run] would create $yt_theme with [flavor] dark = \"$FLAVOR_NAME\""
+		record yazi-theme "would install" "$FLAVOR_NAME flavor + $yt_theme"
+		return
+	fi
+	# noclobber: never overwrite a theme.toml that appeared meanwhile.
+	if (
+		set -C
+		printf '%s\n' "# Added by the nxgterm tools profile: Catppuccin Mocha, like nxgterm." \
+			"[flavor]" "dark = \"$FLAVOR_NAME\"" >"$yt_theme"
+	) 2>/dev/null; then
+		say "  created $yt_theme"
+		record yazi-theme installed "$FLAVOR_NAME flavor + $yt_theme"
+	else
+		record yazi-theme failed "could not create $yt_theme"
+	fi
+}
+
 install_ngmux() {
 	if installed ngmux; then
 		record ngmux "already present" "$(command -v ngmux || printf '%s' "$BIN_DIR/ngmux")"
@@ -720,9 +834,9 @@ uninstall_shell_init() {
 summary() {
 	say ""
 	say "Summary"
-	printf '%-8s %-16s %s\n' "TOOL" "STATUS" "DETAIL"
+	printf '%-11s %-16s %s\n' "TOOL" "STATUS" "DETAIL"
 	printf '%s' "$RESULTS" | while IFS='|' read -r s_tool s_status s_detail; do
-		[ -n "$s_tool" ] && printf '%-8s %-16s %s\n' "$s_tool" "$s_status" "$s_detail"
+		[ -n "$s_tool" ] && printf '%-11s %-16s %s\n' "$s_tool" "$s_status" "$s_detail"
 	done
 	case ":$PATH:" in
 	*":$BIN_DIR:"*) ;;
@@ -751,7 +865,7 @@ main() {
 			continue
 		fi
 		say "==> $m_tool"
-		"install_$m_tool"
+		"install_$(printf '%s' "$m_tool" | tr '-' '_')"
 	done
 	if [ "$SHELL_INIT" = 1 ]; then
 		setup_shell_init

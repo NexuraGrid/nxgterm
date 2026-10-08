@@ -42,7 +42,8 @@ nxgterm does not bundle any tools. An optional, separate installer sets up a
 terminal workflow: [Yazi](https://github.com/sxyazi/yazi) (file manager),
 [zoxide](https://github.com/ajeetdsouza/zoxide) (smarter `cd`),
 [ngmux](https://github.com/NexuraGrid/ng_mux) (terminal multiplexer),
-[Bruno CLI](https://www.usebruno.com/) (`bru`, API client) and curl.
+[Bruno CLI](https://www.usebruno.com/) (`bru`, API client) and curl, and
+gives Yazi the Catppuccin Mocha flavor so it matches nxgterm's default theme.
 
 ```sh
 # Linux, macOS
@@ -63,8 +64,8 @@ The scripts also ship with every package: `/usr/share/nxgterm/profile/`,
 |---|---|
 | `--dry-run` / `-DryRun` | Print what would be done; change nothing |
 | `--yes` / `-Yes` | Do not ask |
-| `--only yazi,zoxide` / `-Only yazi,zoxide` | Only these tools (`curl`, `zoxide`, `yazi`, `ngmux`, `bruno`) |
-| `--skip bruno` / `-Skip bruno` | Skip these tools |
+| `--only yazi,zoxide` / `-Only yazi,zoxide` | Only these tools (`curl`, `zoxide`, `yazi`, `yazi-theme`, `ngmux`, `bruno`) |
+| `--skip bruno` / `-Skip bruno` | Skip these tools (`--skip yazi-theme` keeps your Yazi theme setup as is) |
 | `--no-shell-init` / `-NoShellInit` | Leave shell startup files alone |
 | `--uninstall-shell-init` / `-UninstallShellInit` | Remove the shell integration and exit |
 
@@ -73,6 +74,7 @@ How each tool is installed:
 | Tool | Arch | Debian, Ubuntu | Fedora | macOS | Windows |
 |---|---|---|---|---|---|
 | Yazi | `pacman` | release binary | release binary | `brew` | winget `sxyazi.yazi` / scoop `yazi` |
+| Yazi theme (`yazi-theme`) | pinned flavor download | same | same | same | same |
 | zoxide | `pacman` | `apt` | `dnf` | `brew` | winget `ajeetdsouza.zoxide` / scoop `zoxide` |
 | ngmux | official `install.sh` | official `install.sh` | official `install.sh` | official `install.sh` | official `install.ps1` |
 | Bruno CLI | `npm` (`@usebruno/cli`) | `npm` | `npm` | `npm` | `npm` |
@@ -90,6 +92,25 @@ The shell integration adds `zoxide init`, Yazi's `y` wrapper (changes
 directory when Yazi exits) and, on Linux and macOS, `~/.local/bin` on `PATH` to `~/.bashrc`, `~/.zshrc`,
 `~/.config/fish/conf.d/nxgterm-profile.fish` and the PowerShell profiles,
 between `# >>> nxgterm profile >>>` and `# <<< nxgterm profile <<<` markers.
+
+`yazi-theme` is selected whenever `yazi` is. It downloads the official
+[`catppuccin-mocha`](https://github.com/yazi-rs/flavors/tree/main/catppuccin-mocha.yazi)
+flavor (MIT) from a pinned `yazi-rs/flavors` commit, checks every file against
+a SHA-256 kept in the script, and puts it in Yazi's config directory
+(`$YAZI_CONFIG_HOME`, else `~/.config/yazi` or `%AppData%\yazi\config`) under
+`flavors/catppuccin-mocha.yazi`. A plain download is used instead of
+`ya pkg add` so it needs no git (Windows Server 2016) and works when piped.
+Then, only if there is no `theme.toml`, it creates one with:
+
+```toml
+[flavor]
+dark = "catppuccin-mocha"
+```
+
+An existing `theme.toml` is never changed: the summary shows `skipped` and
+the two lines to add yourself. To let `ya pkg` manage the flavor later,
+delete `flavors/catppuccin-mocha.yazi` and run
+`ya pkg add yazi-rs/flavors:catppuccin-mocha`.
 
 On Windows, Yazi detects file types with `file.exe`, which Windows does not
 ship. `install.ps1` points the user variable `YAZI_FILE_ONE` at the copy in
