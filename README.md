@@ -346,6 +346,7 @@ winpty (Windows Server 2016) does not pass images through either.
 8. 0.2.0: scrollback, mouse wheel and mouse reporting, font fallback for
    icons, configurable key bindings, tabs, command palette ✅
 9. 0.3.0: text selection, copy and paste, bracketed paste ✅
+10. 0.4.0: inline images on Windows through a bundled ConPTY ✅
 
 Planned work is tracked in
 [`openspec/RECOMMENDATIONS.md`](openspec/RECOMMENDATIONS.md).
