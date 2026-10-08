@@ -34,8 +34,8 @@ serde = { version = "1", features = ["derive"] }
 softbuffer = "0.4"
 toml = "1"
 vte = "0.15"
-# 27+ requires Rust 1.88; 26 declares 1.84. `webgpu` (wasm only) is left out.
-wgpu = { version = "26", default-features = false, features = [
+# 30 declares Rust 1.87. `webgpu` (wasm only) is left out.
+wgpu = { version = "30", default-features = false, features = [
     "std",
     "parking_lot",
     "dx12",

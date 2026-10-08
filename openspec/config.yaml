@@ -4,7 +4,7 @@ context: |
   Project: nxgterm, a fast, configurable, cross-platform terminal emulator (v0.1.0).
   Tech stack: Rust 2024 edition, MSRV 1.87 (workspace rust-version), Cargo workspace with
     resolver 3. Key crates: vte 0.15 (VT parsing), portable-pty 0.9 (Unix pty / ConPTY),
-    windows-sys 0.61 (winpty FFI), wgpu 26 (pinned: 27+ needs Rust 1.88), softbuffer 0.4,
+    windows-sys 0.61 (winpty FFI), wgpu 30, softbuffer 0.4,
     winit 0.30, fontdb 0.24 + fontdue =0.9.3 (pinned: 0.9.4 needs Rust 1.87), toml 1,
     serde 1, notify 8, png 0.18, flate2 1.
   Architecture: Hexagonal. `nxg-core` is platform-agnostic and owns the domain

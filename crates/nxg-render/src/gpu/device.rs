@@ -25,7 +25,7 @@ impl Gpu {
         surface: Option<&wgpu::Surface<'_>>,
         allow_software: bool,
     ) -> Result<Self, GpuError> {
-        let adapters = instance.enumerate_adapters(wgpu::Backends::all());
+        let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
         let found: Vec<String> = adapters.iter().map(|a| describe(&a.get_info())).collect();
         let candidates = adapters
             .into_iter()
@@ -52,6 +52,7 @@ impl Gpu {
                 .using_resolution(adapter.limits()),
             memory_hints: wgpu::MemoryHints::MemoryUsage,
             trace: wgpu::Trace::Off,
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
         };
         let (device, queue) = pollster::block_on(adapter.request_device(&descriptor))
             .map_err(|error| GpuError(format!("{}: {error}", describe(&adapter.get_info()))))?;
@@ -62,7 +63,7 @@ impl Gpu {
             record(&lost, format!("device lost ({reason:?}): {message}"));
         });
         let uncaptured = Arc::clone(&failure);
-        device.on_uncaptured_error(Box::new(move |error| {
+        device.on_uncaptured_error(Arc::new(move |error| {
             record(&uncaptured, error.to_string());
         }));
 

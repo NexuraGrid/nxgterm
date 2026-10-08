@@ -1,7 +1,11 @@
 //! The window renderer: a wgpu surface driven by the shared [`Painter`].
 
+use std::fmt;
+
 use nxg_core::Terminal;
 use nxg_core::ports::{RenderError, Renderer};
+use raw_window_handle::HasDisplayHandle;
+use wgpu::CurrentSurfaceTexture;
 
 use super::GpuError;
 use super::device::Gpu;
@@ -27,9 +31,12 @@ impl GpuRenderer {
     /// got one (the window itself must have been created transparent).
     pub fn new<W>(window: W, width: u32, height: u32, style: Style) -> Result<Self, GpuError>
     where
-        W: wgpu::WindowHandle + 'static,
+        W: wgpu::WindowHandle + HasDisplayHandle + Clone + fmt::Debug + 'static,
     {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::from_env_or_default());
+        // The display handle lets EGL pick the right platform (Wayland).
+        let descriptor =
+            wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone()));
+        let instance = wgpu::Instance::new(descriptor);
         let surface = instance
             .create_surface(window)
             .map_err(|error| GpuError(format!("cannot create surface: {error}")))?;
@@ -43,6 +50,7 @@ impl GpuRenderer {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: 0,
             height: 0,
             present_mode: wgpu::PresentMode::AutoVsync,
@@ -124,16 +132,29 @@ impl WindowRenderer for GpuRenderer {
         if !self.visible() {
             return Ok(()); // Minimized.
         }
-        let frame = match self.surface.get_current_texture() {
-            Ok(frame) => frame,
-            Err(error @ (wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost)) => {
+        let (frame, suboptimal) = match self.surface.get_current_texture() {
+            CurrentSurfaceTexture::Success(frame) => (frame, false),
+            CurrentSurfaceTexture::Suboptimal(frame) => (frame, true),
+            CurrentSurfaceTexture::Outdated => {
                 self.configure();
-                return Err(RenderError::Transient(error.to_string()));
+                return Err(RenderError::Transient("surface outdated".into()));
             }
-            Err(error @ wgpu::SurfaceError::Timeout) => {
-                return Err(RenderError::Transient(error.to_string()));
+            CurrentSurfaceTexture::Lost => {
+                self.configure();
+                return Err(RenderError::Transient("surface lost".into()));
             }
-            Err(error) => return Err(RenderError::Fatal(error.to_string())),
+            CurrentSurfaceTexture::Timeout => {
+                return Err(RenderError::Transient("surface timeout".into()));
+            }
+            CurrentSurfaceTexture::Occluded => {
+                return Err(RenderError::Transient("surface occluded".into()));
+            }
+            CurrentSurfaceTexture::Validation => {
+                let failure = self.gpu.failure();
+                return Err(RenderError::Fatal(
+                    failure.unwrap_or_else(|| "surface validation error".into()),
+                ));
+            }
         };
         let view = frame
             .texture
@@ -141,8 +162,7 @@ impl WindowRenderer for GpuRenderer {
         let (width, height) = (self.config.width, self.config.height);
         self.painter
             .render(&self.gpu, &view, width, height, header, terminal, overlay);
-        let suboptimal = frame.suboptimal;
-        frame.present();
+        self.gpu.queue.present(frame);
         if suboptimal {
             self.configure();
         }
