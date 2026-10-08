@@ -52,7 +52,8 @@ jobs:
           if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
             Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
           }
-          $issues = Invoke-ScriptAnalyzer -Path profile/install.ps1 -Severity Warning,Error
+          $issues = 'profile/install.ps1', 'packaging/windows/conpty/fetch-conpty.ps1' |
+            ForEach-Object { Invoke-ScriptAnalyzer -Path $_ -Severity Warning,Error }
           $issues | Format-Table -AutoSize
           if ($issues) { exit 1 }
       - name: install.ps1 dry run (PowerShell 7)

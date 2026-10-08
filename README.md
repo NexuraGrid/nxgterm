@@ -135,6 +135,13 @@ embedded in the Windows executable and unpacked to
 `%LOCALAPPDATA%\nxgterm\winpty\<version>-<hash>\` the first time it is used.
 Provenance, hashes and license: [`crates/nxg-pty/winpty`](crates/nxg-pty/winpty/README.md).
 
+The Windows zip and MSI also ship Microsoft's standalone ConPTY
+(`conpty.dll` beside `nxgterm.exe`, `x64\OpenConsole.exe`, MIT license in
+`LICENSE-conpty`), which the native backend prefers over the one built into
+Windows. With `nxgterm: pty native`, stderr also shows
+`nxgterm: conpty bundled ...` or `nxgterm: conpty inbox ...`.
+Provenance and hashes: [`packaging/windows/conpty`](packaging/windows/conpty/README.md).
+
 ## Configuration
 
 nxgterm reads a TOML file at:
@@ -317,6 +324,14 @@ nxgterm shows inline images from programs such as Yazi, `kitten icat`,
 Child processes see `TERM_PROGRAM=nxgterm` and the pixel size of the
 window (`TIOCGWINSZ`, `CSI 14/16/18 t`). Decoded images are capped at
 256 MiB; the oldest are evicted first.
+
+On Windows, images need the ConPTY bundled in the zip and MSI
+(`conpty.dll` and `x64\OpenConsole.exe` next to `nxgterm.exe`). The ConPTY
+built into Windows drops Kitty graphics and Sixel output and answers the
+terminal queries itself, so programs such as Yazi fall back to text. A bare
+`nxgterm.exe` built with cargo uses the inbox ConPTY; copy both files next to
+it (see [`packaging/windows/conpty`](packaging/windows/conpty/README.md)).
+winpty (Windows Server 2016) does not pass images through either.
 
 ## Roadmap
 

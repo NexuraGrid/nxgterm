@@ -1100,6 +1100,12 @@ fn spawn_tab(
         eprintln!("nxgterm: skipped {}: {}", attempt.name, attempt.error);
     }
     eprintln!("nxgterm: pty {}", pty.name);
+    // Windows: whether the bundled ConPTY (which passes images through) is used.
+    if let Some(host) =
+        nxg_pty::conpty_host().filter(|_| pty.name == nxg_pty::Backend::Native.name())
+    {
+        eprintln!("nxgterm: conpty {host}");
+    }
     let pty = pty.backend;
     spawn_reader(id, pty.reader, proxy.clone());
     spawn_waiter(id, pty.child, proxy.clone());

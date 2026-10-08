@@ -7,8 +7,9 @@ it through the `PtySession` port: the native backend (Unix pty or Windows
 ConPTY through `portable-pty`) and an embedded winpty fallback for Windows
 without ConPTY (Windows Server 2016).
 
-Sources: `crates/nxg-pty/src/{lib,backend,shell}.rs`, `src/winpty/*`,
-`tests/spawn.rs`, `tests/windows.rs`, `winpty/README.md`.
+Sources: `crates/nxg-pty/src/{lib,backend,conpty,shell}.rs`, `src/winpty/*`,
+`tests/spawn.rs`, `tests/windows.rs`, `winpty/README.md`,
+`packaging/windows/conpty/*`, `crates/nxgterm/wix/main.wxs`.
 
 ## Requirements
 
@@ -137,13 +138,42 @@ winpty is not bundled.
 - THEN they match `crates/nxg-pty/winpty/README.md`
   (`winpty.dll` 936f611c..., `winpty-agent.exe` 9add1a61...)
 
+### Requirement: Bundled ConPTY
+
+The Windows zip and MSI MUST ship Microsoft's standalone ConPTY (NuGet
+`Microsoft.Windows.Console.ConPTY` 1.25.260930003, x64, MIT) as `conpty.dll`
+in the directory of `nxgterm.exe` and `OpenConsole.exe` in its `x64\`
+subdirectory, with the license as `LICENSE-conpty`. The release workflow MUST
+verify the SHA-256 of the package and of both files before packaging and
+MUST fail on any mismatch. The native backend SHALL load it through
+`portable-pty`, which prefers `conpty.dll` from the DLL search path over
+kernel32, so Kitty graphics and Sixel output reach nxgterm.
+
+#### Scenario: Images through the bundled ConPTY
+- GIVEN nxgterm installed from the zip or MSI on Windows 10 1809+
+- WHEN Yazi queries Kitty graphics support and DA1
+- THEN nxgterm's own replies reach Yazi
+- AND image previews are drawn
+
+#### Scenario: Tampered package
+- GIVEN the downloaded package's SHA-256 differs from the pinned value
+- WHEN the release workflow runs
+- THEN the Windows job fails before building the zip
+
 ### Requirement: Diagnostics
 
 The application MUST print each skipped backend as
 `nxgterm: skipped <name>: <reason>` and the chosen one as `nxgterm: pty <name>`
-on stderr.
+on stderr. On Windows, after `nxgterm: pty native`, it MUST print
+`nxgterm: conpty bundled ...` when `conpty.dll` and `x64\OpenConsole.exe` sit
+beside the executable, otherwise a line that says images are dropped.
 
 #### Scenario: Fallback is visible
 - GIVEN Windows Server 2016
 - WHEN nxgterm starts
 - THEN stderr shows `nxgterm: skipped native: ConPTY is unavailable ...` then `nxgterm: pty winpty`
+
+#### Scenario: Missing OpenConsole.exe
+- GIVEN `conpty.dll` beside `nxgterm.exe` but no `x64\OpenConsole.exe`
+- WHEN a native tab starts
+- THEN stderr shows `nxgterm: conpty bundled without x64\OpenConsole.exe; images are dropped`

@@ -5,6 +5,7 @@
 //! fallback for Windows Server 2016, which has no ConPTY.
 
 mod backend;
+mod conpty;
 mod shell;
 mod winpty;
 
@@ -18,6 +19,7 @@ use nxg_core::ports::{ChildProcess, PtyControl, PtySession};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 pub use backend::{Backend, ENV_VAR, auto_backends, backends_from_env};
+pub use conpty::conpty_host;
 
 /// A started session plus the backend that started it and the ones that
 /// failed before it.
