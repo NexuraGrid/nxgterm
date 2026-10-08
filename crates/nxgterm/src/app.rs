@@ -33,6 +33,7 @@ use crate::command_palette::{self, CommandPalette, Outcome};
 use crate::mouse::{Clicks, ViewportScroll, Wheel, WheelAction};
 use crate::tabs::{TabId, Tabs};
 use crate::title_bar::{self, Button, ButtonColors, Chrome, Rect, Region};
+use crate::watch::ConfigWatcher;
 use crate::{appearance, bindings, choice, clipboard, icon, keys, mouse, reload, tab_bar};
 
 /// Events posted to the event loop from background threads.
@@ -125,6 +126,9 @@ pub struct App {
     config: Config,
     /// Config file to reload on change; `None` when no location is known.
     config_path: Option<PathBuf>,
+    /// Watches the config files; told about new imports and theme files on
+    /// reload.
+    watcher: Option<ConfigWatcher>,
     session: Option<Session>,
     /// Key bindings from the config, resolved for this platform;
     /// [`Bindings::shortcuts`] lists every action with its shortcut.
@@ -145,12 +149,14 @@ impl App {
         proxy: EventLoopProxy<UserEvent>,
         config: Config,
         config_path: Option<PathBuf>,
+        watcher: Option<ConfigWatcher>,
     ) -> Self {
         let bindings = config.keybindings.resolve(MACOS);
         Self {
             proxy,
             config,
             config_path,
+            watcher,
             session: None,
             bindings,
             modifiers: ModifiersState::empty(),
@@ -610,14 +616,20 @@ impl App {
         copy_on_select(self.clipboard.as_mut(), &self.config, &tab.terminal);
     }
 
-    /// Reloads the config file, applying what can change live. An invalid
-    /// file keeps the previous config.
+    /// Reloads the config file, applying what can change live, and
+    /// watches the imports and theme file it now names. An invalid file
+    /// keeps the previous config.
     fn reload_config(&mut self) {
         let Some(path) = &self.config_path else {
             return;
         };
-        let new = match Config::load(path) {
-            Ok(Some(config)) => config,
+        let new = match Config::load_with_files(path) {
+            Ok(Some(loaded)) => {
+                if let Some(watcher) = &mut self.watcher {
+                    watcher.add(&loaded.files);
+                }
+                loaded.config
+            }
             Ok(None) => Config::default(),
             Err(error) => {
                 eprintln!("nxgterm: {error}; keeping the previous config");

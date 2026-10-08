@@ -1,6 +1,13 @@
-//! Built-in color themes.
+//! Color themes: the built-in ones and theme files.
+//!
+//! A theme file, `<config dir>/themes/<name>.toml`, holds the same keys as
+//! the `[colors]` overrides (`foreground`, `background`, `cursor`, `ansi`,
+//! `selection_foreground`, `selection_background`), at the top level or
+//! under a `[colors]` table. Keys it leaves out take the default theme's
+//! values.
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer};
 
@@ -161,30 +168,93 @@ pub fn names() -> String {
     names.join(", ")
 }
 
-/// A theme name validated against [`THEMES`] while parsing, so a typo is
-/// reported with its location in the file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ThemeName(&'static Theme);
+/// The theme `[colors] theme` names: a built-in one or one loaded from a
+/// theme file. Parsing only reads the name (a built-in one is resolved
+/// right away); [`crate::Config::load`] then resolves it against the theme
+/// files, which need the config directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThemeName {
+    name: String,
+    colors: Colors,
+    /// The theme file the colors come from; `None` for a built-in theme.
+    file: Option<PathBuf>,
+}
 
 impl ThemeName {
-    pub fn theme(self) -> &'static Theme {
-        self.0
+    /// The built-in theme called `name` (case-insensitive).
+    pub fn built_in(name: &str) -> Option<Self> {
+        find(name).map(|theme| Self {
+            name: theme.name.to_owned(),
+            colors: theme.colors,
+            file: None,
+        })
+    }
+
+    /// The theme called `name` loaded from `file`.
+    pub fn from_file(name: &str, colors: Colors, file: PathBuf) -> Self {
+        Self {
+            name: name.to_owned(),
+            colors,
+            file: Some(file),
+        }
+    }
+
+    /// The name: as the built-in theme spells it, or as configured.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn colors(&self) -> Colors {
+        self.colors
+    }
+
+    /// The theme file the colors come from; `None` for a built-in theme.
+    pub fn file(&self) -> Option<&Path> {
+        self.file.as_deref()
     }
 }
 
 impl Default for ThemeName {
     fn default() -> Self {
-        Self(&THEMES[0])
+        Self::built_in(DEFAULT_THEME).expect("the default theme is built in")
     }
 }
 
 /// Unknown theme name.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnknownTheme(pub String);
+pub struct UnknownTheme {
+    pub name: String,
+    /// The theme files found, by name, and the directory they are in.
+    pub custom: Vec<String>,
+    pub dir: Option<PathBuf>,
+}
+
+impl UnknownTheme {
+    /// `name` is neither built in nor one of the `custom` theme files.
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            custom: Vec::new(),
+            dir: None,
+        }
+    }
+}
 
 impl fmt::Display for UnknownTheme {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown theme `{}`, available: {}", self.0, names())
+        write!(f, "unknown theme `{}`, available: {}", self.name, names())?;
+        match &self.dir {
+            Some(dir) if self.custom.is_empty() => {
+                write!(f, "; no theme files in {}", dir.display())
+            }
+            Some(dir) => write!(
+                f,
+                "; theme files in {}: {}",
+                dir.display(),
+                self.custom.join(", ")
+            ),
+            None => Ok(()),
+        }
     }
 }
 
@@ -193,18 +263,94 @@ impl std::error::Error for UnknownTheme {}
 impl std::str::FromStr for ThemeName {
     type Err = UnknownTheme;
 
+    /// A built-in theme.
     fn from_str(name: &str) -> Result<Self, Self::Err> {
-        find(name)
-            .map(Self)
-            .ok_or_else(|| UnknownTheme(name.to_owned()))
+        Self::built_in(name).ok_or_else(|| UnknownTheme::new(name))
     }
 }
 
 impl<'de> Deserialize<'de> for ThemeName {
+    /// Any non-blank name: a built-in theme is resolved right away, any
+    /// other keeps the default colors until it is resolved against the
+    /// theme files.
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let name = String::deserialize(deserializer)?;
-        name.parse().map_err(serde::de::Error::custom)
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(serde::de::Error::custom("empty theme name"));
+        }
+        Ok(Self::built_in(name).unwrap_or_else(|| Self {
+            name: name.to_owned(),
+            ..Self::default()
+        }))
     }
+}
+
+/// The keys of a theme file, all optional.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ThemeFile {
+    pub foreground: Option<Rgb>,
+    pub background: Option<Rgb>,
+    pub cursor: Option<Rgb>,
+    pub ansi: Option<[Rgb; 16]>,
+    pub selection_foreground: Option<Rgb>,
+    pub selection_background: Option<Rgb>,
+}
+
+/// A theme file with its keys under `[colors]`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NestedThemeFile {
+    colors: ThemeFile,
+}
+
+impl ThemeFile {
+    /// Parses a theme file: its keys at the top level or under `[colors]`.
+    pub fn parse(text: &str) -> Result<Self, toml::de::Error> {
+        let table: toml::Table = toml::from_str(text)?;
+        if table.contains_key("colors") {
+            toml::from_str::<NestedThemeFile>(text).map(|file| file.colors)
+        } else {
+            toml::from_str(text)
+        }
+    }
+
+    /// The colors of this file over those of the default theme.
+    pub fn colors(&self) -> Colors {
+        let base = THEMES[0].colors;
+        Colors {
+            foreground: self.foreground.unwrap_or(base.foreground),
+            background: self.background.unwrap_or(base.background),
+            cursor: self.cursor.unwrap_or(base.cursor),
+            ansi: self.ansi.unwrap_or(base.ansi),
+            selection_foreground: self.selection_foreground.or(base.selection_foreground),
+            selection_background: self.selection_background.or(base.selection_background),
+        }
+    }
+}
+
+/// The theme file for `name` in `themes_dir`, or `None` when `name` cannot
+/// be a file name (empty, `.`/`..` or with a path separator).
+pub fn file_path(themes_dir: &Path, name: &str) -> Option<PathBuf> {
+    let valid = !matches!(name, "" | "." | "..") && !name.contains(['/', '\\']);
+    valid.then(|| themes_dir.join(format!("{name}.toml")))
+}
+
+/// Names of the theme files (`*.toml`) in `themes_dir`, sorted; empty when
+/// it cannot be read.
+pub fn file_names(themes_dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(themes_dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "toml") && path.is_file())
+        .filter_map(|path| Some(path.file_stem()?.to_str()?.to_owned()))
+        .collect();
+    names.sort();
+    names
 }
 
 #[cfg(test)]
@@ -228,7 +374,8 @@ mod tests {
             ]
         );
         assert_eq!(THEMES[0].name, DEFAULT_THEME);
-        assert_eq!(ThemeName::default().theme().name, DEFAULT_THEME);
+        assert_eq!(ThemeName::default().name(), DEFAULT_THEME);
+        assert_eq!(ThemeName::default().file(), None);
     }
 
     #[test]
@@ -280,5 +427,72 @@ mod tests {
             "{error}"
         );
         assert!(error.ends_with("one-dark"), "{error}");
+    }
+
+    #[test]
+    fn unknown_theme_error_lists_theme_files_too() {
+        let error = UnknownTheme {
+            name: "nope".into(),
+            custom: vec!["mine".into(), "work".into()],
+            dir: Some(PathBuf::from("/cfg/themes")),
+        };
+        let text = error.to_string();
+        assert!(text.contains("available: catppuccin-mocha"), "{text}");
+        assert!(
+            text.ends_with("theme files in /cfg/themes: mine, work"),
+            "{text}"
+        );
+        let none = UnknownTheme {
+            custom: Vec::new(),
+            ..error
+        };
+        assert!(none.to_string().ends_with("no theme files in /cfg/themes"));
+    }
+
+    #[test]
+    fn theme_names_parse_without_resolving_unknown_ones() {
+        let name: ThemeName = toml::Value::String(" Nord ".into()).try_into().unwrap();
+        assert_eq!(name.name(), "nord");
+        assert_eq!(name.colors(), find("nord").unwrap().colors);
+        let custom: ThemeName = toml::Value::String("mine".into()).try_into().unwrap();
+        assert_eq!(custom.name(), "mine");
+        assert_eq!(custom.colors(), THEMES[0].colors, "until resolved");
+        let blank = toml::Value::String("  ".into()).try_into::<ThemeName>();
+        assert!(blank.unwrap_err().to_string().contains("empty theme name"));
+    }
+
+    #[test]
+    fn theme_files_take_top_level_or_nested_keys() {
+        let top = ThemeFile::parse("background = \"#000000\"\ncursor = \"#fff\"\n").unwrap();
+        let nested =
+            ThemeFile::parse("[colors]\nbackground = \"#000000\"\ncursor = \"#fff\"\n").unwrap();
+        assert_eq!(top, nested);
+        assert_eq!(top.background, Some(Rgb::hex(0)));
+        assert!(ThemeFile::parse("theme = \"nord\"").is_err(), "unknown key");
+        assert!(ThemeFile::parse("[colors]\nforeground = 1").is_err());
+    }
+
+    #[test]
+    fn theme_file_keys_left_out_take_the_default_theme() {
+        let colors = ThemeFile::parse("foreground = \"#010203\"")
+            .unwrap()
+            .colors();
+        let base = THEMES[0].colors;
+        assert_eq!(colors.foreground, Rgb::new(1, 2, 3));
+        assert_eq!(colors.background, base.background);
+        assert_eq!(colors.ansi, base.ansi);
+        assert_eq!(colors.selection_background, base.selection_background);
+    }
+
+    #[test]
+    fn theme_file_paths_reject_path_like_names() {
+        let dir = Path::new("/cfg/themes");
+        assert_eq!(
+            file_path(dir, "mine"),
+            Some(PathBuf::from("/cfg/themes/mine.toml"))
+        );
+        assert_eq!(file_path(dir, "../secret"), None);
+        assert_eq!(file_path(dir, "a\\b"), None);
+        assert_eq!(file_path(dir, ".."), None);
     }
 }

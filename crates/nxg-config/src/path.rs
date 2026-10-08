@@ -1,7 +1,7 @@
 //! Where the config file lives.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Environment variable that points at a specific config file.
 pub const ENV_VAR: &str = "NXGTERM_CONFIG";
@@ -53,6 +53,35 @@ pub fn config_path(platform: Platform, env: impl Fn(&str) -> Option<OsString>) -
             .or_else(|| var("HOME").map(|home| PathBuf::from(home).join(".config")))?,
     };
     Some(base.join(DIR).join(FILE))
+}
+
+/// The user's home directory: `HOME`, or `USERPROFILE` on Windows when
+/// `HOME` is unset. `env` looks up environment variables.
+pub fn home_dir(platform: Platform, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let var = |name: &str| env(name).filter(|value| !value.is_empty());
+    let home = match platform {
+        Platform::Unix => var("HOME"),
+        Platform::Windows => var("HOME").or_else(|| var("USERPROFILE")),
+    };
+    home.map(PathBuf::from)
+}
+
+/// Where an `import` entry points: a leading `~` (alone or before a
+/// separator) is `home`, and a relative path is relative to `dir`, the
+/// directory of the importing file. Without a home, `~` stays as written.
+pub fn resolve_import(entry: &str, dir: &Path, home: Option<&Path>) -> PathBuf {
+    let rest = entry
+        .strip_prefix('~')
+        .filter(|rest| rest.is_empty() || rest.starts_with(['/', '\\']));
+    let path = match (rest, home) {
+        (Some(rest), Some(home)) => home.join(rest.trim_start_matches(['/', '\\'])),
+        _ => PathBuf::from(entry),
+    };
+    if path.is_absolute() {
+        path
+    } else {
+        dir.join(path)
+    }
 }
 
 /// Whether `NXGTERM_CONFIG` picks the file (set and non-empty), so
@@ -143,5 +172,42 @@ mod tests {
         ]);
         assert_eq!(config_path(Platform::Windows, vars), Some(under(appdata)));
         assert_eq!(config_path(Platform::Windows, env(&[("HOME", "/h")])), None);
+    }
+
+    #[test]
+    fn home_is_home_or_the_windows_profile() {
+        let vars = env(&[("HOME", "/home/me"), ("USERPROFILE", "C:\\Users\\me")]);
+        assert_eq!(home_dir(Platform::Unix, &vars), Some("/home/me".into()));
+        assert_eq!(home_dir(Platform::Windows, &vars), Some("/home/me".into()));
+        let profile = env(&[("HOME", ""), ("USERPROFILE", "C:\\Users\\me")]);
+        assert_eq!(home_dir(Platform::Unix, &profile), None);
+        assert_eq!(
+            home_dir(Platform::Windows, &profile),
+            Some("C:\\Users\\me".into())
+        );
+    }
+
+    #[test]
+    fn imports_are_relative_to_the_importing_file_with_home_expanded() {
+        let dir = Path::new("/cfg/nxgterm");
+        let home = Some(Path::new("/home/me"));
+        assert_eq!(
+            resolve_import("fonts.toml", dir, home),
+            dir.join("fonts.toml")
+        );
+        assert_eq!(
+            resolve_import("../shared/colors.toml", dir, home),
+            dir.join("../shared/colors.toml")
+        );
+        assert_eq!(
+            resolve_import("~/dots/x.toml", dir, home),
+            Path::new("/home/me").join("dots/x.toml")
+        );
+        assert_eq!(resolve_import("~", dir, home), Path::new("/home/me"));
+        assert_eq!(resolve_import("~x.toml", dir, home), dir.join("~x.toml"));
+        assert_eq!(resolve_import("~/x.toml", dir, None), dir.join("~/x.toml"));
+        let absolute = std::env::temp_dir().join("x.toml");
+        let entry = absolute.to_str().unwrap();
+        assert_eq!(resolve_import(entry, dir, home), absolute);
     }
 }
