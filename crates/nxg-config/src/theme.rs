@@ -28,7 +28,7 @@ pub struct Theme {
 }
 
 /// Name of the default theme.
-pub const DEFAULT_THEME: &str = "nxg-dark";
+pub const DEFAULT_THEME: &str = "catppuccin-mocha";
 
 /// Builds a [`Theme`] from `0xRRGGBB` literals.
 const fn theme(name: &'static str, fg: u32, bg: u32, cursor: u32, ansi: [u32; 16]) -> Theme {
@@ -51,8 +51,30 @@ const fn theme(name: &'static str, fg: u32, bg: u32, cursor: u32, ansi: [u32; 16
     }
 }
 
+impl Theme {
+    /// Draws selected text in `fg` on `bg` instead of swapping the colors.
+    const fn with_selection(mut self, fg: u32, bg: u32) -> Self {
+        self.colors.selection_foreground = Some(Rgb::hex(fg));
+        self.colors.selection_background = Some(Rgb::hex(bg));
+        self
+    }
+}
+
 /// Every built-in theme; the first one is the default.
 pub const THEMES: &[Theme] = &[
+    // Catppuccin's official Mocha palette: text on base, rosewater cursor,
+    // selection on surface2.
+    theme(
+        "catppuccin-mocha",
+        0xcdd6f4,
+        0x1e1e2e,
+        0xf5e0dc,
+        [
+            0x45475a, 0xf38ba8, 0xa6e3a1, 0xf9e2af, 0x89b4fa, 0xf5c2e7, 0x94e2d5, 0xbac2de,
+            0x585b70, 0xf38ba8, 0xa6e3a1, 0xf9e2af, 0x89b4fa, 0xf5c2e7, 0x94e2d5, 0xa6adc8,
+        ],
+    )
+    .with_selection(0xcdd6f4, 0x585b70),
     // xterm's colors on a near-black background.
     theme(
         "nxg-dark",
@@ -82,16 +104,6 @@ pub const THEMES: &[Theme] = &[
         [
             0x15161e, 0xf7768e, 0x9ece6a, 0xe0af68, 0x7aa2f7, 0xbb9af7, 0x7dcfff, 0xa9b1d6,
             0x414868, 0xf7768e, 0x9ece6a, 0xe0af68, 0x7aa2f7, 0xbb9af7, 0x7dcfff, 0xc0caf5,
-        ],
-    ),
-    theme(
-        "catppuccin-mocha",
-        0xcdd6f4,
-        0x1e1e2e,
-        0xf5e0dc,
-        [
-            0x45475a, 0xf38ba8, 0xa6e3a1, 0xf9e2af, 0x89b4fa, 0xf5c2e7, 0x94e2d5, 0xbac2de,
-            0x585b70, 0xf38ba8, 0xa6e3a1, 0xf9e2af, 0x89b4fa, 0xf5c2e7, 0x94e2d5, 0xa6adc8,
         ],
     ),
     theme(
@@ -205,10 +217,10 @@ mod tests {
         assert_eq!(
             names,
             [
+                "catppuccin-mocha",
                 "nxg-dark",
                 "nxg-light",
                 "tokyo-night",
-                "catppuccin-mocha",
                 "gruvbox-dark",
                 "dracula",
                 "nord",
@@ -220,13 +232,27 @@ mod tests {
     }
 
     #[test]
-    fn default_theme_keeps_the_original_xterm_colors() {
+    fn default_theme_is_catppuccin_mocha() {
         let colors = THEMES[0].colors;
+        assert_eq!(colors.foreground, Rgb::hex(0xcdd6f4));
+        assert_eq!(colors.background, Rgb::hex(0x1e1e2e));
+        assert_eq!(colors.cursor, Rgb::hex(0xf5e0dc));
+        assert_eq!(colors.ansi[0], Rgb::hex(0x45475a));
+        assert_eq!(colors.ansi[4], Rgb::hex(0x89b4fa));
+        assert_eq!(colors.ansi[15], Rgb::hex(0xa6adc8));
+        assert_eq!(colors.selection_foreground, Some(Rgb::hex(0xcdd6f4)));
+        assert_eq!(colors.selection_background, Some(Rgb::hex(0x585b70)));
+    }
+
+    #[test]
+    fn nxg_dark_keeps_the_original_xterm_colors() {
+        let colors = find("nxg-dark").unwrap().colors;
         assert_eq!(colors.foreground, Rgb::hex(0xe5e5e5));
         assert_eq!(colors.background, Rgb::hex(0x101010));
         assert_eq!(colors.cursor, Rgb::hex(0xc0c0c0));
         assert_eq!(colors.ansi[1], Rgb::hex(0xcd0000));
         assert_eq!(colors.ansi[12], Rgb::hex(0x5c5cff));
+        assert_eq!(colors.selection_background, None);
     }
 
     #[test]
@@ -250,7 +276,7 @@ mod tests {
         let error = "solarized".parse::<ThemeName>().unwrap_err().to_string();
         assert!(error.contains("`solarized`"), "{error}");
         assert!(
-            error.contains("nxg-dark, nxg-light, tokyo-night"),
+            error.contains("catppuccin-mocha, nxg-dark, nxg-light"),
             "{error}"
         );
         assert!(error.ends_with("one-dark"), "{error}");

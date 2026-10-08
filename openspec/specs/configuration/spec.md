@@ -57,13 +57,13 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | `font.family` | string; blank = unset | system monospace |
 | `font.fallback` | list of family names searched per missing glyph; blank names dropped | `[]` (built-in defaults still apply) |
 | `font.size` | integer or float points, clamped to 6-72; non-finite = 14 | `14.0` |
-| `window.padding` | u16 logical pixels | `4` |
+| `window.padding` | u16 logical pixels | `8` |
 | `window.columns`, `window.rows` | non-zero u16 initial cells | `100`, `30` |
 | `window.tab_bar` | `auto` (two or more tabs), `always`, `never` | `auto` |
-| `colors.theme` | built-in theme name, case-insensitive | `nxg-dark` |
+| `colors.theme` | built-in theme name, case-insensitive | `catppuccin-mocha` |
 | `colors.foreground`/`background`/`cursor` | `#rrggbb` or `#rgb` | from theme |
 | `colors.ansi` | exactly 16 colors (normal 0-7, bright 8-15) | from theme |
-| `colors.selection_foreground`/`selection_background` | `#rrggbb` or `#rgb`; unset swaps the colors of selected cells | unset |
+| `colors.selection_foreground`/`selection_background` | `#rrggbb` or `#rgb`; unset swaps the colors of selected cells | from theme (unset for most) |
 | `shell.program`, `shell.args` | string; blank = unset / list | platform default / `[]` |
 | `renderer.backend` | `auto` \| `gpu` \| `cpu` | `auto` |
 | `scrollback.lines` | usize history lines; `0` disables the scrollback | `10000` |
@@ -85,11 +85,16 @@ defaults.
 
 ### Requirement: Themes and overrides
 
-nxgterm MUST ship the themes `nxg-dark` (default, original xterm colors),
-`nxg-light`, `tokyo-night`, `catppuccin-mocha`, `gruvbox-dark`, `dracula`,
-`nord` and `one-dark`. Explicit `foreground`, `background`, `cursor` and
-`ansi` values MUST override the theme individually. ANSI colors 16-255
-SHALL follow the xterm cube and grayscale ramp regardless of theme.
+nxgterm MUST ship the themes `catppuccin-mocha` (default, the official
+Mocha palette with selection on surface2), `nxg-dark` (original xterm
+colors), `nxg-light`, `tokyo-night`, `gruvbox-dark`, `dracula`, `nord` and
+`one-dark`. A theme MAY define selection colors; the others swap the colors
+of selected cells. Explicit `foreground`, `background`, `cursor`, `ansi` and
+selection values MUST override the theme individually. The window
+SHOULD ask the system for a dark title bar when the effective background is
+dark (white contrasts with it more than black) and a light one otherwise,
+again whenever the colors are reloaded. ANSI colors 16-255 SHALL follow the
+xterm cube and grayscale ramp regardless of theme.
 
 #### Scenario: Partial override
 - GIVEN `theme = "nord"` and `foreground = "#010203"`

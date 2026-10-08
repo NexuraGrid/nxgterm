@@ -32,7 +32,7 @@ use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
 use crate::mouse::{Clicks, ViewportScroll, Wheel, WheelAction};
 use crate::tabs::{TabId, Tabs};
-use crate::{appearance, bindings, choice, clipboard, keys, mouse, reload, tab_bar};
+use crate::{appearance, bindings, choice, clipboard, icon, keys, mouse, reload, tab_bar};
 
 /// Events posted to the event loop from background threads.
 #[derive(Debug)]
@@ -147,7 +147,10 @@ impl App {
 
     fn start(&self, event_loop: &ActiveEventLoop) -> Result<Session, Box<dyn Error>> {
         let config = &self.config;
-        let attributes = Window::default_attributes().with_title("nxgterm");
+        let attributes = Window::default_attributes()
+            .with_title("nxgterm")
+            .with_window_icon(icon::window_icon())
+            .with_theme(Some(appearance::window_theme(&config.colors.resolve())));
         let window = Arc::new(event_loop.create_window(attributes)?);
         let scale = window.scale_factor();
         let faces = load_faces(&config.font)?;
@@ -504,6 +507,10 @@ impl App {
             if changes.restyle {
                 session.tab_bar = new.window.tab_bar;
                 session.restyle(&new);
+            }
+            if self.config.colors != new.colors {
+                let theme = appearance::window_theme(&new.colors.resolve());
+                session.window.set_theme(Some(theme));
             }
             if changes.scrollback {
                 for tab in session.tabs.iter_mut() {

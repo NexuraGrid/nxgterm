@@ -169,19 +169,19 @@ fallback = ["Symbols Nerd Font Mono"]  # for glyphs the family lacks, e.g. icons
 size = 14.0                 # points at 100% scale, clamped to 6-72
 
 [window]
-padding = 4                 # pixels around the grid at 100% scale
+padding = 8                 # pixels around the grid at 100% scale
 columns = 100               # initial size in cells
 rows = 30
 tab_bar = "auto"            # auto (2+ tabs) | always | never
 
 [colors]
-theme = "nxg-dark"
+theme = "catppuccin-mocha"
 # Optional overrides on top of the theme:
 # foreground = "#c0caf5"
 # background = "#1a1b26"
 # cursor = "#c0caf5"
 # ansi = ["#15161e", ...]   # exactly 16 colors: normal 0-7, bright 8-15
-# selection_foreground = "#c0caf5"  # unset: selected cells are inverted
+# selection_foreground = "#c0caf5"  # unset: the theme's, or inverted cells
 # selection_background = "#33467c"
 
 [shell]
@@ -202,8 +202,8 @@ copy_on_select = true       # selected text goes to PRIMARY (Linux only)
 "ctrl+tab" = "none"               # free a default chord for the shell
 ```
 
-Built-in themes: `nxg-dark` (default), `nxg-light`, `tokyo-night`,
-`catppuccin-mocha`, `gruvbox-dark`, `dracula`, `nord`, `one-dark`.
+Built-in themes: `catppuccin-mocha` (default), `nxg-dark` (xterm colors),
+`nxg-light`, `tokyo-night`, `gruvbox-dark`, `dracula`, `nord`, `one-dark`.
 
 The file is reloaded when saved. Font, colors, padding, the tab bar, the
 scrollback limit and key bindings apply at once; `[shell]`, `[renderer]` and the initial
