@@ -17,7 +17,7 @@ use nxg_core::selection::{Point, SelectionKind};
 use nxg_core::{CellPixels, TermSize, Terminal, WinSize};
 use nxg_pty::ShellCommand;
 use nxg_render::{
-    CellSize, CpuWindowRenderer, FontError, FontFaces, GpuRenderer, Layout, Overlay, Style,
+    CellSize, CpuWindowRenderer, FontError, FontFaces, GpuRenderer, Layout, Overlay, Shape, Style,
     WindowRenderer,
 };
 use winit::application::ApplicationHandler;
@@ -32,7 +32,7 @@ use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
 use crate::mouse::{Clicks, ViewportScroll, Wheel, WheelAction};
 use crate::tabs::{TabId, Tabs};
-use crate::title_bar::{self, Button, Chrome, Region};
+use crate::title_bar::{self, Button, ButtonColors, Chrome, Rect, Region};
 use crate::{appearance, bindings, choice, clipboard, icon, keys, mouse, reload, tab_bar};
 
 /// Events posted to the event loop from background threads.
@@ -1104,17 +1104,33 @@ impl Session {
         if !self.integrated {
             return Chrome::NATIVE;
         }
+        let cell = layout(self.renderer.as_ref(), self.padding).cell;
         let inset = if MACOS {
-            let cell = layout(self.renderer.as_ref(), self.padding).cell;
             title_bar::macos_inset(self.scale, self.padding, cell.width)
         } else {
             0
         };
+        let buttons = self
+            .window_buttons()
+            .map(|buttons| title_bar::first_button_col(&buttons, self.padding, cell.width));
         Chrome {
             inset,
             new_tab: true,
-            buttons: !MACOS,
+            buttons,
         }
+    }
+
+    /// The minimize, maximize and close buttons of the integrated title
+    /// bar in window pixels, except on macOS (which keeps its own): as
+    /// tall as the bar, from the window top to below its row.
+    fn window_buttons(&self) -> Option<[(Button, Rect); 3]> {
+        if !self.integrated || MACOS || !self.bar_visible(self.tabs.len()) {
+            return None;
+        }
+        let layout = layout(self.renderer.as_ref(), self.padding);
+        let bar_height = layout.padding + layout.cell.height;
+        let width = self.window.inner_size().width;
+        Some(title_bar::button_rects(width, bar_height, self.scale))
     }
 
     /// The tab bar laid out `cols` columns wide.
@@ -1125,6 +1141,12 @@ impl Session {
 
     /// What is on the tab bar at window pixel `x`, `y`, if it shows there.
     fn bar_region_at(&self, x: f64, y: f64) -> Option<Region> {
+        let button = self
+            .window_buttons()
+            .and_then(|buttons| title_bar::button_at(&buttons, x, y));
+        if let Some(button) = button {
+            return Some(Region::Button(button));
+        }
         let col = self.bar_column_at(x, y)?;
         let cols = self.tabs.active()?.terminal.size().cols();
         Some(self.bar(cols).region_at(col))
@@ -1221,8 +1243,21 @@ impl Session {
         };
         let bar = self.bar_visible(self.tabs.len()).then(|| {
             let cols = tab.terminal.size().cols();
-            let maximized = self.integrated && self.window.is_maximized();
-            title_bar::render(&self.bar(cols), self.bar_hover, maximized)
+            title_bar::render(&self.bar(cols), self.bar_hover)
+        });
+        let buttons = self.window_buttons().map(|buttons| {
+            let theme = appearance::palette(&config.colors.resolve());
+            let colors = ButtonColors {
+                glyph: theme.foreground,
+                // The new-tab button's hover background.
+                hover: theme.ansi[8],
+            };
+            let hover = match self.bar_hover {
+                Some(Region::Button(button)) => Some(button),
+                _ => None,
+            };
+            let maximized = self.window.is_maximized();
+            title_bar::button_shapes(&buttons, hover, maximized, self.scale, colors)
         });
         let palette = self.palette.as_ref().map(|palette| {
             let rect = palette.rect(tab.terminal.size());
@@ -1235,10 +1270,12 @@ impl Session {
             col: rect.col,
             row: rect.row,
         });
-        match self
-            .renderer
-            .draw_layers(bar.as_ref(), &tab.terminal, overlay)
-        {
+        match self.renderer.draw_layers(
+            bar.as_ref(),
+            &tab.terminal,
+            overlay,
+            buttons.as_deref().unwrap_or_default(),
+        ) {
             Ok(()) => {
                 self.skipped_frames = 0;
                 Ok(())
@@ -1560,6 +1597,7 @@ impl WindowRenderer for Detached {
         _header: Option<&Terminal>,
         terminal: &Terminal,
         _overlay: Option<Overlay<'_>>,
+        _shapes: &[Shape],
     ) -> Result<(), RenderError> {
         self.draw(terminal)
     }

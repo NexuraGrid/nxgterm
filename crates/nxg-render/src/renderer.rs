@@ -5,6 +5,8 @@ use nxg_core::{Flags, Terminal};
 use crate::frame::Frame;
 use crate::images;
 use crate::paint::{self, CellSize, Layout};
+use crate::shape;
+use crate::shape::Shape;
 use crate::style::{Overlay, Style};
 
 /// Software renderer for the terminal grid.
@@ -33,18 +35,19 @@ impl CpuRenderer {
     /// Draws `term` into `frame`; pixels outside the grid (the padding
     /// included) get the background.
     pub fn render(&mut self, term: &Terminal, frame: &mut Frame<'_>) {
-        self.render_layers(None, term, None, frame);
+        self.render_layers(None, term, None, &[], frame);
     }
 
     /// Draws the rows of `header` at the top of the grid area, `term`
     /// below them (see [`Layout::below`]) and `overlay` over the grid (see
-    /// [`Layout::at`]). The cursors of the header and the overlay are drawn
-    /// like any other.
+    /// [`Layout::at`]) and `shapes` over everything. The cursors of the
+    /// header and the overlay are drawn like any other.
     pub fn render_layers(
         &mut self,
         header: Option<&Terminal>,
         term: &Terminal,
         overlay: Option<Overlay<'_>>,
+        shapes: &[Shape],
         frame: &mut Frame<'_>,
     ) {
         let mut layout = self.layout();
@@ -57,6 +60,7 @@ impl CpuRenderer {
         if let Some(overlay) = overlay {
             self.paint(overlay.terminal, frame, layout.at(overlay.col, overlay.row));
         }
+        shape::paint(shapes, frame);
     }
 
     /// Paints `term` at `layout` over what `frame` holds. Order: cell
@@ -200,7 +204,7 @@ mod tests {
         assert_eq!(h, 2 * cell.height + 2);
         let mut pixels = vec![0; (w * h) as usize];
         let mut frame = Frame::new(&mut pixels, w, h).unwrap();
-        renderer.render_layers(Some(&header), &term, None, &mut frame);
+        renderer.render_layers(Some(&header), &term, None, &[], &mut frame);
         let palette = Palette::default();
         assert_eq!(frame.pixel(1, 1), Some(palette.ansi[1]), "header row");
         assert_eq!(
@@ -231,7 +235,7 @@ mod tests {
             col: 1,
             row: 1,
         };
-        renderer.render_layers(Some(&header), &term, Some(overlay), &mut frame);
+        renderer.render_layers(Some(&header), &term, Some(overlay), &[], &mut frame);
         let palette = Palette::default();
         let at = |col: u32, row: u32| {
             let (x, y) = layout.origin(col, row);

@@ -6,6 +6,7 @@ use nxg_core::ports::{RenderError, Renderer};
 use crate::font::Font;
 use crate::paint::Layout;
 use crate::palette::Palette;
+use crate::shape::Shape;
 
 /// Font, colors and padding, all in physical pixels.
 #[derive(Debug, Clone)]
@@ -52,13 +53,15 @@ pub trait WindowRenderer: Renderer {
     fn translucent(&self) -> bool;
     /// Draws and presents one frame with the rows of `header` (such as the
     /// tab bar) at the top of the grid area, `terminal` below them, at
-    /// [`Layout::below`] the header's rows, and `overlay` on top of it all.
-    /// [`Renderer::draw`] is this with `terminal` alone. The cursors of the
-    /// header and the overlay are drawn like any other.
+    /// [`Layout::below`] the header's rows, `overlay` on top of them and
+    /// `shapes` over everything. [`Renderer::draw`] is this with `terminal`
+    /// alone. The cursors of the header and the overlay are drawn like any
+    /// other.
     fn draw_layers(
         &mut self,
         header: Option<&Terminal>,
         terminal: &Terminal,
         overlay: Option<Overlay<'_>>,
+        shapes: &[Shape],
     ) -> Result<(), RenderError>;
 }

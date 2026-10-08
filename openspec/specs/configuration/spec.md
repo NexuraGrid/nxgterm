@@ -206,7 +206,12 @@ bar and borders and the tab bar MUST behave as `window.tab_bar` says. With
   Windows with the undecorated drop shadow) and the bar MUST end with
   minimize, maximize/restore and close buttons that act when the left button
   is released over the one it was pressed on; the button under the pointer
-  MUST be highlighted, close in red.
+  MUST be highlighted, close in red. The buttons MUST sit flush with the
+  window's top-right corner, span the bar's height and be at least 46
+  logical pixels wide (46:32 on a taller bar), with anti-aliased vector
+  glyphs (a line, a square, two overlapping squares while maximized, an X)
+  that scale with the display scale and the bar height, never with the
+  font's glyphs.
 - On macOS the window MUST keep its frame with a transparent, hidden title
   and full-size content; the bar MUST leave room on its left for the native
   window buttons and MUST NOT draw its own.

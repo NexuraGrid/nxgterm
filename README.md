@@ -330,7 +330,9 @@ the system title bar, as in Windows Terminal or a browser. It always shows, even
 one tab, and has a `+` button after the last tab that opens a new one. Drag
 its empty part to move the window and double-click it to maximize or
 restore. On Windows and Linux it draws minimize, maximize/restore and close
-buttons on the right (close turns red under the pointer), the window keeps a
+buttons in the top-right corner, as tall as the bar and at least 46 pixels
+wide (at 100% scale) with vector glyphs that grow with the display scale
+and the bar (close turns red under the pointer), the window keeps a
 drop shadow on Windows, and the outer 5 pixels (at 100% scale) of the window
 resize it, except while maximized; right-clicking the empty bar opens the
 window menu on Windows. On macOS the native window buttons stay at the left

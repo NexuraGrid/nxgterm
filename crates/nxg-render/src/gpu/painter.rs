@@ -2,13 +2,14 @@
 
 use nxg_core::Terminal;
 
-use super::atlas::Atlas;
+use super::atlas::{Atlas, Source};
 use super::device::Gpu;
 use super::format;
 use super::image::{self, IMAGE_INSTANCE_SIZE, ImageInstance, ImageTextures};
 use super::instance::{self, AtlasFull, GlyphSlot, INSTANCE_SIZE, Quads};
 use crate::images::{self as placements, ImageDraw};
 use crate::paint::{CellSize, Layout};
+use crate::shape::Shape;
 use crate::style::{Overlay, Style};
 
 /// Instance capacity of the first vertex buffer; it grows on demand.
@@ -170,8 +171,8 @@ impl Painter {
 
     /// Draws `term` into `target` (`width x height` pixels) and submits,
     /// with the rows of `header` at the top of the grid area, `term` below
-    /// them (see [`Layout::below`]) and `overlay` over the grid (see
-    /// [`Layout::at`]).
+    /// them (see [`Layout::below`]), `overlay` over the grid (see
+    /// [`Layout::at`]) and `shapes` over everything.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
@@ -182,6 +183,7 @@ impl Painter {
         header: Option<&Terminal>,
         term: &Terminal,
         overlay: Option<Overlay<'_>>,
+        shapes: &[Shape],
     ) {
         let rows = header.map_or(0, |header| header.size().rows());
         let layout = self.style.layout().below(rows);
@@ -191,7 +193,7 @@ impl Painter {
                 backgrounds,
             },
             term_quads,
-        } = self.build(&gpu.queue, header, term, overlay);
+        } = self.build(&gpu.queue, header, term, overlay, shapes);
         let bytes = instance::to_bytes(&instances);
         if bytes.len() as u64 > self.instances.size() {
             let size = (bytes.len() as u64).next_power_of_two();
@@ -261,8 +263,8 @@ impl Painter {
             self.draw_images(&mut pass, &below, scissor, &image_bytes);
             quads(&mut pass, backgrounds as u32..total);
             self.draw_images(&mut pass, &above, scissor, &image_bytes);
-            // The header does not overlap the grid; the overlay goes over
-            // everything. Neither has images.
+            // The header does not overlap the grid; the overlay and then
+            // the shapes go over everything. None of them has images.
             quads(&mut pass, total..instances.len() as u32);
         }
         gpu.queue.submit([encoder.finish()]);
@@ -325,7 +327,7 @@ impl Painter {
     }
 
     /// Builds the frame's instances: those of `term`, then those of
-    /// `header`, then those of `overlay`. The overlay, and the header of a
+    /// `header`, of `overlay` and of `shapes`. The overlay, and the header of a
     /// translucent window, get opaque default backgrounds. When the atlas
     /// fills up it is reset and the frame rebuilt once, dropping glyphs
     /// that still do not fit.
@@ -335,6 +337,7 @@ impl Painter {
         header: Option<&Terminal>,
         term: &Terminal,
         overlay: Option<Overlay<'_>>,
+        shapes: &[Shape],
     ) -> Frame {
         let layout = self.style.layout();
         let rows = header.map_or(0, |header| header.size().rows());
@@ -342,7 +345,8 @@ impl Painter {
         let baseline = self.style.font.baseline();
         let opaque_header = self.background_alpha() < 1.0;
         let (atlas, font, palette) = (&mut self.atlas, &mut self.style.font, &self.style.palette);
-        let all = |glyph: &mut dyn FnMut(char, bool) -> Result<Option<GlyphSlot>, AtlasFull>| {
+        let all = |slot: &mut dyn FnMut(Source<'_>) -> Result<Option<GlyphSlot>, AtlasFull>| {
+            let glyph = &mut |ch, bold| slot(Source::Glyph(ch, bold));
             let mut quads = instance::build(term, palette, grid, baseline, false, &mut *glyph)?;
             let term_quads = quads.instances.len();
             if let Some(header) = header {
@@ -361,12 +365,14 @@ impl Painter {
                 let extra = instance::build(terminal, palette, at, baseline, true, &mut *glyph)?;
                 quads.instances.extend(extra.instances);
             }
+            let extra = instance::shapes(shapes, |mask| slot(Source::Mask(mask)))?;
+            quads.instances.extend(extra);
             Ok(Frame { quads, term_quads })
         };
-        let first = all(&mut |ch, bold| atlas.slot(queue, font, ch, bold));
+        let first = all(&mut |source| atlas.slot(queue, font, source));
         first.unwrap_or_else(|_: AtlasFull| {
             atlas.clear();
-            all(&mut |ch, bold| Ok(atlas.slot(queue, font, ch, bold).unwrap_or(None)))
+            all(&mut |source| Ok(atlas.slot(queue, font, source).unwrap_or(None)))
                 .unwrap_or_default()
         })
     }
