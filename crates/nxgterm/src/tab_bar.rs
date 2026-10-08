@@ -1,12 +1,12 @@
 //! The tab bar: one row of labels above the grid, as pure functions of
 //! the tab titles so layout, truncation and clicks are unit tested.
 //!
-//! The bar is drawn as a one-row [`Terminal`] that the renderers put above
-//! the grid, so it needs no drawing code of its own.
+//! The bar is drawn (see [`crate::title_bar::render`]) as a one-row
+//! terminal that the renderers put above the grid, so it needs no drawing
+//! code of its own.
 
 use std::path::Path;
 
-use nxg_core::{TermSize, Terminal};
 use nxg_render::Layout;
 
 /// One tab's label, positioned on the bar.
@@ -20,7 +20,7 @@ pub struct Label {
 }
 
 impl Label {
-    fn width(&self) -> u16 {
+    pub fn width(&self) -> u16 {
         self.text.chars().count() as u16
     }
 }
@@ -93,23 +93,6 @@ pub fn column_at(layout: Layout, cols: u16, x: f64, y: f64) -> Option<u16> {
     Some(col.clamp(0.0, f64::from(cols.max(1) - 1)) as u16)
 }
 
-/// A one-row terminal of `cols` columns showing `labels`: the active one
-/// in inverse video, the others dimmed, no cursor.
-pub fn render(labels: &[Label], cols: u16) -> Terminal {
-    let size = TermSize::new(cols.max(1), 1).expect("at least one column and row");
-    let mut bar = Terminal::new(size);
-    let mut input = String::from("\x1b[?25l");
-    for label in labels {
-        // Bright black: dimmed in every theme, as the faint attribute is
-        // not drawn.
-        input.push_str(if label.active { "\x1b[7m" } else { "\x1b[90m" });
-        input.push_str(&label.text);
-        input.push_str("\x1b[0m");
-    }
-    bar.advance(input.as_bytes());
-    bar
-}
-
 /// The title of a tab running `program` (the configured shell), or the
 /// default shell: the file name without directories or `.exe`. On Unix
 /// the default shell is `$SHELL` (`shell_env`), falling back to `sh`; on
@@ -137,7 +120,6 @@ pub fn title(program: Option<&str>, shell_env: Option<&str>, windows: bool) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nxg_core::{Color, Flags};
     use nxg_render::CellSize;
 
     fn texts(labels: &[Label]) -> Vec<&str> {
@@ -204,29 +186,6 @@ mod tests {
         assert_eq!(column_at(layout, 8, 26.0, 24.9), Some(2));
         assert_eq!(column_at(layout, 8, 999.0, 10.0), Some(7));
         assert_eq!(column_at(layout, 8, 26.0, 25.0), None, "grid row 0");
-    }
-
-    #[test]
-    fn the_bar_shows_the_active_label_inverse_and_the_others_dimmed() {
-        let labels = layout(&["a", "b"], 1, 12);
-        let bar = render(&labels, 12);
-        assert_eq!(bar.size(), TermSize::new(12, 1).unwrap());
-        assert!(!bar.display_cursor().visible);
-        let row = bar.display_row(0);
-        let text: String = row.iter().map(|c| c.ch).collect();
-        assert_eq!(text, " 1: a  2: b ");
-        assert_eq!(row[1].fg, Color::Indexed(8));
-        assert!(!row[1].flags.contains(Flags::INVERSE));
-        assert!(row[7].flags.contains(Flags::INVERSE));
-        assert!(row[11].flags.contains(Flags::INVERSE));
-    }
-
-    #[test]
-    fn a_full_bar_does_not_scroll_its_only_row() {
-        let labels = layout(&["ab"], 0, 7);
-        let bar = render(&labels, 7);
-        let text: String = bar.display_row(0).iter().map(|c| c.ch).collect();
-        assert_eq!(text, " 1: ab ");
     }
 
     #[test]

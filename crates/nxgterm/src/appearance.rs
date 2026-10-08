@@ -112,7 +112,7 @@ fn pixel(color: Rgb) -> u32 {
 }
 
 /// `scale`, or 1.0 when it is not a positive finite number.
-fn valid_scale(scale: f64) -> f64 {
+pub(crate) fn valid_scale(scale: f64) -> f64 {
     if scale.is_finite() && scale > 0.0 {
         scale
     } else {
