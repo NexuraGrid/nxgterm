@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           nxgterm
-Version:        0.5.0
+Version:        0.6.0
 Release:        1%{?dist}
 Summary:        Fast, configurable, cross-platform terminal emulator
 
@@ -79,6 +79,10 @@ cargo test --release --locked --workspace
 %{_datadir}/%{name}/
 
 %changelog
+* Thu Oct 08 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.6.0-1
+- Integrated title bar with tabs by default, window opacity and blur,
+  wgpu 30 (MSRV 1.87), Catppuccin Mocha flavor for Yazi in the profile
+
 * Thu Oct 08 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.5.0-1
 - Catppuccin Mocha default theme, title bar matching the theme, wider
   padding, window icon; winpty license in the Windows packages
