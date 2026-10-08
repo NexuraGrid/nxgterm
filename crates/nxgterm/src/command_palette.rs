@@ -664,7 +664,7 @@ mod tests {
         };
         let term = palette.render(rect, (1, 2, 3));
         assert_eq!(term.size(), TermSize::new(40, 5).unwrap());
-        assert_eq!(text(&term, 0), " Command Palette                   3/21 ");
+        assert_eq!(text(&term, 0), " Command Palette                   3/24 ");
         assert_eq!(text(&term, 1), " > zo                                   ");
         assert_eq!(text(&term, 2), " Font        Zoom In             Ctrl+= ");
         assert_eq!(text(&term, 3), " Font        Zoom Out            Ctrl+- ");

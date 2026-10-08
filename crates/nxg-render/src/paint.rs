@@ -103,6 +103,31 @@ pub fn cell_colors(cell: &Cell, palette: &Palette) -> (Rgb, Rgb) {
     }
 }
 
+/// [`cell_colors`] for a cell drawn `selected` or not. Selected cells take
+/// the palette's selection colors; without a selection background their
+/// own colors are swapped first, so the selection shows as inverse video.
+pub fn shown_colors(cell: &Cell, selected: bool, palette: &Palette) -> (Rgb, Rgb) {
+    let (fg, bg) = cell_colors(cell, palette);
+    if !selected {
+        return (fg, bg);
+    }
+    let (fg, bg) = match palette.selection_background {
+        Some(_) => (fg, bg),
+        None => (bg, fg),
+    };
+    (
+        palette.selection_foreground.unwrap_or(fg),
+        palette.selection_background.unwrap_or(bg),
+    )
+}
+
+/// Whether column `col` is in the `selected` columns of its row.
+pub fn is_selected(selected: &Option<std::ops::Range<u16>>, col: usize) -> bool {
+    selected
+        .as_ref()
+        .is_some_and(|cols| cols.contains(&(col as u16)))
+}
+
 /// Fills every cell with its background color.
 pub fn paint_backgrounds(
     term: &Terminal,
@@ -112,8 +137,9 @@ pub fn paint_backgrounds(
 ) {
     let cell = layout.cell;
     for row in 0..term.size().rows() {
+        let selected = term.selected_cols(row);
         for (col, c) in term.display_row(row).iter().enumerate() {
-            let (_, bg) = cell_colors(c, palette);
+            let (_, bg) = shown_colors(c, is_selected(&selected, col), palette);
             let (x, y) = layout.origin(col as u32, u32::from(row));
             frame.fill_rect(x, y, cell.width, cell.height, bg);
         }
@@ -274,6 +300,39 @@ mod tests {
             cell_colors(&cell, &palette),
             (palette.background, palette.foreground)
         );
+    }
+
+    #[test]
+    fn selected_cells_swap_colors_unless_the_palette_has_selection_colors() {
+        let mut palette = Palette::default();
+        let cell = Cell::default();
+        let (fg, bg) = (palette.foreground, palette.background);
+        assert_eq!(shown_colors(&cell, false, &palette), (fg, bg));
+        assert_eq!(shown_colors(&cell, true, &palette), (bg, fg));
+        palette.selection_background = Some(rgb(1, 1, 1));
+        assert_eq!(shown_colors(&cell, true, &palette), (fg, rgb(1, 1, 1)));
+        palette.selection_foreground = Some(rgb(2, 2, 2));
+        assert_eq!(
+            shown_colors(&cell, true, &palette),
+            (rgb(2, 2, 2), rgb(1, 1, 1))
+        );
+        palette.selection_background = None;
+        assert_eq!(shown_colors(&cell, true, &palette), (rgb(2, 2, 2), fg));
+    }
+
+    #[test]
+    fn selected_cells_paint_their_selection_background() {
+        let palette = Palette::default();
+        let mut term = term(3, 1, b"abc");
+        term.start_selection(
+            nxg_core::selection::SelectionKind::Simple,
+            term.point_at(1, 0),
+        );
+        let mut pixels = vec![0; 6 * 2];
+        let mut frame = Frame::new(&mut pixels, 6, 2).unwrap();
+        paint_backgrounds(&term, &mut frame, FLUSH, &palette);
+        let (b, f) = (palette.background, palette.foreground);
+        assert_eq!(pixels[..6], [b, b, f, f, b, b]);
     }
 
     #[test]

@@ -19,6 +19,8 @@ pub struct Modes {
     /// 1007: on the alternate screen the wheel sends arrow keys. On by
     /// default, so pagers scroll without opting in; apps can turn it off.
     pub alternate_scroll: bool,
+    /// 2004: pasted text is wrapped in `ESC [ 200 ~` ... `ESC [ 201 ~`.
+    pub bracketed_paste: bool,
 }
 
 impl Default for Modes {
@@ -29,6 +31,7 @@ impl Default for Modes {
             mouse_tracking: MouseTracking::Off,
             mouse_encoding: MouseEncoding::X10,
             alternate_scroll: true,
+            bracketed_paste: false,
         }
     }
 }
@@ -75,6 +78,7 @@ impl Terminal {
             mouse_tracking: self.state.mouse.tracking,
             mouse_encoding: self.state.mouse.encoding(),
             alternate_scroll: self.state.mouse.alternate_scroll,
+            bracketed_paste: self.state.bracketed_paste,
         }
     }
 }
@@ -122,6 +126,7 @@ impl State {
             1006 => self.mouse.sgr = on,
             1007 => self.mouse.alternate_scroll = on,
             1015 => self.mouse.urxvt = on,
+            2004 => self.bracketed_paste = on,
             _ => {}
         }
     }
@@ -381,6 +386,7 @@ mod tests {
                 mouse_tracking: MouseTracking::Off,
                 mouse_encoding: MouseEncoding::X10,
                 alternate_scroll: true,
+                bracketed_paste: false,
             }
         );
         assert_eq!(t.modes(), Modes::default());
@@ -490,6 +496,19 @@ mod tests {
         t.advance(b"\x1b[?1049h\x1b[?1000;1006h\x1b[?1049l");
         assert_eq!(t.modes().mouse_tracking, MouseTracking::Click);
         assert_eq!(t.modes().mouse_encoding, MouseEncoding::Sgr);
+    }
+
+    #[test]
+    fn bracketed_paste_follows_set_and_reset_and_is_global() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?2004h");
+        assert!(t.modes().bracketed_paste);
+        t.advance(b"\x1b[?1049h");
+        assert!(t.modes().bracketed_paste, "kept on the alternate screen");
+        t.advance(b"\x1b[?2004l\x1b[?1049l");
+        assert!(!t.modes().bracketed_paste);
+        t.advance(b"\x1b[?2004h\x1bc");
+        assert!(!t.modes().bracketed_paste, "RIS turns it off");
     }
 
     #[test]

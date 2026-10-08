@@ -17,6 +17,10 @@ pub struct Palette {
     pub background: Rgb,
     pub cursor: Rgb,
     pub ansi: [Rgb; 16],
+    /// Colors of selected cells; each one left unset follows the cell's
+    /// own colors swapped (inverse video).
+    pub selection_foreground: Option<Rgb>,
+    pub selection_background: Option<Rgb>,
 }
 
 impl Default for Palette {
@@ -44,6 +48,8 @@ impl Default for Palette {
                 rgb(0x00, 0xff, 0xff),
                 rgb(0xff, 0xff, 0xff),
             ],
+            selection_foreground: None,
+            selection_background: None,
         }
     }
 }

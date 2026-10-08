@@ -75,6 +75,9 @@ theme = "nxg-dark"
 #   "#15161e", "#f7768e", "#9ece6a", "#e0af68", "#7aa2f7", "#bb9af7", "#7dcfff", "#a9b1d6",
 #   "#414868", "#f7768e", "#9ece6a", "#e0af68", "#7aa2f7", "#bb9af7", "#7dcfff", "#c0caf5",
 # ]
+# Selected text. Unset, selected cells are drawn with their colors swapped.
+# selection_foreground = "#c0caf5"
+# selection_background = "#33467c"
 
 [shell]
 # Program to run instead of the platform default ($SHELL on Unix; PowerShell 7,
@@ -90,6 +93,15 @@ backend = "auto"
 # Lines kept after they scroll off the top of the screen; 0 disables it.
 lines = 10000
 
+[selection]
+# Select with the left button: drag for characters, double-click for a word,
+# triple-click for a line, Alt+drag for a block. While a program uses the
+# mouse, hold Shift to select. Middle-click pastes the PRIMARY selection
+# (Linux).
+# Copy selected text to the PRIMARY selection right away (Linux X11 and
+# Wayland; ignored on other systems).
+copy_on_select = true
+
 [keybindings]
 # Shortcuts handled by the terminal instead of being sent to the shell, as
 # "chord" = "action". Entries are added to the defaults below; map a default
@@ -102,11 +114,13 @@ lines = 10000
 #
 # Actions: zoom_in, zoom_out, reset_zoom, scroll_page_up, scroll_page_down,
 # scroll_to_top, scroll_to_bottom, new_tab, close_tab, next_tab, previous_tab,
-# goto_tab_1 to goto_tab_9, command_palette, reload_config (unbound by
-# default), none. Scrolling keys reach the application on the alternate
-# screen (full-screen programs).
+# goto_tab_1 to goto_tab_9, command_palette, copy, paste, select_all (unbound
+# by default), reload_config (unbound by default), none. Scrolling keys reach
+# the application on the alternate screen (full-screen programs). Copy does
+# nothing without a selection; ctrl+c stays an interrupt for the shell.
 #
-# The defaults (on macOS the zoom chords use cmd instead of ctrl):
+# The defaults (on macOS the zoom chords use cmd instead of ctrl, and copy
+# and paste are cmd+c and cmd+v):
 # "ctrl+equal" = "zoom_in"
 # "ctrl+plus" = "zoom_in"
 # "ctrl+minus" = "zoom_out"
@@ -129,6 +143,9 @@ lines = 10000
 # "alt+8" = "goto_tab_8"
 # "alt+9" = "goto_tab_9"
 # "ctrl+shift+p" = "command_palette"
+# "ctrl+shift+c" = "copy"
+# "ctrl+shift+v" = "paste"
+# "shift+insert" = "paste"
 #
 # Examples:
 # "ctrl+shift+r" = "reload_config"
@@ -145,6 +162,7 @@ pub struct Config {
     pub shell: ShellConfig,
     pub renderer: RendererConfig,
     pub scrollback: ScrollbackConfig,
+    pub selection: SelectionConfig,
     pub keybindings: KeybindingsConfig,
 }
 
@@ -207,6 +225,8 @@ pub struct ColorsConfig {
     pub background: Option<Rgb>,
     pub cursor: Option<Rgb>,
     pub ansi: Option<[Rgb; 16]>,
+    pub selection_foreground: Option<Rgb>,
+    pub selection_background: Option<Rgb>,
 }
 
 impl ColorsConfig {
@@ -218,6 +238,8 @@ impl ColorsConfig {
             background: self.background.unwrap_or(theme.background),
             cursor: self.cursor.unwrap_or(theme.cursor),
             ansi: self.ansi.unwrap_or(theme.ansi),
+            selection_foreground: self.selection_foreground.or(theme.selection_foreground),
+            selection_background: self.selection_background.or(theme.selection_background),
         }
     }
 }
@@ -251,6 +273,23 @@ pub struct ScrollbackConfig {
 impl Default for ScrollbackConfig {
     fn default() -> Self {
         Self { lines: 10_000 }
+    }
+}
+
+/// `[selection]`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SelectionConfig {
+    /// Copy selected text to the PRIMARY selection as soon as it is made
+    /// (Linux X11 and Wayland; ignored elsewhere).
+    pub copy_on_select: bool,
+}
+
+impl Default for SelectionConfig {
+    fn default() -> Self {
+        Self {
+            copy_on_select: true,
+        }
     }
 }
 
@@ -461,9 +500,9 @@ mod tests {
 
     #[test]
     fn keybinding_errors_carry_path_and_reason() {
-        let error = parse_error("[keybindings]\n\"ctrl+t\" = \"copy\"\n");
+        let error = parse_error("[keybindings]\n\"ctrl+t\" = \"cut\"\n");
         assert!(error.contains("/cfg/nxgterm.toml"), "{error}");
-        assert!(error.contains("unknown action `copy`"), "{error}");
+        assert!(error.contains("unknown action `cut`"), "{error}");
         let error = parse_error("[keybindings]\n\"ctrl+bogus\" = \"new_tab\"\n");
         assert!(error.contains("unknown key `bogus`"), "{error}");
     }
@@ -499,6 +538,8 @@ mod tests {
         assert_eq!(config.renderer.backend, Backend::Auto);
         assert_eq!(config.scrollback.lines, 10_000);
         assert_eq!(config.window.tab_bar, TabBar::Auto);
+        assert!(config.selection.copy_on_select);
+        assert_eq!(config.colors.resolve().selection_background, None);
     }
 
     #[test]
@@ -553,6 +594,8 @@ mod tests {
             backend = "cpu"
             [scrollback]
             lines = 0
+            [selection]
+            copy_on_select = false
             "##,
         )
         .unwrap();
@@ -569,6 +612,7 @@ mod tests {
         assert_eq!(config.shell.args, ["-NoLogo"]);
         assert_eq!(config.renderer.backend, Backend::Cpu);
         assert_eq!(config.scrollback.lines, 0);
+        assert!(!config.selection.copy_on_select);
     }
 
     #[test]
@@ -625,6 +669,19 @@ mod tests {
         assert_eq!(colors.cursor, Rgb::new(255, 255, 255));
         assert_eq!(colors.ansi[0], Rgb::hex(0));
         assert_eq!(colors.ansi[15], Rgb::hex(0x0f));
+    }
+
+    #[test]
+    fn selection_colors_are_unset_unless_configured() {
+        let colors = parse("[colors]\nselection_background = \"#334455\"")
+            .unwrap()
+            .colors
+            .resolve();
+        assert_eq!(colors.selection_background, Some(Rgb::hex(0x334455)));
+        assert_eq!(colors.selection_foreground, None);
+        for theme in THEMES {
+            assert_eq!(theme.colors.selection_background, None, "{}", theme.name);
+        }
     }
 
     #[test]

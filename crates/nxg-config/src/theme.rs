@@ -15,6 +15,9 @@ pub struct Colors {
     pub background: Rgb,
     pub cursor: Rgb,
     pub ansi: [Rgb; 16],
+    /// Selected text; `None` swaps the colors of selected cells.
+    pub selection_foreground: Option<Rgb>,
+    pub selection_background: Option<Rgb>,
 }
 
 /// A named built-in theme.
@@ -42,6 +45,8 @@ const fn theme(name: &'static str, fg: u32, bg: u32, cursor: u32, ansi: [u32; 16
             background: Rgb::hex(bg),
             cursor: Rgb::hex(cursor),
             ansi: colors,
+            selection_foreground: None,
+            selection_background: None,
         },
     }
 }

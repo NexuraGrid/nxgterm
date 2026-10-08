@@ -69,11 +69,13 @@ impl CpuRenderer {
         paint::paint_cursor(term, frame, layout, palette);
         let cursor = term.display_cursor();
         for row in 0..term.size().rows() {
+            let selected = term.selected_cols(row);
             for (col, c) in term.display_row(row).iter().enumerate() {
                 if c.ch == ' ' {
                     continue;
                 }
-                let (mut fg, bg) = paint::cell_colors(c, &self.style.palette);
+                let selected = paint::is_selected(&selected, col);
+                let (mut fg, bg) = paint::shown_colors(c, selected, &self.style.palette);
                 if cursor.visible && (cursor.col as usize, cursor.row) == (col, row) {
                     fg = bg;
                 }

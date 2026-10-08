@@ -17,6 +17,8 @@ pub fn palette(colors: &Colors) -> Palette {
         background: pixel(colors.background),
         cursor: pixel(colors.cursor),
         ansi: colors.ansi.map(pixel),
+        selection_foreground: colors.selection_foreground.map(pixel),
+        selection_background: colors.selection_background.map(pixel),
     }
 }
 
