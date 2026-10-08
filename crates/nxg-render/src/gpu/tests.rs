@@ -5,6 +5,8 @@
 //! with a message, when no adapter or no system font is available, so it
 //! stays green on CI machines without graphics.
 
+use std::sync::Arc;
+
 use nxg_core::{TermSize, Terminal};
 
 use super::device::Gpu;
@@ -14,6 +16,7 @@ use crate::frame::Frame;
 use crate::images::tests::encode_base64;
 use crate::palette::{Palette, rgb};
 use crate::renderer::CpuRenderer;
+use crate::shape::{Mask, Segment, Shape};
 use crate::style::{Overlay, Style};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -32,33 +35,37 @@ fn headless_gpu() -> Option<Gpu> {
 
 /// Renders `term` offscreen and reads it back as 0RGB pixels.
 fn render_offscreen(gpu: &Gpu, painter: &mut Painter, term: &Terminal, w: u32, h: u32) -> Vec<u32> {
-    render_offscreen_with(gpu, painter, None, term, None, w, h)
+    render_offscreen_with(gpu, painter, None, term, None, &[], w, h)
 }
 
-/// [`render_offscreen`] with `header` rows above the grid and `overlay`
-/// over it.
+/// [`render_offscreen`] with `header` rows above the grid, `overlay` over
+/// it and `shapes` over everything.
+#[allow(clippy::too_many_arguments)]
 fn render_offscreen_with(
     gpu: &Gpu,
     painter: &mut Painter,
     header: Option<&Terminal>,
     term: &Terminal,
     overlay: Option<Overlay<'_>>,
+    shapes: &[Shape],
     w: u32,
     h: u32,
 ) -> Vec<u32> {
-    render_rgba(gpu, painter, header, term, overlay, w, h)
+    render_rgba(gpu, painter, header, term, overlay, shapes, w, h)
         .into_iter()
         .map(|[r, g, b, _]| rgb(r, g, b))
         .collect()
 }
 
 /// [`render_offscreen_with`], keeping the alpha: RGBA pixels.
+#[allow(clippy::too_many_arguments)]
 fn render_rgba(
     gpu: &Gpu,
     painter: &mut Painter,
     header: Option<&Terminal>,
     term: &Terminal,
     overlay: Option<Overlay<'_>>,
+    shapes: &[Shape],
     w: u32,
     h: u32,
 ) -> Vec<[u8; 4]> {
@@ -77,7 +84,7 @@ fn render_rgba(
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    painter.render(gpu, &view, w, h, header, term, overlay);
+    painter.render(gpu, &view, w, h, header, term, overlay, shapes);
 
     let row = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -184,20 +191,48 @@ fn gpu_output_matches_cpu_renderer() {
     // A margin right and below the padded grid checks the clear color too.
     let (w, h) = cpu.layout().below(1).window_size(term.size());
     let (w, h) = (w + 3, h + 2);
+    // Shapes (like the window buttons) check that both draw rectangles
+    // and anti-aliased masks the same way, over everything.
+    let cross = [
+        Segment {
+            from: (1.5, 1.5),
+            to: (10.5, 10.5),
+        },
+        Segment {
+            from: (10.5, 1.5),
+            to: (1.5, 10.5),
+        },
+    ];
+    let shapes = [
+        Shape::Rect {
+            x: w as i32 - 14,
+            y: -2,
+            width: 20,
+            height: 16,
+            color: rgb(196, 43, 28),
+        },
+        Shape::Mask {
+            x: w as i32 - 13,
+            y: 1,
+            mask: Arc::new(Mask::stroke(12, 12, &cross, 1.5)),
+            color: rgb(255, 255, 255),
+        },
+    ];
 
     let mut expected = vec![0; (w * h) as usize];
     cpu.render_layers(
         header,
         &term,
         overlay,
+        &shapes,
         &mut Frame::new(&mut expected, w, h).unwrap(),
     );
 
     let mut painter = Painter::new(&gpu, FORMAT, style(gpu_font));
     assert_eq!(painter.cell_size(), cell);
-    let actual = render_offscreen_with(&gpu, &mut painter, header, &term, overlay, w, h);
+    let actual = render_offscreen_with(&gpu, &mut painter, header, &term, overlay, &shapes, w, h);
     // Draw twice to exercise cached atlas slots and buffer reuse.
-    let again = render_offscreen_with(&gpu, &mut painter, header, &term, overlay, w, h);
+    let again = render_offscreen_with(&gpu, &mut painter, header, &term, overlay, &shapes, w, h);
     assert_eq!(actual, again);
     assert_eq!(gpu.failure(), None);
 
@@ -337,7 +372,7 @@ fn translucent_targets_get_a_premultiplied_default_background_only() {
     let red = [(red >> 16) as u8, (red >> 8) as u8, red as u8, 255];
 
     painter.set_translucent(true);
-    let pixels = render_rgba(&gpu, &mut painter, Some(&header), &term, None, w, h);
+    let pixels = render_rgba(&gpu, &mut painter, Some(&header), &term, None, &[], w, h);
     let half = [0x20, 0x40, 0x60, 0x80];
     let close = |a: [u8; 4], b: [u8; 4]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 1);
     assert!(
@@ -357,7 +392,7 @@ fn translucent_targets_get_a_premultiplied_default_background_only() {
     );
 
     painter.set_translucent(false);
-    let opaque = render_rgba(&gpu, &mut painter, Some(&header), &term, None, w, h);
+    let opaque = render_rgba(&gpu, &mut painter, Some(&header), &term, None, &[], w, h);
     assert_eq!(at(&opaque, 0, 0), [0x40, 0x80, 0xc0, 255], "opaque surface");
     assert_eq!(gpu.failure(), None);
 }

@@ -17,7 +17,7 @@ use nxg_core::selection::{Point, SelectionKind};
 use nxg_core::{CellPixels, TermSize, Terminal, WinSize};
 use nxg_pty::ShellCommand;
 use nxg_render::{
-    CellSize, CpuWindowRenderer, FontError, FontFaces, GpuRenderer, Layout, Overlay, Style,
+    CellSize, CpuWindowRenderer, FontError, FontFaces, GpuRenderer, Layout, Overlay, Shape, Style,
     WindowRenderer,
 };
 use winit::application::ApplicationHandler;
@@ -1237,7 +1237,7 @@ impl Session {
         });
         match self
             .renderer
-            .draw_layers(bar.as_ref(), &tab.terminal, overlay)
+            .draw_layers(bar.as_ref(), &tab.terminal, overlay, &[])
         {
             Ok(()) => {
                 self.skipped_frames = 0;
@@ -1554,6 +1554,7 @@ impl WindowRenderer for Detached {
         _header: Option<&Terminal>,
         terminal: &Terminal,
         _overlay: Option<Overlay<'_>>,
+        _shapes: &[Shape],
     ) -> Result<(), RenderError> {
         self.draw(terminal)
     }

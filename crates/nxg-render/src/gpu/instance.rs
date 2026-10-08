@@ -4,6 +4,7 @@ use nxg_core::{Flags, Terminal};
 
 use crate::paint::{self, Layout};
 use crate::palette::{Palette, Rgb};
+use crate::shape::{Mask, Shape};
 
 /// Instance kind: a quad filled with `color`.
 pub const KIND_SOLID: u32 = 0;
@@ -136,6 +137,50 @@ where
         instances,
         backgrounds,
     })
+}
+
+/// The quads of `shapes`, in order: rectangles are solid quads, masks are
+/// colored by their coverage at the atlas slot `mask` returns (`None` for
+/// masks without ink), like glyphs. Mirrors [`crate::shape::paint`].
+pub fn shapes<F>(shapes: &[Shape], mut mask: F) -> Result<Vec<Instance>, AtlasFull>
+where
+    F: FnMut(&Mask) -> Result<Option<GlyphSlot>, AtlasFull>,
+{
+    let mut instances = Vec::with_capacity(shapes.len());
+    for shape in shapes {
+        match shape {
+            &Shape::Rect {
+                x,
+                y,
+                width,
+                height,
+                color,
+            } => instances.push(Instance {
+                pos: [x, y],
+                size: [width, height],
+                uv: [0, 0],
+                color,
+                kind: KIND_SOLID,
+            }),
+            Shape::Mask {
+                x,
+                y,
+                mask: m,
+                color,
+            } => {
+                if let Some(slot) = mask(m)? {
+                    instances.push(Instance {
+                        pos: [*x, *y],
+                        size: [slot.width, slot.height],
+                        uv: slot.uv,
+                        color: *color,
+                        kind: KIND_GLYPH,
+                    });
+                }
+            }
+        }
+    }
+    Ok(instances)
 }
 
 /// Whether a cell showing the background `bg` gets its own quad. Cells
@@ -403,6 +448,64 @@ mod tests {
         let quads = build(&term, &palette, FLUSH, BASELINE, false, slot).unwrap();
         assert_eq!(quads.backgrounds, 2);
         assert_eq!(quads.instances[2], solid(20, 0, palette.cursor));
+    }
+
+    #[test]
+    fn shapes_become_solid_and_masked_quads_in_order() {
+        use std::sync::Arc;
+        let mask = Arc::new(Mask::new(3, 2, vec![255; 6]));
+        let blank = Arc::new(Mask::new(1, 1, vec![0]));
+        let list = [
+            Shape::Rect {
+                x: -2,
+                y: 1,
+                width: 4,
+                height: 5,
+                color: rgb(1, 2, 3),
+            },
+            Shape::Mask {
+                x: 7,
+                y: 8,
+                mask: mask.clone(),
+                color: rgb(4, 5, 6),
+            },
+            Shape::Mask {
+                x: 0,
+                y: 0,
+                mask: blank,
+                color: rgb(4, 5, 6),
+            },
+        ];
+        let slot = |m: &Mask| {
+            Ok((m.coverage().iter().any(|&a| a > 0)).then_some(GlyphSlot {
+                xmin: 0,
+                ymin: 0,
+                width: m.width(),
+                height: m.height(),
+                uv: [11, 12],
+            }))
+        };
+        let instances = shapes(&list, slot).unwrap();
+        assert_eq!(
+            instances,
+            [
+                Instance {
+                    pos: [-2, 1],
+                    size: [4, 5],
+                    uv: [0, 0],
+                    color: rgb(1, 2, 3),
+                    kind: KIND_SOLID,
+                },
+                Instance {
+                    pos: [7, 8],
+                    size: [3, 2],
+                    uv: [11, 12],
+                    color: rgb(4, 5, 6),
+                    kind: KIND_GLYPH,
+                },
+            ]
+        );
+        assert_eq!(shapes(&list, |_| Err(AtlasFull)), Err(AtlasFull));
     }
 
     #[test]
