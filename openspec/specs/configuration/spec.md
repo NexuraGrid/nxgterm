@@ -60,6 +60,8 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | `window.padding` | u16 logical pixels | `8` |
 | `window.columns`, `window.rows` | non-zero u16 initial cells | `100`, `30` |
 | `window.tab_bar` | `auto` (two or more tabs), `always`, `never` | `auto` |
+| `window.opacity` | integer or float opacity of the default background, clamped to 0.0-1.0; `nan`/`inf` are errors | `1.0` |
+| `window.blur` | bool; ask the system to blur behind a translucent background | `false` |
 | `colors.theme` | built-in theme name, case-insensitive | `catppuccin-mocha` |
 | `colors.foreground`/`background`/`cursor` | `#rrggbb` or `#rgb` | from theme |
 | `colors.ansi` | exactly 16 colors (normal 0-7, bright 8-15) | from theme |
@@ -126,12 +128,16 @@ running settings MUST stay unchanged.
 The parent directory of the config file MUST be watched (so editors that
 save by rename are handled), events for other files, reads and access-time
 updates MUST be ignored, and bursts MUST be debounced to one reload after
-200 ms of quiet. Font family, fallback families, font size, colors, padding and
-`window.tab_bar` MUST apply immediately (restyle and refit the grid); `scrollback.lines` MUST apply
+200 ms of quiet. Font family, fallback families, font size, colors, padding,
+`window.tab_bar` and `window.opacity` (on a window created transparent) MUST
+apply immediately (restyle and refit the grid); `window.blur` MUST be asked of
+the system again; `scrollback.lines` MUST apply
 immediately, dropping the oldest lines beyond a lower limit; `[keybindings]`
 MUST apply to the next key press. Changes to `[shell]`,
 `[renderer]` and `window.columns`/`rows` MUST be reported as
-`nxgterm: <section> changes apply on restart`. A deleted file MUST reload as
+`nxgterm: <section> changes apply on restart`; an opacity below 1.0 on a
+window created opaque MUST be reported as
+`nxgterm: window opacity changes apply on restart`. A deleted file MUST reload as
 the defaults. A failure to start watching MUST only disable live reload.
 
 #### Scenario: Color change applies live
@@ -143,6 +149,39 @@ the defaults. A failure to start watching MUST only disable live reload.
 - GIVEN a running terminal
 - WHEN `[shell] program` changes
 - THEN stderr shows `nxgterm: shell changes apply on restart` and the shell keeps running
+
+### Requirement: Window opacity
+
+With `window.opacity` below 1.0 at start, the window MUST be created
+transparent; at 1.0 it MUST NOT be, and drawing MUST stay as without the
+option. Only the default background MUST take the opacity: the padding and
+the grid cells whose background is the palette background. Text, the
+cursor, other cell backgrounds, the selection, the tab bar, the command
+palette and images MUST stay opaque. The GPU renderer MUST write
+premultiplied colors and ask for a premultiplied (else post-multiplied)
+surface alpha mode; when the surface offers neither (DX12 window handles
+and OpenGL in wgpu 26), or the renderer is the CPU one (softbuffer has no
+alpha), the background MUST stay opaque and stderr MUST show
+`nxgterm: the <renderer> renderer cannot draw a translucent window here; the background stays opaque`.
+The CPU renderer MUST set the alpha byte of a transparent window's pixels so
+it never shows through. `window.blur` MUST ask for a blurred backdrop only on
+a transparent window: winit's blur on macOS and on Wayland with KDE's blur
+protocol, the Acrylic system backdrop on Windows 11.
+
+#### Scenario: Translucent background on Wayland
+- GIVEN `[window] opacity = 0.85` and the GPU renderer on Vulkan
+- WHEN nxgterm starts
+- THEN default-background cells and the padding are 85% opaque and colored cells are opaque
+
+#### Scenario: Surface without alpha
+- GIVEN `[window] opacity = 0.85` and the DX12 backend on Windows
+- WHEN nxgterm starts
+- THEN stderr reports that the gpu renderer cannot draw a translucent window and the window is opaque
+
+#### Scenario: Opacity lowered while running
+- GIVEN a terminal started with `opacity = 1.0`
+- WHEN `opacity = 0.9` is saved
+- THEN stderr shows `nxgterm: window opacity changes apply on restart` and the window stays opaque
 
 ### Requirement: Display scale
 
