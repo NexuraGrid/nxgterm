@@ -56,9 +56,8 @@ pub struct Quads {
 
 /// Builds the quads for one frame, in draw order: cell backgrounds, the
 /// cursor, then glyphs, offset by the layout's padding. Mirrors [`crate::CpuRenderer::render`] pixel for
-/// pixel; the default background comes from the clear color instead,
-/// unless `opaque` (an overlay, drawn over other quads) asks for a quad
-/// behind every cell.
+/// pixel; the default background comes from the clear color instead (see
+/// [`background_quad`]).
 ///
 /// `glyph` returns the atlas slot for `(char, bold)`, `None` for glyphs
 /// without ink, or [`AtlasFull`].
@@ -94,7 +93,7 @@ where
         let selected = term.selected_cols(row);
         for (col, c) in term.display_row(row).iter().enumerate() {
             let (_, bg) = paint::shown_colors(c, paint::is_selected(&selected, col), palette);
-            if opaque || bg != palette.background {
+            if background_quad(bg, palette, opaque) {
                 instances.push(solid(cell_pos(col, row), bg));
             }
         }
@@ -137,6 +136,16 @@ where
         instances,
         backgrounds,
     })
+}
+
+/// Whether a cell showing the background `bg` gets its own quad. Cells
+/// with the default background are left to the clear color, which carries
+/// the window's background opacity, unless `opaque` asks for a quad behind
+/// every cell: an overlay drawn over other quads, or the tab bar of a
+/// translucent window. Other backgrounds (colored cells, the selection)
+/// are always opaque quads.
+pub fn background_quad(bg: Rgb, palette: &Palette, opaque: bool) -> bool {
+    opaque || bg != palette.background
 }
 
 /// Serializes instances in native byte order for the vertex buffer.
@@ -260,6 +269,18 @@ mod tests {
                 solid(10, 0, palette.background)
             ]
         );
+    }
+
+    #[test]
+    fn only_default_backgrounds_are_left_to_the_clear_color() {
+        let palette = Palette {
+            selection_background: Some(rgb(9, 9, 9)),
+            ..Palette::default()
+        };
+        assert!(!background_quad(palette.background, &palette, false));
+        assert!(background_quad(palette.background, &palette, true));
+        assert!(background_quad(palette.ansi[1], &palette, false));
+        assert!(background_quad(rgb(9, 9, 9), &palette, false), "selection");
     }
 
     #[test]

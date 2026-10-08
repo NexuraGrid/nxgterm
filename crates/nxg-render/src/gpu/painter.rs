@@ -29,6 +29,9 @@ pub struct Painter {
     textures: ImageTextures,
     style: Style,
     srgb: bool,
+    /// The target is composited with what is behind the window, so the
+    /// default background is drawn at the style's opacity.
+    translucent: bool,
 }
 
 /// Image draws of one layer, ready to issue: texture key and the index of
@@ -133,7 +136,19 @@ impl Painter {
             textures: ImageTextures::default(),
             style,
             srgb: format.is_srgb(),
+            translucent: false,
         }
+    }
+
+    /// Draws the default background at the style's opacity (`true`, for
+    /// targets the system blends with what is behind them) or opaque.
+    pub fn set_translucent(&mut self, translucent: bool) {
+        self.translucent = translucent;
+    }
+
+    /// Alpha of the default background in the next frames.
+    fn background_alpha(&self) -> f32 {
+        format::background_alpha(self.translucent, self.style.background_opacity)
     }
 
     /// Image textures currently cached.
@@ -221,6 +236,7 @@ impl Painter {
                         load: wgpu::LoadOp::Clear(format::clear_color(
                             self.style.palette.background,
                             self.srgb,
+                            self.background_alpha(),
                         )),
                         store: wgpu::StoreOp::Store,
                     },
@@ -308,9 +324,10 @@ impl Painter {
     }
 
     /// Builds the frame's instances: those of `term`, then those of
-    /// `header`, then those of `overlay`. When the atlas fills up it is
-    /// reset and the frame rebuilt once, dropping glyphs that still do not
-    /// fit.
+    /// `header`, then those of `overlay`. The overlay, and the header of a
+    /// translucent window, get opaque default backgrounds. When the atlas
+    /// fills up it is reset and the frame rebuilt once, dropping glyphs
+    /// that still do not fit.
     fn build(
         &mut self,
         queue: &wgpu::Queue,
@@ -322,12 +339,20 @@ impl Painter {
         let rows = header.map_or(0, |header| header.size().rows());
         let grid = layout.below(rows);
         let baseline = self.style.font.baseline();
+        let opaque_header = self.background_alpha() < 1.0;
         let (atlas, font, palette) = (&mut self.atlas, &mut self.style.font, &self.style.palette);
         let all = |glyph: &mut dyn FnMut(char, bool) -> Result<Option<GlyphSlot>, AtlasFull>| {
             let mut quads = instance::build(term, palette, grid, baseline, false, &mut *glyph)?;
             let term_quads = quads.instances.len();
             if let Some(header) = header {
-                let extra = instance::build(header, palette, layout, baseline, false, &mut *glyph)?;
+                let extra = instance::build(
+                    header,
+                    palette,
+                    layout,
+                    baseline,
+                    opaque_header,
+                    &mut *glyph,
+                )?;
                 quads.instances.extend(extra.instances);
             }
             if let Some(Overlay { terminal, col, row }) = overlay {

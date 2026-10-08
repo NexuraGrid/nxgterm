@@ -1195,6 +1195,7 @@ fn build_style(
         font: faces.font(appearance::font_px(font_size, scale))?,
         palette: appearance::palette(&config.colors.resolve()),
         padding: appearance::padding_px(config.window.padding, scale),
+        background_opacity: 1.0,
     })
 }
 
@@ -1253,7 +1254,7 @@ fn cpu_renderer(
     window: Arc<Window>,
     style: Style,
 ) -> Result<Box<dyn WindowRenderer>, Box<dyn Error>> {
-    Ok(Box::new(CpuWindowRenderer::new(window, style)?))
+    Ok(Box::new(CpuWindowRenderer::new(window, style, false)?))
 }
 
 /// Placeholder that holds no surface, used only while swapping renderers.
@@ -1277,6 +1278,10 @@ impl Renderer for Detached {
 
 impl WindowRenderer for Detached {
     fn set_style(&mut self, _style: Style) {}
+
+    fn translucent(&self) -> bool {
+        false
+    }
 
     fn draw_layers(
         &mut self,

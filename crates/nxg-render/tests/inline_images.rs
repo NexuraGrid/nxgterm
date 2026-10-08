@@ -84,6 +84,7 @@ fn renderer() -> Option<CpuRenderer> {
         font,
         palette: Palette::default(),
         padding: 2,
+        background_opacity: 1.0,
     }))
 }
 

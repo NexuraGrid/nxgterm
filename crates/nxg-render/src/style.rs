@@ -14,6 +14,11 @@ pub struct Style {
     pub palette: Palette,
     /// Pixels between the window edge and the grid.
     pub padding: u32,
+    /// Opacity (0.0-1.0) of the default background: the padding and the
+    /// grid cells that show [`Palette::background`]. Everything else stays
+    /// opaque. Only renderers whose surface supports it honor it (see
+    /// [`WindowRenderer::translucent`]); the others draw it opaque.
+    pub background_opacity: f32,
 }
 
 impl Style {
@@ -42,6 +47,9 @@ pub struct Overlay<'a> {
 pub trait WindowRenderer: Renderer {
     /// Replaces the font, colors and padding; takes effect on the next draw.
     fn set_style(&mut self, style: Style);
+    /// Whether [`Style::background_opacity`] below 1.0 shows: the surface
+    /// lets the system blend the window with what is behind it.
+    fn translucent(&self) -> bool;
     /// Draws and presents one frame with the rows of `header` (such as the
     /// tab bar) at the top of the grid area, `terminal` below them, at
     /// [`Layout::below`] the header's rows, and `overlay` on top of it all.
