@@ -429,9 +429,10 @@ mod tests {
     #[test]
     fn errors_in_a_theme_file_name_it() {
         let dir = scratch("theme-error");
-        let file = write(&dir, "themes/broken.toml", "foreground = \"blue\"\n");
+        write(&dir, "themes/broken.toml", "foreground = \"blue\"\n");
         let error = load_main(&dir, "[colors]\ntheme = \"broken\"\n").unwrap_err();
         let text = error.to_string();
+        let file = dir.join("themes").join("broken.toml");
         assert!(text.contains(&file.display().to_string()), "{text}");
         assert!(text.contains("invalid color `blue`"), "{text}");
         std::fs::remove_dir_all(&dir).unwrap();
