@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           nxgterm
-Version:        0.3.0
+Version:        0.4.0
 Release:        1%{?dist}
 Summary:        Fast, configurable, cross-platform terminal emulator
 
@@ -79,6 +79,10 @@ cargo test --release --locked --workspace
 %{_datadir}/%{name}/
 
 %changelog
+* Thu Oct 08 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.4.0-1
+- Windows: bundle Microsoft's ConPTY so inline images work, and point
+  Yazi at Git's file.exe in the tools profile
+
 * Wed Oct 07 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.3.0-1
 - Text selection with the mouse, copy and paste through the system
   clipboard, bracketed paste, fix for a segfault on exit
