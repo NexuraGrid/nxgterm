@@ -14,7 +14,8 @@ backend is used, which by default only happens on Windows without ConPTY
 `ADVAPI32`, `USER32`, `SHELL32`), so no Visual C++ runtime is needed.
 
 winpty is MIT-licensed; see `LICENSE` in this directory (copied from the
-upstream repository).
+upstream repository). The Windows zip and MSI ship it as `LICENSE-winpty`
+beside `nxgterm.exe`, which embeds these binaries.
 
 SHA-256:
 

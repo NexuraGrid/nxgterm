@@ -132,6 +132,8 @@ jobs:
           Copy-Item target\conpty\conpty.dll "stage\$name\"
           Copy-Item target\conpty\x64\OpenConsole.exe "stage\$name\x64\"
           Copy-Item packaging\windows\conpty\LICENSE "stage\$name\LICENSE-conpty"
+          # winpty is embedded in nxgterm.exe; its MIT notice must ship with it.
+          Copy-Item crates\nxg-pty\winpty\LICENSE "stage\$name\LICENSE-winpty"
           Copy-Item profile\install.ps1, profile\install.sh "stage\$name\profile\"
           Compress-Archive -Path "stage\$name" -DestinationPath "dist\$name.zip"
       - name: Ensure WiX Toolset 3
@@ -157,7 +159,7 @@ jobs:
           $zip = [IO.Compression.ZipFile]::OpenRead("dist\$name.zip")
           $entries = $zip.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
           $zip.Dispose()
-          foreach ($file in 'nxgterm.exe', 'conpty.dll', 'x64/OpenConsole.exe', 'LICENSE-conpty') {
+          foreach ($file in 'nxgterm.exe', 'conpty.dll', 'x64/OpenConsole.exe', 'LICENSE-conpty', 'LICENSE-winpty') {
             if ($entries -notcontains "$name/$file") { throw "$name.zip is missing $file" }
           }
           Get-ChildItem dist

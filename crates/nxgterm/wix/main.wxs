@@ -90,6 +90,10 @@
             <Component Id='ConPtyLicense' Guid='*' Win64='$(var.Win64)'>
                 <File Id='ConPtyLicenseFile' Name='LICENSE-conpty' DiskId='1' Source='$(var.RepoDir)\packaging\windows\conpty\LICENSE' KeyPath='yes'/>
             </Component>
+            <!-- winpty is embedded in nxgterm.exe; its MIT notice ships beside it. -->
+            <Component Id='WinptyLicense' Guid='*' Win64='$(var.Win64)'>
+                <File Id='WinptyLicenseFile' Name='LICENSE-winpty' DiskId='1' Source='$(var.RepoDir)\crates\nxg-pty\winpty\LICENSE' KeyPath='yes'/>
+            </Component>
             <Component Id='Path' Guid='D4FB9BF7-DB32-4C98-9D24-CE795E05FC9C' Win64='$(var.Win64)' KeyPath='yes'>
                 <Environment
                     Id='PATH'
@@ -157,6 +161,7 @@
             <ComponentRef Id='ConPtyDll'/>
             <ComponentRef Id='ConPtyHost'/>
             <ComponentRef Id='ConPtyLicense'/>
+            <ComponentRef Id='WinptyLicense'/>
             <ComponentRef Id='ProfilePs1'/>
             <ComponentRef Id='ProfileSh'/>
 
