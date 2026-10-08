@@ -73,8 +73,8 @@ impl Painter {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("quad"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let attributes = wgpu::vertex_attr_array![
             0 => Sint32x2,
@@ -90,11 +90,11 @@ impl Painter {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[wgpu::VertexBufferLayout {
+                buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: INSTANCE_SIZE as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &attributes,
-                }],
+                })],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -112,7 +112,7 @@ impl Painter {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         let image_pipeline = image_pipeline(device, &pipeline_layout, format);
@@ -244,6 +244,7 @@ impl Painter {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             let quads = |pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>| {
                 if !range.is_empty() {
@@ -403,11 +404,11 @@ fn image_pipeline(
             module: &shader,
             entry_point: Some("vs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[wgpu::VertexBufferLayout {
+            buffers: &[Some(wgpu::VertexBufferLayout {
                 array_stride: IMAGE_INSTANCE_SIZE as u64,
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &attributes,
-            }],
+            })],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
@@ -425,7 +426,7 @@ fn image_pipeline(
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }

@@ -17,8 +17,8 @@ Source0:        %{url}/releases/download/v%{version}/%{name}-%{version}-source.t
 
 ExclusiveArch:  x86_64 aarch64
 
-BuildRequires:  cargo >= 1.85
-BuildRequires:  rust >= 1.85
+BuildRequires:  cargo >= 1.87
+BuildRequires:  rust >= 1.87
 BuildRequires:  gcc
 BuildRequires:  desktop-file-utils
 BuildRequires:  libappstream-glib

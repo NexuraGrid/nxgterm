@@ -130,7 +130,7 @@ fn check(term: &Terminal, section: &Section) -> Result<(), String> {
     let fail = |what: String| Err(format!("[{}] {what}", section.label));
     let size = term.size();
     let cursor = term.cursor();
-    // Not `if let ... &&`: let chains need Rust 1.88 and the MSRV is 1.85.
+    // Not `if let ... &&`: let chains need Rust 1.88 and the MSRV is 1.87.
     let scalars = [
         differs("size", (size.cols(), size.rows()), section.size),
         differs("alt", term.modes().alt_screen, section.alt),

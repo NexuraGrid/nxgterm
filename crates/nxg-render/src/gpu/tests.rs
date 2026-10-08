@@ -19,7 +19,8 @@ use crate::style::{Overlay, Style};
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn headless_gpu() -> Option<Gpu> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::from_env_or_default());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     match Gpu::new(&instance, None, true) {
         Ok(gpu) => Some(gpu),
         Err(error) => {
@@ -107,9 +108,12 @@ fn render_rgba(
         result.expect("map readback buffer");
     });
     gpu.device
-        .poll(wgpu::PollType::Wait)
+        .poll(wgpu::PollType::wait_indefinitely())
         .expect("wait for the GPU");
-    let data = buffer.slice(..).get_mapped_range();
+    let data = buffer
+        .slice(..)
+        .get_mapped_range()
+        .expect("read the mapped buffer");
     let mut pixels = Vec::with_capacity((w * h) as usize);
     for y in 0..h {
         let start = (y * row) as usize;

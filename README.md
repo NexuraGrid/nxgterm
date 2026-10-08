@@ -27,7 +27,7 @@ The macOS app is universal (Apple silicon and Intel) but not notarized yet.
 If macOS says it cannot be opened, run
 `xattr -dr com.apple.quarantine /Applications/nxgterm.app` once.
 
-From source (Rust 1.85 or newer):
+From source (Rust 1.87 or newer):
 
 ```sh
 cargo install --locked --git https://github.com/NexuraGrid/nxgterm nxgterm
@@ -233,9 +233,10 @@ Alacritty and WezTerm: the padding and cells with the theme background let
 the desktop show through, while text, the cursor, colored cells, the
 selection, the tab bar, the command palette and images stay opaque. It needs
 the GPU renderer and a surface that can blend: it works on macOS, on Wayland
-and on X11 with a compositor (Vulkan). On Windows (DX12/OpenGL surfaces), with
-the OpenGL backend and with the CPU renderer the background stays opaque and
-a line on stderr says so. `blur = true` blurs what is behind the window on
+and on X11 with a compositor (Vulkan), and on Windows with the DX12 backend
+(the default there), which then presents through DirectComposition. With the
+OpenGL backend, usually with Vulkan on Windows, and with the CPU renderer the
+background stays opaque and a line on stderr says so. `blur = true` blurs what is behind the window on
 macOS, KDE Plasma (Wayland) and Windows 11 (Acrylic).
 
 The file is reloaded when saved. Font, colors, padding, the tab bar, opacity,

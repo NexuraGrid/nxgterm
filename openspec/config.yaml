@@ -2,10 +2,10 @@ schema: spec-driven
 
 context: |
   Project: nxgterm, a fast, configurable, cross-platform terminal emulator (v0.1.0).
-  Tech stack: Rust 2024 edition, MSRV 1.85 (workspace rust-version), Cargo workspace with
+  Tech stack: Rust 2024 edition, MSRV 1.87 (workspace rust-version), Cargo workspace with
     resolver 3. Key crates: vte 0.15 (VT parsing), portable-pty 0.9 (Unix pty / ConPTY),
-    windows-sys 0.61 (winpty FFI), wgpu 26 (pinned: 27+ needs Rust 1.88), softbuffer 0.4,
-    winit 0.30, fontdb 0.24 + fontdue =0.9.3 (pinned: 0.9.4 needs Rust 1.87), toml 1,
+    windows-sys 0.61 (winpty FFI), wgpu 30, softbuffer 0.4,
+    winit 0.30, fontdb 0.24 + fontdue 0.9, toml 1,
     serde 1, notify 8, png 0.18, flate2 1.
   Architecture: Hexagonal. `nxg-core` is platform-agnostic and owns the domain
     (Terminal, Grid, ImageStore, kitty/sixel decoding) and the ports
@@ -20,7 +20,7 @@ context: |
     testable everywhere; GPU and font tests skip with a message when no adapter or
     system monospace font exists.
   CI: GitHub Actions matrix ubuntu-latest / windows-latest / macos-latest
-    (fmt, clippy with -D warnings, tests), an MSRV 1.85 job, and a tools-profile job
+    (fmt, clippy with -D warnings, tests), an MSRV 1.87 job, and a tools-profile job
     (shellcheck, PSScriptAnalyzer, dry runs on sh, pwsh and Windows PowerShell 5.1).
     Release workflow builds deb/rpm/tar.gz (x86_64, aarch64), msi/zip (x86_64),
     universal dmg/tar.gz, source tarball and SHA256SUMS.
@@ -38,7 +38,7 @@ rules:
     - Include sequence diagrams for complex flows
     - Document architecture decisions with rationale
     - Keep nxg-core free of OS, window and GPU APIs; new platform needs go behind a port
-    - Any new dependency MUST build on Rust 1.85 (check its rust-version and transitive MSRV)
+    - Any new dependency MUST build on Rust 1.87 (check its rust-version and transitive MSRV)
   tasks:
     - Group by phase, use hierarchical numbering
     - Keep tasks completable in one session
@@ -52,11 +52,11 @@ rules:
     test_command: "cargo test --workspace"
   verify:
     test_command: "cargo test --workspace"
-    build_command: "cargo +1.85 check --workspace --all-targets"
+    build_command: "cargo +1.87 check --workspace --all-targets"
     lint_commands:
       - "cargo fmt --all --check"
       - "RUSTFLAGS=\"-D warnings\" cargo clippy --workspace --all-targets"
-      - "cargo +1.85 check --workspace --all-targets"
+      - "cargo +1.87 check --workspace --all-targets"
     coverage_threshold: 0
   archive:
     - Warn before merging destructive deltas
