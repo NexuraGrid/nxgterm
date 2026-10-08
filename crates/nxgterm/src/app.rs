@@ -147,7 +147,9 @@ impl App {
 
     fn start(&self, event_loop: &ActiveEventLoop) -> Result<Session, Box<dyn Error>> {
         let config = &self.config;
-        let attributes = Window::default_attributes().with_title("nxgterm");
+        let attributes = Window::default_attributes()
+            .with_title("nxgterm")
+            .with_theme(Some(appearance::window_theme(&config.colors.resolve())));
         let window = Arc::new(event_loop.create_window(attributes)?);
         let scale = window.scale_factor();
         let faces = load_faces(&config.font)?;
@@ -504,6 +506,10 @@ impl App {
             if changes.restyle {
                 session.tab_bar = new.window.tab_bar;
                 session.restyle(&new);
+            }
+            if self.config.colors != new.colors {
+                let theme = appearance::window_theme(&new.colors.resolve());
+                session.window.set_theme(Some(theme));
             }
             if changes.scrollback {
                 for tab in session.tabs.iter_mut() {

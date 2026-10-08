@@ -90,8 +90,11 @@ Mocha palette with selection on surface2), `nxg-dark` (original xterm
 colors), `nxg-light`, `tokyo-night`, `gruvbox-dark`, `dracula`, `nord` and
 `one-dark`. A theme MAY define selection colors; the others swap the colors
 of selected cells. Explicit `foreground`, `background`, `cursor`, `ansi` and
-selection values MUST override the theme individually. ANSI colors 16-255
-SHALL follow the xterm cube and grayscale ramp regardless of theme.
+selection values MUST override the theme individually. The window
+SHOULD ask the system for a dark title bar when the effective background is
+dark (white contrasts with it more than black) and a light one otherwise,
+again whenever the colors are reloaded. ANSI colors 16-255 SHALL follow the
+xterm cube and grayscale ramp regardless of theme.
 
 #### Scenario: Partial override
 - GIVEN `theme = "nord"` and `foreground = "#010203"`

@@ -4,6 +4,7 @@
 use nxg_config::{Colors, Rgb, clamp_font_size};
 use nxg_render::Palette;
 use nxg_render::palette::rgb;
+use winit::window::Theme;
 
 use crate::bindings::Action;
 
@@ -19,6 +20,15 @@ pub fn palette(colors: &Colors) -> Palette {
         ansi: colors.ansi.map(pixel),
         selection_foreground: colors.selection_foreground.map(pixel),
         selection_background: colors.selection_background.map(pixel),
+    }
+}
+
+/// The title bar theme to ask the system for: dark over a dark background.
+pub fn window_theme(colors: &Colors) -> Theme {
+    if colors.background.is_dark() {
+        Theme::Dark
+    } else {
+        Theme::Light
     }
 }
 
@@ -89,6 +99,17 @@ mod tests {
         assert_eq!(palette.cursor, rgb(0xc0, 0xca, 0xf5));
         assert_eq!(palette.ansi[1], rgb(0xf7, 0x76, 0x8e));
         assert_eq!(palette.ansi[15], rgb(0xc0, 0xca, 0xf5));
+    }
+
+    #[test]
+    fn title_bar_follows_the_background() {
+        let theme = |name: &str| THEMES.iter().find(|t| t.name == name).unwrap().colors;
+        assert_eq!(window_theme(&theme("catppuccin-mocha")), Theme::Dark);
+        assert_eq!(window_theme(&theme("nxg-dark")), Theme::Dark);
+        assert_eq!(window_theme(&theme("nxg-light")), Theme::Light);
+        let mut colors = theme("nxg-light");
+        colors.background = Rgb::hex(0x202020);
+        assert_eq!(window_theme(&colors), Theme::Dark, "background override");
     }
 
     #[test]

@@ -22,6 +22,26 @@ impl Rgb {
     pub const fn hex(value: u32) -> Self {
         Self::new((value >> 16) as u8, (value >> 8) as u8, value as u8)
     }
+
+    /// WCAG relative luminance: 0.0 for black to 1.0 for white.
+    pub fn luminance(self) -> f64 {
+        let linear = |channel: u8| {
+            let c = f64::from(channel) / 255.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(self.r) + 0.7152 * linear(self.g) + 0.0722 * linear(self.b)
+    }
+
+    /// Whether white contrasts more with this color than black does, as
+    /// with a dark background.
+    pub fn is_dark(self) -> bool {
+        let l = self.luminance();
+        1.05 / (l + 0.05) > (l + 0.05) / 0.05
+    }
 }
 
 /// Why a string is not a color.
@@ -123,5 +143,22 @@ mod tests {
         assert_eq!(color, Rgb::new(0x0a, 0xb0, 0xc0));
         assert_eq!(color.to_string(), "#0ab0c0");
         assert_eq!(color.to_string().parse(), Ok(color));
+    }
+
+    #[test]
+    fn luminance_spans_black_to_white() {
+        assert_eq!(Rgb::hex(0x000000).luminance(), 0.0);
+        assert!((Rgb::hex(0xffffff).luminance() - 1.0).abs() < 1e-9);
+        assert!(Rgb::hex(0x00ff00).luminance() > Rgb::hex(0xff0000).luminance());
+    }
+
+    #[test]
+    fn tells_dark_backgrounds_from_light_ones() {
+        for dark in [0x000000, 0x1e1e2e, 0x101010, 0x282828, 0x2e3440, 0x0000ee] {
+            assert!(Rgb::hex(dark).is_dark(), "{dark:06x}");
+        }
+        for light in [0xffffff, 0xfafafa, 0xeff1f5, 0x808080, 0xffff00] {
+            assert!(!Rgb::hex(light).is_dark(), "{light:06x}");
+        }
     }
 }
