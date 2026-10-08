@@ -528,6 +528,18 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
+    /// Tears the window down while the event loop still owns the display
+    /// connection. `run_app` consumes the event loop, so anything left in
+    /// `self` outlives the Wayland display: wgpu's EGL then marshals on a
+    /// dead `wl_display` and the process segfaults on exit.
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(mut session) = self.session.take() {
+            // The surface goes before the window it presents to.
+            drop(std::mem::replace(&mut session.renderer, Box::new(Detached)));
+            drop(session);
+        }
+    }
+
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::Output(id, bytes) => {
