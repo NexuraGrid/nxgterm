@@ -347,6 +347,8 @@ winpty (Windows Server 2016) does not pass images through either.
    icons, configurable key bindings, tabs, command palette ✅
 9. 0.3.0: text selection, copy and paste, bracketed paste ✅
 10. 0.4.0: inline images on Windows through a bundled ConPTY ✅
+11. 0.5.0: Catppuccin Mocha default theme, title bar matching the theme,
+    window icon ✅
 
 Planned work is tracked in
 [`openspec/RECOMMENDATIONS.md`](openspec/RECOMMENDATIONS.md).
