@@ -328,6 +328,12 @@ window (`TIOCGWINSZ`, `CSI 14/16/18 t`). Decoded images are capped at
 6. winpty fallback for Windows Server 2016 ✅
 7. Packages (AUR, deb, rpm, winget, Homebrew) and the tools profile
    (Yazi, zoxide, ngmux, Bruno CLI, curl) ✅
+8. 0.2.0: scrollback, mouse wheel and mouse reporting, font fallback for
+   icons, configurable key bindings, tabs, command palette ✅
+9. 0.3.0: text selection, copy and paste, bracketed paste ✅
+
+Planned work is tracked in
+[`openspec/RECOMMENDATIONS.md`](openspec/RECOMMENDATIONS.md).
 
 ## Development
 
