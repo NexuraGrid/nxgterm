@@ -4,7 +4,7 @@
 
 An optional installer, separate from the terminal binary, that sets up a
 terminal workflow: Yazi, zoxide, ngmux, Bruno CLI (`bru`) and curl, plus
-shell integration. `profile/install.sh` targets Linux and macOS (POSIX sh);
+shell integration and Yazi's Catppuccin Mocha flavor. `profile/install.sh` targets Linux and macOS (POSIX sh);
 `profile/install.ps1` targets Windows PowerShell 5.1 and PowerShell 7. Both
 ship in every package and can be run from their raw GitHub URL.
 
@@ -39,8 +39,10 @@ Both scripts MUST support, with equivalent semantics:
 | `--uninstall-shell-init` | `-UninstallShellInit` | remove the managed block and exit |
 | `-h`, `--help` / `--version` | `-Help` / `-Version` | print and exit |
 
-Tool names SHALL be `curl`, `zoxide`, `yazi`, `ngmux`, `bruno`, with `bru`
-accepted as an alias of `bruno`. An unknown tool or option MUST abort with a
+Tool names SHALL be `curl`, `zoxide`, `yazi`, `yazi-theme`, `ngmux`,
+`bruno`, with `bru` accepted as an alias of `bruno`. `yazi-theme` MUST be
+selected whenever `yazi` is, unless it is skipped; naming it in the only-list
+selects it on its own. An unknown tool or option MUST abort with a
 non-zero exit before any change.
 
 #### Scenario: Unknown tool
@@ -50,7 +52,8 @@ non-zero exit before any change.
 
 ### Requirement: Tool sources
 
-Tools MUST be installed in this order: curl, zoxide, yazi, ngmux, bruno.
+Tools MUST be installed in this order: curl, zoxide, yazi, yazi-theme,
+ngmux, bruno.
 
 | Tool | Arch | Debian/Ubuntu | Fedora | macOS | Windows |
 |---|---|---|---|---|---|
@@ -89,6 +92,35 @@ hint when no package manager is available or the user declines.
 - WHEN `install.ps1 -Only yazi` runs
 - THEN `YAZI_FILE_ONE` is set to `C:\Program Files\Git\usr\bin\file.exe`
   for the user and the summary lists `file` as installed
+
+### Requirement: Yazi Catppuccin Mocha flavor
+
+`yazi-theme` MUST install the official `catppuccin-mocha` flavor from
+`yazi-rs/flavors` without git: its `flavor.toml`, `tmtheme.xml`, `LICENSE`
+and `LICENSE-tmtheme` MUST be downloaded from a pinned commit and each
+checked against a SHA-256 kept in the script before anything is written to
+`<config>/flavors/catppuccin-mocha.yazi`, where `<config>` is Yazi's config
+directory (`YAZI_CONFIG_HOME` when absolute; else `$XDG_CONFIG_HOME/yazi` or
+`~/.config/yazi` on Unix and `%AppData%\yazi\config` on Windows). A flavor
+directory that already has `flavor.toml` MUST be left untouched. Only when
+`<config>/theme.toml` does not exist MUST it be created with
+`[flavor]` / `dark = "catppuccin-mocha"`; an existing one MUST NOT be
+modified: it is reported `already present` when it names
+`"catppuccin-mocha"` and otherwise `skipped` with a hint showing the two
+lines to add. A failed or mismatched download MUST mark `yazi-theme` failed
+and leave `theme.toml` alone. In dry-run nothing is downloaded or written.
+
+#### Scenario: Existing Yazi theme
+- GIVEN a `theme.toml` with the user's own styles
+- WHEN `install.sh --only yazi` runs
+- THEN the flavor is installed, `theme.toml` is unchanged, and the summary
+  shows `yazi-theme` as `skipped` with `[flavor] dark = "catppuccin-mocha"`
+
+#### Scenario: No Yazi configuration yet
+- GIVEN no Yazi config directory
+- WHEN `install.ps1 -Only yazi` runs
+- THEN `%AppData%\yazi\config\theme.toml` enables `catppuccin-mocha` and a
+  second run reports `yazi-theme` as `already present`
 
 ### Requirement: Checksum verification
 

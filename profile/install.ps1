@@ -5,7 +5,9 @@ nxgterm tools profile for Windows: installs Yazi, zoxide, ngmux, Bruno CLI (bru)
 .DESCRIPTION
 Uses winget, or scoop when winget is unavailable. zoxide and Yazi fall back to
 their official GitHub release zips (SHA-256 verified) when neither exists, e.g.
-on Windows Server 2016. Optional and idempotent: installed tools are skipped.
+on Windows Server 2016. Gives Yazi the Catppuccin Mocha flavor (nxgterm's
+default theme) without touching an existing theme.toml. Optional and
+idempotent: installed tools are skipped.
 Works on Windows PowerShell 5.1 and PowerShell 7.
 
   irm https://raw.githubusercontent.com/NexuraGrid/nxgterm/main/profile/install.ps1 | iex
@@ -16,7 +18,8 @@ Print what would be done; change nothing.
 .PARAMETER Yes
 Do not ask; answer yes (Node.js, Git, installers).
 .PARAMETER Only
-Only these tools (comma separated or an array): curl, zoxide, yazi, ngmux, bruno (alias bru).
+Only these tools (comma separated or an array): curl, zoxide, yazi, yazi-theme, ngmux, bruno (alias bru).
+yazi-theme is selected whenever yazi is, unless skipped.
 .PARAMETER Skip
 Skip these tools.
 .PARAMETER NoShellInit
@@ -51,9 +54,21 @@ $nxgExitCode = & {
     $ErrorActionPreference = 'Stop'
 
     $ProfileVersion = '0.1.0'
-    $AllTools = @('curl', 'zoxide', 'yazi', 'ngmux', 'bruno')
+    $AllTools = @('curl', 'zoxide', 'yazi', 'yazi-theme', 'ngmux', 'bruno')
     $NgmuxInstallerUrl = 'https://raw.githubusercontent.com/NexuraGrid/ng_mux/main/install.ps1'
     $BrunoNpmPackage = '@usebruno/cli'
+    # The official Catppuccin Mocha flavor (MIT), pinned to a commit of
+    # yazi-rs/flavors; every file is checked against its SHA-256. A plain
+    # download, so neither git nor `ya pkg` is needed.
+    $FlavorName = 'catppuccin-mocha'
+    $FlavorCommit = '1183892c904f7f0efdf4473e856ed308b7bea98d'
+    $FlavorBaseUrl = "https://raw.githubusercontent.com/yazi-rs/flavors/$FlavorCommit/$FlavorName.yazi"
+    $FlavorFiles = [ordered]@{
+        'flavor.toml'     = 'd4417565d5a15110e66369c88385f7176586b03b3dbb396a383c768cc767a80e'
+        'tmtheme.xml'     = '395566f08ceb301b936b91c077690ef94f7aeb651b121553f201c99c2bd4aa77'
+        'LICENSE'         = '06a2b04a7ed4f030a87d10b884fc1a2215c5e91b371f69dfe173448e834f3752'
+        'LICENSE-tmtheme' = '814096d2c34cc216c624738a49356f32b7237733b4f7edb0685f4e50ef5074ba'
+    }
     $MarkBegin = '# >>> nxgterm profile >>>'
     $MarkEnd = '# <<< nxgterm profile <<<'
     # A custom NXGTERM_PROFILE_BIN_DIR is left off PATH (the user manages it).
@@ -98,7 +113,11 @@ Usage: install.ps1 [-DryRun] [-Yes] [-Only <list>] [-Skip <list>]
   -NoShellInit         Do not touch the PowerShell profiles
   -UninstallShellInit  Remove the nxgterm block from the PowerShell profiles
 
-Tools: curl, zoxide, yazi, ngmux, bruno (alias: bru).
+Tools: curl, zoxide, yazi, yazi-theme, ngmux, bruno (alias: bru).
+yazi-theme installs Yazi's Catppuccin Mocha flavor and, only when no
+theme.toml exists, creates one that enables it. It is selected whenever yazi
+is (skip it with -Skip yazi-theme). Yazi's config directory is
+%AppData%\yazi\config, or YAZI_CONFIG_HOME.
 With irm | iex, pass options through a scriptblock:
   & ([scriptblock]::Create((irm <url>/install.ps1))) -Yes -Skip bruno
 '@ | Write-Host
@@ -123,7 +142,13 @@ With irm | iex, pass options through a scriptblock:
         return , $out
     }
 
+    # yazi-theme follows yazi unless it is named in -Only/-Skip.
     function Test-Selected([string]$Tool) {
+        if ($Tool -eq 'yazi-theme') {
+            if ($State.SkipList -contains $Tool) { return $false }
+            if ($State.OnlyList -contains $Tool) { return $true }
+            return (Test-Selected 'yazi')
+        }
         if ($State.OnlyList.Count -gt 0 -and $State.OnlyList -notcontains $Tool) { return $false }
         return ($State.SkipList -notcontains $Tool)
     }
@@ -421,6 +446,89 @@ With irm | iex, pass options through a scriptblock:
         Add-Result 'file' 'installed' "YAZI_FILE_ONE=$file (open a new terminal)"
     }
 
+    # Where Yazi reads its configuration (as Yazi resolves it).
+    function Get-YaziConfigDir {
+        if ($env:YAZI_CONFIG_HOME -and [IO.Path]::IsPathRooted($env:YAZI_CONFIG_HOME)) { return $env:YAZI_CONFIG_HOME }
+        return (Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'yazi\config')
+    }
+
+    # Downloads the pinned flavor files, verifies each SHA-256 and only then
+    # copies them into $Dest.
+    function Install-YaziFlavor([string]$Dest) {
+        if ($DryRun) {
+            Write-Step "[dry-run] download $FlavorName.yazi (yazi-rs/flavors@$($FlavorCommit.Substring(0, 7))), verify its SHA-256 sums, install it into $Dest"
+            return
+        }
+        Enable-Tls12
+        $dir = Join-Path (Get-WorkDir) 'flavor'
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        Write-Step "+ download $FlavorBaseUrl/"
+        foreach ($name in $FlavorFiles.Keys) {
+            $file = Join-Path $dir $name
+            Invoke-WebRequest -Uri "$FlavorBaseUrl/$name" -OutFile $file -UseBasicParsing
+            $got = (Get-FileHash -Algorithm SHA256 -Path $file).Hash.ToLowerInvariant()
+            $want = $FlavorFiles[$name]
+            if ($got -ne $want) { throw "checksum mismatch for $name (expected $want, got $got)" }
+        }
+        Write-Step "  sha256 ok: $(@($FlavorFiles.Keys) -join ', ')"
+        New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+        foreach ($name in $FlavorFiles.Keys) {
+            Copy-Item -Force -Path (Join-Path $dir $name) -Destination (Join-Path $Dest $name)
+        }
+        Write-Step "  installed $Dest"
+    }
+
+    # The Catppuccin Mocha flavor, plus a theme.toml that enables it only when
+    # the user has none (an existing one is never changed).
+    function Install-YaziTheme {
+        $conf = Get-YaziConfigDir
+        $flavorDir = Join-Path $conf "flavors\$FlavorName.yazi"
+        $theme = Join-Path $conf 'theme.toml'
+        $didFlavor = $false
+        if (Test-Path -LiteralPath (Join-Path $flavorDir 'flavor.toml')) {
+            Write-Step "  flavor already present: $flavorDir"
+        } else {
+            try {
+                Install-YaziFlavor $flavorDir
+                $didFlavor = $true
+            } catch {
+                Write-Warn $_.Exception.Message
+                Add-Result 'yazi-theme' 'failed' "could not install the $FlavorName flavor"
+                return
+            }
+        }
+        if (Test-Path -LiteralPath $theme) {
+            if (Select-String -LiteralPath $theme -SimpleMatch -Pattern "`"$FlavorName`"" -Quiet) {
+                $status = 'already present'
+                if ($didFlavor) { $status = Get-DoneStatus }
+                Add-Result 'yazi-theme' $status "$theme uses $FlavorName"
+                return
+            }
+            Write-Step "  $theme exists; left untouched. To use the flavor, add:"
+            Write-Step '    [flavor]'
+            Write-Step "    dark = `"$FlavorName`""
+            Add-Result 'yazi-theme' 'skipped' "$theme exists; add: [flavor] dark = `"$FlavorName`""
+            return
+        }
+        if ($DryRun) {
+            Write-Step "[dry-run] would create $theme with [flavor] dark = `"$FlavorName`""
+            Add-Result 'yazi-theme' 'would install' "$FlavorName flavor + $theme"
+            return
+        }
+        $text = "# Added by the nxgterm tools profile: Catppuccin Mocha, like nxgterm.`n[flavor]`ndark = `"$FlavorName`"`n"
+        $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($text)
+        try {
+            # CreateNew: never overwrite a theme.toml that appeared meanwhile.
+            $stream = [IO.File]::Open($theme, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+            try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+            Write-Step "  created $theme"
+            Add-Result 'yazi-theme' 'installed' "$FlavorName flavor + $theme"
+        } catch {
+            Write-Warn $_.Exception.Message
+            Add-Result 'yazi-theme' 'failed' "could not create $theme"
+        }
+    }
+
     function Test-NgmuxInstalled {
         if (Test-Command 'ngmux.exe') { return $true }
         $candidates = @(
@@ -627,9 +735,9 @@ With irm | iex, pass options through a scriptblock:
     function Show-Summary {
         Write-Step ''
         Write-Step 'Summary'
-        Write-Step ('{0,-8} {1,-16} {2}' -f 'TOOL', 'STATUS', 'DETAIL')
+        Write-Step ('{0,-11} {1,-16} {2}' -f 'TOOL', 'STATUS', 'DETAIL')
         foreach ($row in $State.Results) {
-            Write-Step ('{0,-8} {1,-16} {2}' -f $row.Tool, $row.Status, $row.Detail)
+            Write-Step ('{0,-11} {1,-16} {2}' -f $row.Tool, $row.Status, $row.Detail)
         }
     }
 
@@ -666,6 +774,7 @@ With irm | iex, pass options through a scriptblock:
                     'curl' { Install-Curl }
                     'zoxide' { Install-Zoxide }
                     'yazi' { Install-Yazi }
+                    'yazi-theme' { Install-YaziTheme }
                     'ngmux' { Install-Ngmux }
                     'bruno' { Install-Bruno }
                 }
