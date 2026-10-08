@@ -32,7 +32,7 @@ Each item is meant to become its own OpenSpec change
 | 18 | P2 | Cursor styles (DECSCUSR) and focus events | terminal-core, rendering |
 | 19 | P2 | Glyph atlas growth | rendering |
 | 20 | P2 | terminfo entry | pty, packaging |
-| 21 | P2 | wgpu upgrade path once the MSRV can move | rendering |
+| 21 | P2 | ~~wgpu upgrade path once the MSRV can move~~ Done: wgpu 30, MSRV 1.87 | rendering |
 | 22 | P2 | Dedupe `miniz_oxide` and drop the unused workspace dependency | (build) |
 | 23 | P2 | ~~Tabs~~ native in 0.2.0; splits vs ngmux still open | (product) |
 | 24 | P2 | Configuration documentation and small CLI gaps | configuration |
@@ -266,6 +266,9 @@ packages (`/usr/share/terminfo/n/nxgterm`), and switch `TERM` only when the
 entry is installed (fall back otherwise, important for SSH).
 
 ### 21. wgpu upgrade path
+
+**Status: Done** (wgpu 30, MSRV 1.87, `fontdue` unpinned; translucent
+windows on DX12 through DirectComposition).
 
 wgpu is pinned to 26 because 27+ needs Rust 1.88. Decide an MSRV policy
 (e.g. "stable minus 6 releases"), then bump MSRV, wgpu and `fontdue`

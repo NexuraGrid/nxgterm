@@ -159,9 +159,14 @@ the grid cells whose background is the palette background. Text, the
 cursor, other cell backgrounds, the selection, the tab bar, the command
 palette and images MUST stay opaque. The GPU renderer MUST write
 premultiplied colors and ask for a premultiplied (else post-multiplied)
-surface alpha mode; when the surface offers neither (DX12 window handles
-and OpenGL in wgpu 26), or the renderer is the CPU one (softbuffer has no
-alpha), the background MUST stay opaque and stderr MUST show
+surface alpha mode. On Windows the DX12 backend MUST present a window that
+starts translucent through a DirectComposition visual (wgpu's
+`DxgiFromVisual` swapchain, which offers premultiplied alpha), keep the
+window-handle swapchain for opaque windows, and show a translucent window
+only after its first frame is drawn (the visual is white until then). When
+the surface offers no blending mode (OpenGL, most Vulkan drivers on
+Windows), or the renderer is the CPU one (softbuffer has no alpha), the
+background MUST stay opaque and stderr MUST show
 `nxgterm: the <renderer> renderer cannot draw a translucent window here; the background stays opaque`.
 The CPU renderer MUST set the alpha byte of a transparent window's pixels so
 it never shows through. `window.blur` MUST ask for a blurred backdrop only on
@@ -173,8 +178,13 @@ protocol, the Acrylic system backdrop on Windows 11.
 - WHEN nxgterm starts
 - THEN default-background cells and the padding are 85% opaque and colored cells are opaque
 
+#### Scenario: Translucent background on Windows
+- GIVEN `[window] opacity = 0.85` and the GPU renderer on DX12
+- WHEN nxgterm starts
+- THEN the surface presents through DirectComposition, the window appears after its first frame and default-background cells are 85% opaque
+
 #### Scenario: Surface without alpha
-- GIVEN `[window] opacity = 0.85` and the DX12 backend on Windows
+- GIVEN `[window] opacity = 0.85` and the OpenGL backend (`WGPU_BACKEND=gl`)
 - WHEN nxgterm starts
 - THEN stderr reports that the gpu renderer cannot draw a translucent window and the window is opaque
 
