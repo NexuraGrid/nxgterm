@@ -32,7 +32,7 @@ use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
 use crate::mouse::{Clicks, ViewportScroll, Wheel, WheelAction};
 use crate::tabs::{TabId, Tabs};
-use crate::{appearance, bindings, choice, clipboard, keys, mouse, reload, tab_bar};
+use crate::{appearance, bindings, choice, clipboard, icon, keys, mouse, reload, tab_bar};
 
 /// Events posted to the event loop from background threads.
 #[derive(Debug)]
@@ -149,6 +149,7 @@ impl App {
         let config = &self.config;
         let attributes = Window::default_attributes()
             .with_title("nxgterm")
+            .with_window_icon(icon::window_icon())
             .with_theme(Some(appearance::window_theme(&config.colors.resolve())));
         let window = Arc::new(event_loop.create_window(attributes)?);
         let scale = window.scale_factor();

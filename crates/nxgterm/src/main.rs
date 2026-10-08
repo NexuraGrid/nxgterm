@@ -11,6 +11,7 @@ mod choice;
 mod cli;
 mod clipboard;
 mod command_palette;
+mod icon;
 mod keys;
 mod mouse;
 mod reload;
