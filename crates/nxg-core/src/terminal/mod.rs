@@ -1168,7 +1168,7 @@ mod tests {
             let bytes: Vec<u8> = (0..len)
                 .map(|_| {
                     let r = noise(&mut seed);
-                    if r % 4 == 0 {
+                    if r.is_multiple_of(4) {
                         (r >> 8) as u8
                     } else {
                         alphabet[(r >> 8) as usize % alphabet.len()]
@@ -1248,7 +1248,7 @@ mod tests {
                 t.advance(&token);
                 t.state.assert_invariants();
                 t.take_responses();
-                if r % 5 == 0 {
+                if r.is_multiple_of(5) {
                     // Down to 1x1, where a region cannot exist.
                     let size = TermSize::new(1 + (r >> 48) as u16 % 9, 1 + (r >> 52) as u16 % 6);
                     t.resize(size.unwrap());

@@ -27,7 +27,7 @@ The macOS app is universal (Apple silicon and Intel) but not notarized yet.
 If macOS says it cannot be opened, run
 `xattr -dr com.apple.quarantine /Applications/nxgterm.app` once.
 
-From source (Rust 1.85 or newer):
+From source (Rust 1.87 or newer):
 
 ```sh
 cargo install --locked --git https://github.com/NexuraGrid/nxgterm nxgterm

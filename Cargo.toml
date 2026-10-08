@@ -5,7 +5,7 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.5.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/NexuraGrid/nxgterm"
 
@@ -14,7 +14,7 @@ nxg-core = { path = "crates/nxg-core" }
 nxg-pty = { path = "crates/nxg-pty" }
 nxg-render = { path = "crates/nxg-render" }
 nxg-config = { path = "crates/nxg-config" }
-# External crates, at versions that build on the MSRV (1.85).
+# External crates, at versions that build on the MSRV (1.87).
 # Clipboard and PRIMARY selection. No image support; `wayland-data-control`
 # reaches the Wayland clipboard without a focused surface (KDE, wlroots).
 arboard = { version = "3.6", default-features = false, features = [
