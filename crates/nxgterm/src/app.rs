@@ -64,6 +64,9 @@ struct Session {
     font_size: f32,
     /// Window scale factor the style was built for.
     scale: f64,
+    /// The window was created transparent (background opacity below 1.0 at
+    /// start); X11 cannot change it later.
+    transparent: bool,
     /// Padding of the current style, in physical pixels.
     padding: u32,
     /// Every tab has its own shell; only the active one is drawn and gets
@@ -147,10 +150,19 @@ impl App {
 
     fn start(&self, event_loop: &ActiveEventLoop) -> Result<Session, Box<dyn Error>> {
         let config = &self.config;
+        let transparent = config.window.translucent();
+        let blur = appearance::blur(transparent, config.window.blur);
         let attributes = Window::default_attributes()
             .with_title("nxgterm")
             .with_window_icon(icon::window_icon())
-            .with_theme(Some(appearance::window_theme(&config.colors.resolve())));
+            .with_theme(Some(appearance::window_theme(&config.colors.resolve())))
+            .with_transparent(transparent)
+            .with_blur(blur);
+        #[cfg(windows)]
+        let attributes = {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            attributes.with_system_backdrop(appearance::backdrop(blur))
+        };
         let window = Arc::new(event_loop.create_window(attributes)?);
         let scale = window.scale_factor();
         let faces = load_faces(&config.font)?;
@@ -163,15 +175,17 @@ impl App {
         let _ = window.request_inner_size(PhysicalSize::new(width, height));
 
         let padding = style.padding;
-        let mut renderer = select_renderer(&window, &style, config.renderer.backend)?;
+        let mut renderer = select_renderer(&window, &style, config.renderer.backend, transparent)?;
         let pixels = window.inner_size();
         renderer.resize(pixels.width, pixels.height);
+        report_opacity(config, transparent, renderer.as_ref());
         let mut session = Session {
             window,
             renderer,
             faces,
             font_size: config.font.size,
             scale,
+            transparent,
             padding,
             tabs: Tabs::new(),
             tab_bar: config.window.tab_bar,
@@ -511,6 +525,13 @@ impl App {
             if self.config.colors != new.colors {
                 let theme = appearance::window_theme(&new.colors.resolve());
                 session.window.set_theme(Some(theme));
+            }
+            if self.config.window.opacity != new.window.opacity {
+                report_opacity(&new, session.transparent, session.renderer.as_ref());
+            }
+            if changes.blur {
+                let blur = appearance::blur(session.transparent, new.window.blur);
+                appearance::apply_blur(&session.window, blur);
             }
             if changes.scrollback {
                 for tab in session.tabs.iter_mut() {
@@ -1025,10 +1046,11 @@ impl Session {
         drop(std::mem::replace(&mut self.renderer, Box::new(Detached)));
         let style = self.style(config)?;
         self.padding = style.padding;
-        self.renderer = cpu_renderer(self.window.clone(), style)?;
+        self.renderer = cpu_renderer(self.window.clone(), style, self.transparent)?;
         let pixels = self.window.inner_size();
         self.renderer.resize(pixels.width, pixels.height);
         eprintln!("nxgterm: renderer cpu");
+        report_opacity(config, self.transparent, self.renderer.as_ref());
         self.sync_grid_size();
         self.window.request_redraw();
         Ok(())
@@ -1195,16 +1217,32 @@ fn build_style(
         font: faces.font(appearance::font_px(font_size, scale))?,
         palette: appearance::palette(&config.colors.resolve()),
         padding: appearance::padding_px(config.window.padding, scale),
-        background_opacity: 1.0,
+        background_opacity: config.window.opacity,
     })
+}
+
+/// Says on stderr why the configured background opacity does not show,
+/// if it does not (see [`appearance::opacity_notice`]).
+fn report_opacity(config: &Config, transparent: bool, renderer: &dyn WindowRenderer) {
+    let notice = appearance::opacity_notice(
+        config.window.opacity,
+        transparent,
+        renderer.name(),
+        renderer.translucent(),
+    );
+    if let Some(notice) = notice {
+        eprintln!("nxgterm: {notice}");
+    }
 }
 
 /// Picks the first renderer that starts, in the order given by
 /// `NXGTERM_RENDERER` or the configured backend, and logs the choice.
+/// `transparent` tells that the window was created transparent.
 fn select_renderer(
     window: &Arc<Window>,
     style: &Style,
     backend: Backend,
+    transparent: bool,
 ) -> Result<Box<dyn WindowRenderer>, Box<dyn Error>> {
     let order = choice::renderer_order(env::var(choice::ENV_VAR).ok().as_deref(), backend);
     let candidates = order
@@ -1213,7 +1251,7 @@ fn select_renderer(
             let (window, style) = (window.clone(), style.clone());
             let init: Init<'_, Box<dyn WindowRenderer>, Box<dyn Error>> = match name {
                 "gpu" => Box::new(move || gpu_renderer(window, style)),
-                _ => Box::new(move || cpu_renderer(window, style)),
+                _ => Box::new(move || cpu_renderer(window, style, transparent)),
             };
             (name, init)
         })
@@ -1253,8 +1291,13 @@ fn gpu_renderer(
 fn cpu_renderer(
     window: Arc<Window>,
     style: Style,
+    transparent: bool,
 ) -> Result<Box<dyn WindowRenderer>, Box<dyn Error>> {
-    Ok(Box::new(CpuWindowRenderer::new(window, style, false)?))
+    Ok(Box::new(CpuWindowRenderer::new(
+        window,
+        style,
+        transparent,
+    )?))
 }
 
 /// Placeholder that holds no surface, used only while swapping renderers.
