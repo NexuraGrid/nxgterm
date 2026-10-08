@@ -399,6 +399,8 @@ winpty (Windows Server 2016) does not pass images through either.
 10. 0.4.0: inline images on Windows through a bundled ConPTY ✅
 11. 0.5.0: Catppuccin Mocha default theme, title bar matching the theme,
     window icon ✅
+12. 0.6.0: integrated title bar with tabs (default), window opacity and
+    blur, Catppuccin Mocha flavor for Yazi ✅
 
 Planned work is tracked in
 [`openspec/RECOMMENDATIONS.md`](openspec/RECOMMENDATIONS.md).
