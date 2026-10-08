@@ -108,10 +108,10 @@ MUST be resized to that grid and told the cell pixel size.
 
 ### Requirement: Fonts
 
-Fonts MUST be discovered with fontdb: the configured family, then the
-generic `monospace` alias, then DejaVu Sans Mono, Cascadia Mono, Consolas,
-Menlo, SF Mono, Liberation Mono, Noto Sans Mono, Courier New. A requested
-family that is not installed MUST be reported on stderr and replaced. Glyphs
+Fonts MUST be discovered with fontdb: the first installed configured
+family (in list order), then the generic `monospace` alias, then DejaVu Sans Mono, Cascadia Mono, Consolas,
+Menlo, SF Mono, Liberation Mono, Noto Sans Mono, Courier New. Requested
+families skipped because they are not installed MUST be reported on stderr. Glyphs
 MUST be rasterized with fontdue and cached. There is no per-glyph fallback
 to other fonts for missing characters.
 
@@ -119,6 +119,12 @@ to other fonts for missing characters.
 - GIVEN `family = "Nope Mono"`
 - WHEN nxgterm starts
 - THEN stderr shows `font family `Nope Mono` not found; using `<found>``
+
+#### Scenario: First installed family of a list
+- GIVEN `family = ["Nope Mono", "Fira Code"]` and Fira Code is installed
+- WHEN nxgterm starts
+- THEN Fira Code is used
+- AND stderr shows `font family `Nope Mono` not found; using `Fira Code``
 
 ### Requirement: Transient frame errors
 

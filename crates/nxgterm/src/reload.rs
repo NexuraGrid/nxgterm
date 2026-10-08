@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn font_changes_restyle_and_say_what_to_reload() {
-        let family = with(|c| c.font.family = Some("Iosevka".into()));
+        let family = with(|c| c.font.family = vec!["Iosevka".into()]);
         assert!(family.restyle && family.font_faces && !family.font_size);
         let size = with(|c| c.font.size = 20.0);
         assert!(size.restyle && size.font_size && !size.font_faces);

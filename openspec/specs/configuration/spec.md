@@ -54,7 +54,7 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 
 | Key | Type | Default |
 |---|---|---|
-| `font.family` | string; blank = unset | system monospace |
+| `font.family` | string or list of strings, first installed one wins; blank names dropped | system monospace |
 | `font.fallback` | list of family names searched per missing glyph; blank names dropped | `[]` (built-in defaults still apply) |
 | `font.size` | integer or float points, clamped to 6-72; non-finite = 14 | `14.0` |
 | `window.padding` | u16 logical pixels | `8` |
