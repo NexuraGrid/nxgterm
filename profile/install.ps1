@@ -14,7 +14,7 @@ Works on Windows PowerShell 5.1 and PowerShell 7.
 .PARAMETER DryRun
 Print what would be done; change nothing.
 .PARAMETER Yes
-Do not ask; answer yes (Node.js, installers).
+Do not ask; answer yes (Node.js, Git, installers).
 .PARAMETER Only
 Only these tools (comma separated or an array): curl, zoxide, yazi, ngmux, bruno (alias bru).
 .PARAMETER Skip
@@ -72,6 +72,7 @@ $nxgExitCode = & {
         zoxide = @{ winget = 'ajeetdsouza.zoxide'; scoop = 'zoxide' }
         yazi   = @{ winget = 'sxyazi.yazi'; scoop = 'yazi' }
         node   = @{ winget = 'OpenJS.NodeJS.LTS'; scoop = 'nodejs-lts' }
+        git    = @{ winget = 'Git.Git'; scoop = 'git' }
     }
 
     $State = @{
@@ -91,7 +92,7 @@ Usage: install.ps1 [-DryRun] [-Yes] [-Only <list>] [-Skip <list>]
                    [-NoShellInit] [-UninstallShellInit] [-Help] [-Version]
 
   -DryRun              Print what would be done; change nothing
-  -Yes                 Do not ask; answer yes (Node.js, installers)
+  -Yes                 Do not ask; answer yes (Node.js, Git, installers)
   -Only <list>         Only these tools (comma separated)
   -Skip <list>         Skip these tools (comma separated)
   -NoShellInit         Do not touch the PowerShell profiles
@@ -341,9 +342,83 @@ With irm | iex, pass options through a scriptblock:
 
     function Install-Yazi {
         Install-WithFallback 'yazi' 'yazi.exe' 'sxyazi/yazi' 'yazi-{arch}-pc-windows-msvc.zip' @('yazi.exe', 'ya.exe')
-        if (-not (Test-Command 'git.exe')) {
-            Write-Step "  note: Yazi uses file.exe from Git for Windows to detect file types (winget install Git.Git)"
+        Register-YaziFile
+    }
+
+    # file.exe from Git for Windows. Git puts only cmd\ on PATH, not usr\bin\.
+    function Find-GitFile {
+        $roots = New-Object System.Collections.ArrayList
+        $git = Get-CommandPath 'git.exe'
+        if ($git) {
+            # <root>\cmd\git.exe, <root>\bin\git.exe or <root>\mingw64\bin\git.exe
+            $dir = Split-Path -Parent $git
+            for ($i = 0; $i -lt 3 -and $dir; $i++) {
+                $dir = Split-Path -Parent $dir
+                if ($dir) { [void]$roots.Add($dir) }
+            }
         }
+        $scoop = $env:SCOOP
+        if (-not $scoop) { $scoop = Join-Path $env:USERPROFILE 'scoop' }
+        foreach ($root in @(
+                $(if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'Git' }),
+                $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} 'Git' }),
+                (Join-Path $env:LOCALAPPDATA 'Programs\Git'),
+                (Join-Path $scoop 'apps\git\current'))) {
+            if ($root) { [void]$roots.Add($root) }
+        }
+        foreach ($root in $roots) {
+            $file = Join-Path $root 'usr\bin\file.exe'
+            if (Test-Path -LiteralPath $file) { return $file }
+        }
+        return ''
+    }
+
+    # Yazi detects file types with file(1), which Windows lacks: without it
+    # previews fail with "Cannot find `file`". Point YAZI_FILE_ONE at the one
+    # Git for Windows ships, installing Git when it is missing.
+    function Register-YaziFile {
+        if ($env:YAZI_FILE_ONE -and (Test-Path -LiteralPath $env:YAZI_FILE_ONE)) {
+            Add-Result 'file' 'already present' "YAZI_FILE_ONE=$env:YAZI_FILE_ONE"
+            return
+        }
+        if (Test-Command 'file.exe') {
+            Add-Result 'file' 'already present' (Get-CommandPath 'file.exe')
+            return
+        }
+        $file = Find-GitFile
+        if (-not $file) {
+            $manual = 'install Git for Windows (https://git-scm.com) and rerun'
+            if (-not $State.PM) {
+                Add-Result 'file' 'skipped' "Yazi previews need file.exe; $manual"
+                return
+            }
+            if (-not (Confirm-Action "Yazi needs file.exe from Git for Windows to preview files. Install Git ($($Packages.git[$State.PM])) with $($State.PM)?")) {
+                Add-Result 'file' 'skipped' "Git declined; Yazi previews need file.exe; $manual"
+                return
+            }
+            if (-not (Install-ToolPackage 'git')) {
+                Add-Result 'file' 'failed' 'could not install Git for Windows'
+                return
+            }
+            if ($DryRun) {
+                Write-Step '[dry-run] would set the user variable YAZI_FILE_ONE to Git''s usr\bin\file.exe'
+                Add-Result 'file' 'would install' 'Git for Windows, YAZI_FILE_ONE'
+                return
+            }
+            $file = Find-GitFile
+            if (-not $file) {
+                Add-Result 'file' 'failed' 'Git installed but usr\bin\file.exe was not found; set YAZI_FILE_ONE to it'
+                return
+            }
+        }
+        if ($DryRun) {
+            Write-Step "[dry-run] would set the user variable YAZI_FILE_ONE=$file"
+            Add-Result 'file' 'would install' "YAZI_FILE_ONE=$file"
+            return
+        }
+        [Environment]::SetEnvironmentVariable('YAZI_FILE_ONE', $file, 'User')
+        $env:YAZI_FILE_ONE = $file
+        Add-Result 'file' 'installed' "YAZI_FILE_ONE=$file (open a new terminal)"
     }
 
     function Test-NgmuxInstalled {

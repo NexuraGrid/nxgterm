@@ -91,6 +91,12 @@ directory when Yazi exits) and, on Linux and macOS, `~/.local/bin` on `PATH` to 
 `~/.config/fish/conf.d/nxgterm-profile.fish` and the PowerShell profiles,
 between `# >>> nxgterm profile >>>` and `# <<< nxgterm profile <<<` markers.
 
+On Windows, Yazi detects file types with `file.exe`, which Windows does not
+ship. `install.ps1` points the user variable `YAZI_FILE_ONE` at the copy in
+Git for Windows (`<Git>\usr\bin\file.exe`), installing Git first if it is
+missing. Without it, Yazi previews fail with "Cannot find `file`". Open a
+new terminal afterwards so the variable takes effect.
+
 ## Architecture
 
 Hexagonal: a platform-agnostic core defines ports, and adapters implement them per platform.

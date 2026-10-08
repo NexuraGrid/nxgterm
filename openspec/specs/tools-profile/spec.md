@@ -73,6 +73,23 @@ default directory MUST be added to the user `PATH`.
 - WHEN `install.ps1 -Yes` runs
 - THEN zoxide and Yazi are installed from verified GitHub release zips
 
+### Requirement: Yazi file type detection on Windows
+
+Yazi detects MIME types with `file`, which Windows does not ship.
+`install.ps1` MUST make it available whenever Yazi is selected, even when
+Yazi was already installed: when neither `YAZI_FILE_ONE` points to an
+existing file nor `file.exe` is on `PATH`, it MUST locate `usr\bin\file.exe`
+in a Git for Windows installation and set the user environment variable
+`YAZI_FILE_ONE` to it. When Git is missing it MUST offer to install it
+(winget `Git.Git` / scoop `git`), and report `file` as skipped with a manual
+hint when no package manager is available or the user declines.
+
+#### Scenario: Git installed, file.exe not on PATH
+- GIVEN Git for Windows in `C:\Program Files\Git` and no `YAZI_FILE_ONE`
+- WHEN `install.ps1 -Only yazi` runs
+- THEN `YAZI_FILE_ONE` is set to `C:\Program Files\Git\usr\bin\file.exe`
+  for the user and the summary lists `file` as installed
+
 ### Requirement: Checksum verification
 
 Every GitHub release asset MUST be verified against the SHA-256 digest
@@ -89,7 +106,7 @@ installing anything. Binaries MUST be installed atomically
 ### Requirement: Consent for privileged or remote actions
 
 Without `--yes`, the scripts MUST ask before using sudo (once per run),
-before installing Node.js, and before running the downloaded ngmux
+before installing Node.js or Git, and before running the downloaded ngmux
 installer (after showing its size and SHA-256). On Unix, questions MUST be
 read from `/dev/tty` so `curl ... | sh` can still ask; with no terminal the
 answer MUST be "no" with a hint to use `--yes`. In dry-run, questions are
