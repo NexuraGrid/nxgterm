@@ -152,8 +152,12 @@ impl App {
         let config = &self.config;
         let transparent = config.window.translucent();
         let blur = appearance::blur(transparent, config.window.blur);
+        // A DirectComposition swapchain (translucent DX12 windows) shows
+        // white until its first present: show the window after one frame.
+        let show_after_first_frame = cfg!(windows) && transparent;
         let attributes = Window::default_attributes()
             .with_title("nxgterm")
+            .with_visible(!show_after_first_frame)
             .with_window_icon(icon::window_icon())
             .with_theme(Some(appearance::window_theme(&config.colors.resolve())))
             .with_transparent(transparent)
@@ -199,6 +203,12 @@ impl App {
             drag: None,
         };
         session.open_tab(config, &self.proxy)?;
+        if show_after_first_frame {
+            // Hidden windows get no redraw requests, so draw here.
+            let drawn = session.redraw(config);
+            session.window.set_visible(true);
+            drawn?;
+        }
         Ok(session)
     }
 
