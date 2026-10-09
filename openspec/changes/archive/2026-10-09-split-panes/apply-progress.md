@@ -164,3 +164,52 @@ Branch `feat/split-panes-s4` (stacked on S3). Mode: Strict TDD; RED was a compil
 ### Gates (S4)
 
 - `cargo fmt --all --check`: ok; clippy `-D warnings`: clean; `cargo test --workspace`: all pass; `cargo +1.87 check --workspace --all-targets`: ok.
+
+## S5: Mouse, config, zoom/equalize/dim (done, 6/6)
+
+Branch `feat/split-panes-s5` (stacked on S4). Mode: Strict TDD; RED was a compile failure (missing `panes`, `Throttle`, `under`, `Capture`, ...) for every unit, and a forced failing run (`panes` flag hard-wired to false) for 5.2. Review budget: 1,223 changed lines (1,059 added, 164 removed, `git diff --shortstat feat/split-panes-s4 -- . ':!openspec'`), within the pre-authorized 1,300; about 60% is tests.
+
+| Task | Status | Notes |
+|------|--------|-------|
+| 5.1 | [x] | `PanesConfig { divider_color: Option<Rgb>, divider_width: NonZeroU16, inactive_dim: f32 }`, `clamp_dim`, documented `[panes]` in `DEFAULT_CONFIG_TOML`; color parser = the `[colors]` `Rgb` (`#rrggbb`/`#rgb`) |
+| 5.2 | [x] | `Changes.panes` (`old.panes != new.panes`), redraw only |
+| 5.3 | [x] | `mouse::{Capture, Drag, Pointer, divider_icon}`; `tab::{Under, under, frame, focus_pane}`; any press focuses the pane under it and is delivered to it; capture dropped on release, tab switch, close, zoom, equalize, split, focus change/resize (`panes_changed`) and window focus loss |
+| 5.4 | [x] | `tab::drag_divider` + `Throttle<T>` (`throttle.rs`, 30 ms, injected `Instant`), `Pane::{fit_at, poll_resize, flush_resize}`, `ApplicationHandler::about_to_wait` with `ControlFlow::WaitUntil`; flush on release and focus loss |
+| 5.5 | [x] | `PaneCommand::{Zoom, Equalize}` through `tab::{zoom_active, equalize_active}`; `tab::dim_of` feeds `PaneView.dim` from `[panes] inactive_dim`; `dividers::style` feeds width and colour. Panes hidden by zoom are refit by `sync_grid_size` when the layout returns |
+| 5.6 | [x] | Gates below; GUI not launched (headless run) |
+
+### TDD Cycle Evidence (S5)
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 5.1 | `nxg-config/src/lib.rs` | Unit | 88/88 | compile fail (`Config.panes`) | 92/92 | defaults, all keys, dim 2/-0.5/0/nan/inf/-inf, width 0/-1, bad color, unknown key `gap` with line, sample documents the keys | none needed |
+| 5.2 | `reload.rs` | Unit | 7/7 | flag hard-wired false: 1 failing | 8/8 | dim, width, color change; scrollback change leaves it false | none needed |
+| 5.5 dim, divider style | `tab.rs`, `dividers.rs` | Unit | 207/207 | compile fail (`dim_of`, `style`) | 210/210 | focused/unfocused/0; default vs configured colour and width | removed `DEFAULT_WIDTH` |
+| 5.5 zoom/equalize | `tab.rs` | Unit | 210/210 | compile fail (`Zoom`, `zoom_active`, `equalize_active`) | 213/213 | zoom twice restores sizes, single pane, no tab; resize then equalize, already equal | removed item-level `dead_code` allows |
+| 5.4 throttle | `throttle.rs` | Unit (fake clock) | n/a (new file) | compile fail (`Throttle`) | 6/6 | first push, coalescing + trailing edge, quiet interval, 1 s of 5 ms motion = 33-35 sends with the last value delivered, flush, clear | none needed |
+| 5.4 pane | `app.rs` | Unit (fake pty) | 6/6 | compile fail (`fit_at`, `resize`) | 8/8 | terminal at once vs pty every 30 ms; release flush; direct fit supersedes | `fit` folded into `fit_at(.., None)` |
+| 5.3, 5.4 mouse | `tab.rs`, `mouse.rs` | Unit | 213/213 | compile fail (`under`, `frame`, `focus_pane`, `drag_divider`, `Capture`, `Pointer`) | 229/229 | pane/divider/zoomed hit, click focuses once, pane-relative clamped cells, drag 2 cells right + minimum clamp + same column, stacked divider by row, capture ends per button, reset, cursor icon | none needed |
+
+### Work Unit Evidence (S5)
+
+| Evidence | Value |
+|---|---|
+| Focused test command | `cargo test --workspace` -> nxg-config 92, nxgterm 229 (plus nxg-render 124+2, others unchanged), 0 failed |
+| Runtime harness | N/A for the GUI (headless, no display): hit-testing, focus, drag, zoom, equalize, dim and the throttle are covered by pure tests on `Panes<u32>`/fake pty/fake clock; the `window_event` glue, `about_to_wait` wake-ups and the resize cursor are checked by the compiler and clippy only. Manual run (click focus, drag a divider, edit `[panes]` live) is still pending |
+| Rollback boundary | `throttle.rs`; `mouse.rs` capture types; `tab.rs` pointer/zoom helpers; the mouse arms, `Pane::fit_at` and `about_to_wait` in `app.rs`; `PanesConfig` in `nxg-config/src/lib.rs`; `Changes.panes` |
+
+### Decisions and deviations (S5)
+
+- `inactive_dim` clamps to 0.0..=1.0 as the spec says (the design table said 0.0..=0.9); `divider_width` is a `NonZeroU16` (0 is an error, the renderer clamps it to the cell) instead of a `u8`.
+- `Capture` is `Selection { pane, drag } | Report { pane, button } | Divider(path)` held in `Pointer { capture, over }` and replaces `held`, `drag` and the cached `pointer` cell; positions are stored as window pixels (`Session.cursor`) and re-hit-tested on every event.
+- Any button press (not only the left) focuses the pane under it, so a middle-click paste lands in the pane that was clicked. Wheel scrolls/reports to the pane under the pointer without focus change.
+- The unconditional reset (`Pointer::reset` in `panes_changed`, `tab_switched`, palette toggle, focus loss) implements "dropped on close, zoom, equalize, split, tab switch"; there is no separate "is my pane still alive" check.
+- Selection auto-scroll while dragging now uses the captured pane's own top and bottom edges.
+- Throttle: the first resize goes out at once, later ones inside 30 ms coalesce into one trailing send; a direct `fit` supersedes a waiting size. A waiting size is also flushed when the window loses focus.
+- Moving the pointer over the tab bar never reports to a pane (as before); a release over the bar is reported at the captured pane's nearest cell.
+- Divider width and colour come from `dividers::style`; images stay undimmed (documented limitation).
+
+### Gates (S5)
+
+- `cargo fmt --all --check`: ok; `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets`: clean; `cargo test --workspace`: all pass; `cargo +1.87 check --workspace --all-targets`: ok.
+

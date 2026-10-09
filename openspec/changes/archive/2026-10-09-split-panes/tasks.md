@@ -71,9 +71,9 @@ Decision needed: confirm Feature Branch Chain (tracker `feat/split-panes` draft/
 
 ## S5: Mouse, config, zoom/equalize/dim
 
-- [ ] 5.1 RED+GREEN: `PanesConfig` in `nxg-config/src/lib.rs` (`divider_color`, `divider_width`, `inactive_dim` clamp, nan/inf errors, unknown key names `gap`, `--print-config` parses to defaults); resolve color parser open question.
-- [ ] 5.2 RED+GREEN: `reload::Changes.panes` (`old != new`, redraw only); spec "Dim changed live".
-- [ ] 5.3 RED+GREEN: `Capture { pane, kind }` lifecycle (spec "Click focuses", "Close during drag"); dropped on release, tab switch, close, zoom, equalize, split, focus loss. `mouse.rs` pane-relative `cell_at`, divider hit and resize cursor.
-- [ ] 5.4 RED+GREEN: divider drag via `Panes::drag` ("Divider drag" scenario) with 30 ms `pending_resize` throttle using an injected clock; flush on release.
-- [ ] 5.5 GREEN: wire `ZoomPane`, `EqualizePanes`, config-driven dim and divider style into `PaneView`/shapes.
-- [ ] 5.6 Run full gate: `cargo fmt --all --check`, clippy `-D warnings`, `cargo test --workspace`, `cargo +1.87 check --workspace --all-targets`; manual check of success criteria.
+- [x] 5.1 RED+GREEN: `PanesConfig` in `nxg-config/src/lib.rs` (`divider_color`, `divider_width`, `inactive_dim` clamp, nan/inf errors, unknown key names `gap`, `--print-config` parses to defaults); resolve color parser open question.
+- [x] 5.2 RED+GREEN: `reload::Changes.panes` (`old != new`, redraw only); spec "Dim changed live".
+- [x] 5.3 RED+GREEN: `Capture { pane, kind }` lifecycle (spec "Click focuses", "Close during drag"); dropped on release, tab switch, close, zoom, equalize, split, focus loss. `mouse.rs` pane-relative `cell_at`, divider hit and resize cursor.
+- [x] 5.4 RED+GREEN: divider drag via `Panes::drag` ("Divider drag" scenario) with 30 ms `pending_resize` throttle using an injected clock; flush on release.
+- [x] 5.5 GREEN: wire `ZoomPane`, `EqualizePanes`, config-driven dim and divider style into `PaneView`/shapes.
+- [x] 5.6 Run full gate: `cargo fmt --all --check`, clippy `-D warnings`, `cargo test --workspace`, `cargo +1.87 check --workspace --all-targets`; manual check of success criteria.

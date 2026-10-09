@@ -10,8 +10,10 @@ use nxg_render::{CellSize, Layout};
 use winit::dpi::PhysicalPosition;
 use winit::event::MouseScrollDelta;
 use winit::keyboard::ModifiersState;
+use winit::window::CursorIcon;
 
 use crate::bindings::Action;
+use crate::panes::{Axis, DividerPath, PaneId};
 
 /// Lines one wheel notch scrolls.
 pub const LINES_PER_NOTCH: u32 = 3;
@@ -125,6 +127,65 @@ pub fn cell_at(layout: Layout, size: TermSize, x: f64, y: f64) -> (u16, u16) {
         index(x, left, width, size.cols()),
         index(y, top, height, size.rows()),
     )
+}
+
+/// A selection in the making: started by a left press, extended while the
+/// pointer moves, finished on release. A single click selects nothing
+/// until the pointer leaves the cell it pressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Drag {
+    pub kind: SelectionKind,
+    pub anchor: Point,
+    pub started: bool,
+}
+
+/// What a pressed button holds the pointer for: until release, motion goes
+/// to that pane (or divider) alone, whatever lies under the pointer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Capture {
+    /// A selection being dragged in `pane`.
+    Selection { pane: PaneId, drag: Drag },
+    /// A button the application in `pane` is told about.
+    Report { pane: PaneId, button: MouseButton },
+    /// A divider being moved; no shell hears of it.
+    Divider(DividerPath),
+}
+
+impl Capture {
+    /// Whether releasing `button` ends it: a selection or a divider drag
+    /// ends with the left button, a report with any (the application sees
+    /// every release).
+    pub fn ends_with(&self, button: MouseButton) -> bool {
+        match self {
+            Self::Report { .. } => true,
+            Self::Selection { .. } | Self::Divider(_) => button == MouseButton::Left,
+        }
+    }
+}
+
+/// The pointer state of a session.
+#[derive(Debug, Default)]
+pub struct Pointer {
+    pub capture: Option<Capture>,
+    /// The pane and cell last reported, so motion within a cell is not.
+    pub over: Option<(PaneId, (u16, u16))>,
+}
+
+impl Pointer {
+    /// Forgets everything: the layout it was about changed (close, zoom,
+    /// equalize, split, tab switch, focus loss).
+    pub fn reset(&mut self) {
+        self.capture = None;
+        self.over = None;
+    }
+}
+
+/// The cursor over a divider that runs along `axis`.
+pub fn divider_icon(axis: Axis) -> CursorIcon {
+    match axis {
+        Axis::Right => CursorIcon::ColResize,
+        Axis::Down => CursorIcon::RowResize,
+    }
 }
 
 /// Longest gap between the clicks of a double or triple click.
@@ -495,5 +556,48 @@ mod tests {
                 ctrl: true
             }
         );
+    }
+
+    #[test]
+    fn a_capture_ends_with_the_release_of_the_button_that_made_it() {
+        let pane = PaneId::new(1);
+        let drag = Drag {
+            kind: SelectionKind::Simple,
+            anchor: Point::new(0, 0),
+            started: false,
+        };
+        let selection = Capture::Selection { pane, drag };
+        assert!(selection.ends_with(MouseButton::Left));
+        assert!(!selection.ends_with(MouseButton::Right), "not its button");
+        let divider = Capture::Divider(vec![true]);
+        assert!(divider.ends_with(MouseButton::Left));
+        assert!(!divider.ends_with(MouseButton::Middle));
+        let report = Capture::Report {
+            pane,
+            button: MouseButton::Right,
+        };
+        assert!(report.ends_with(MouseButton::Right));
+        assert!(
+            report.ends_with(MouseButton::Left),
+            "the application sees every release"
+        );
+    }
+
+    #[test]
+    fn a_reset_forgets_the_capture_and_the_cell_reported_last() {
+        let pane = PaneId::new(1);
+        let mut pointer = Pointer {
+            capture: Some(Capture::Divider(vec![])),
+            over: Some((pane, (3, 4))),
+        };
+        pointer.reset();
+        assert_eq!(pointer.capture, None);
+        assert_eq!(pointer.over, None);
+    }
+
+    #[test]
+    fn dividers_get_a_resize_cursor_across_their_axis() {
+        assert_eq!(divider_icon(Axis::Right), CursorIcon::ColResize);
+        assert_eq!(divider_icon(Axis::Down), CursorIcon::RowResize);
     }
 }

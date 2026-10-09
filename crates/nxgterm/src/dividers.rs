@@ -1,13 +1,11 @@
 //! The lines between panes: one thin rectangle centred in each divider
 //! cell, drawn over the panes as a [`Shape`].
 
+use nxg_config::PanesConfig;
 use nxg_render::paint::dim;
 use nxg_render::{Layout, Shape};
 
 use crate::panes::{Axis, Divider};
-
-/// Pixels thick when the config says nothing.
-pub const DEFAULT_WIDTH: u32 = 1;
 
 /// How far the default colour moves from the foreground toward the
 /// background: the line keeps 25% of the foreground.
@@ -16,6 +14,16 @@ const FADE: f32 = 0.75;
 /// The default divider colour: the foreground faded into the background.
 pub fn default_color(foreground: u32, background: u32) -> u32 {
     dim(foreground, background, FADE)
+}
+
+/// The thickness in pixels and the colour of the dividers for `config`
+/// over a `foreground` and `background`.
+pub fn style(config: &PanesConfig, foreground: u32, background: u32) -> (u32, u32) {
+    let color = config.divider_color.map_or_else(
+        || default_color(foreground, background),
+        crate::appearance::pixel,
+    );
+    (u32::from(config.divider_width.get()), color)
 }
 
 /// One rectangle per divider, `width` pixels thick (at least 1, at most
@@ -64,6 +72,8 @@ mod tests {
     use std::convert::Infallible;
 
     use nxg_render::CellSize;
+
+    use nxg_config::Rgb;
 
     use super::*;
     use crate::panes::{PaneId, Panes};
@@ -151,5 +161,24 @@ mod tests {
     fn the_default_colour_keeps_a_quarter_of_the_foreground() {
         assert_eq!(default_color(0xffffff, 0x000000), 0x404040);
         assert_eq!(default_color(0x102030, 0x102030), 0x102030);
+    }
+
+    #[test]
+    fn the_config_picks_the_divider_color_and_width() {
+        let (fg, bg) = (0x00ff_ffff, 0x0000_0000);
+        assert_eq!(
+            style(&PanesConfig::default(), fg, bg),
+            (1, default_color(fg, bg)),
+            "unset: faded foreground, one pixel"
+        );
+        let configured = PanesConfig {
+            divider_color: Some(Rgb::hex(0x123456)),
+            divider_width: std::num::NonZeroU16::new(3).unwrap(),
+            ..PanesConfig::default()
+        };
+        assert_eq!(
+            style(&configured, fg, bg),
+            (3, nxg_render::palette::rgb(0x12, 0x34, 0x56))
+        );
     }
 }

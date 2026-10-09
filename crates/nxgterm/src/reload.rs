@@ -18,6 +18,8 @@ pub struct Changes {
     pub scrollback: bool,
     /// `[keybindings]` changed: rebuild the bindings.
     pub keybindings: bool,
+    /// `[panes]` changed: draw the next frame with the new look.
+    pub panes: bool,
     /// Sections that changed but only apply on the next start.
     pub on_restart: Vec<&'static str>,
 }
@@ -34,6 +36,7 @@ pub fn diff(old: &Config, new: &Config) -> Changes {
     let blur = old.window.blur != new.window.blur;
     let scrollback = old.scrollback != new.scrollback;
     let keybindings = old.keybindings != new.keybindings;
+    let panes = old.panes != new.panes;
     let mut on_restart = Vec::new();
     if old.shell != new.shell {
         on_restart.push("shell");
@@ -54,6 +57,7 @@ pub fn diff(old: &Config, new: &Config) -> Changes {
         blur,
         scrollback,
         keybindings,
+        panes,
         on_restart,
     }
 }
@@ -143,5 +147,15 @@ mod tests {
         let changes = with(|c| c.scrollback.lines = 5);
         assert!(changes.scrollback && !changes.restyle);
         assert!(changes.on_restart.is_empty());
+    }
+
+    #[test]
+    fn panes_style_applies_live_with_a_redraw_only() {
+        let dim = with(|c| c.panes.inactive_dim = 0.5);
+        assert!(dim.panes && !dim.restyle && !dim.keybindings);
+        assert!(dim.on_restart.is_empty());
+        assert!(with(|c| c.panes.divider_width = std::num::NonZeroU16::new(2).unwrap()).panes);
+        assert!(with(|c| c.panes.divider_color = Some(nxg_config::Rgb::hex(0x123456))).panes);
+        assert!(!with(|c| c.scrollback.lines = 5).panes);
     }
 }

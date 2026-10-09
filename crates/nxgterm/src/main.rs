@@ -20,6 +20,7 @@ mod reload;
 mod tab;
 mod tab_bar;
 mod tabs;
+mod throttle;
 mod title_bar;
 mod watch;
 

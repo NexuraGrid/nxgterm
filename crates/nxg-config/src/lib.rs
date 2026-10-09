@@ -130,6 +130,17 @@ lines = 10000
 # Wayland; ignored on other systems).
 copy_on_select = true
 
+[panes]
+# Split panes (see the split_* and focus_pane_* actions below). Color of the
+# lines between panes, as "#rrggbb" (or "#rgb"). Unset, the foreground faded
+# into the background.
+# divider_color = "#414868"
+# Thickness of those lines in pixels (at most one cell).
+divider_width = 1
+# How far panes without focus fade toward the background, from 0.0 (not at
+# all) to 1.0 (hidden). Images are not dimmed.
+inactive_dim = 0.25
+
 [keybindings]
 # Shortcuts handled by the terminal instead of being sent to the shell, as
 # "chord" = "action". Entries are added to the defaults below; map a default
@@ -212,6 +223,7 @@ pub struct Config {
     pub renderer: RendererConfig,
     pub scrollback: ScrollbackConfig,
     pub selection: SelectionConfig,
+    pub panes: PanesConfig,
     pub keybindings: KeybindingsConfig,
 }
 
@@ -342,6 +354,32 @@ pub struct ScrollbackConfig {
 impl Default for ScrollbackConfig {
     fn default() -> Self {
         Self { lines: 10_000 }
+    }
+}
+
+/// `[panes]`
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PanesConfig {
+    /// Color of the lines between panes; `None` fades the foreground into
+    /// the background.
+    pub divider_color: Option<Rgb>,
+    /// Thickness of those lines in pixels (the renderer clamps it to the
+    /// cell).
+    pub divider_width: NonZeroU16,
+    /// How far panes without focus fade toward the background, 0.0 to 1.0,
+    /// already clamped with [`clamp_dim`].
+    #[serde(deserialize_with = "inactive_dim")]
+    pub inactive_dim: f32,
+}
+
+impl Default for PanesConfig {
+    fn default() -> Self {
+        Self {
+            divider_color: None,
+            divider_width: NonZeroU16::MIN,
+            inactive_dim: 0.25,
+        }
     }
 }
 
@@ -598,6 +636,22 @@ fn opacity<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> 
     clamp_opacity(value).ok_or_else(|| {
         serde::de::Error::custom(format!(
             "invalid opacity `{value}`, expected a number from 0.0 to 1.0"
+        ))
+    })
+}
+
+/// Clamps the dimming of inactive panes to 0.0..=1.0; `None` when it is
+/// not a finite number.
+pub fn clamp_dim(dim: f64) -> Option<f32> {
+    dim.is_finite().then(|| dim.clamp(0.0, 1.0) as f32)
+}
+
+/// Accepts integers or floats, clamps them and rejects `nan` and `inf`.
+fn inactive_dim<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
+    let value = Number::deserialize(deserializer)?.get();
+    clamp_dim(value).ok_or_else(|| {
+        serde::de::Error::custom(format!(
+            "invalid inactive_dim `{value}`, expected a number from 0.0 to 1.0"
         ))
     })
 }
@@ -908,6 +962,52 @@ mod tests {
         assert!(error.contains("line 2"), "{error}");
         assert!(error.contains("unknown theme `solarized`"), "{error}");
         assert!(error.contains("available: catppuccin-mocha"), "{error}");
+    }
+
+    #[test]
+    fn panes_section_defaults_and_keys() {
+        let defaults = Config::default().panes;
+        assert_eq!(defaults.divider_color, None);
+        assert_eq!(defaults.divider_width.get(), 1);
+        assert_eq!(defaults.inactive_dim, 0.25);
+        let panes =
+            parse("[panes]\ndivider_color = \"#f80\"\ndivider_width = 3\ninactive_dim = 0.5\n")
+                .unwrap()
+                .panes;
+        assert_eq!(panes.divider_color, Some(Rgb::hex(0xff8800)));
+        assert_eq!(panes.divider_width.get(), 3);
+        assert_eq!(panes.inactive_dim, 0.5);
+        // Every key is optional.
+        assert_eq!(parse("[panes]\n").unwrap().panes, defaults);
+    }
+
+    #[test]
+    fn inactive_dim_is_clamped_and_must_be_finite() {
+        let dim = |value: &str| parse(&format!("[panes]\ninactive_dim = {value}\n"));
+        assert_eq!(dim("2").unwrap().panes.inactive_dim, 1.0);
+        assert_eq!(dim("-0.5").unwrap().panes.inactive_dim, 0.0);
+        assert_eq!(dim("0").unwrap().panes.inactive_dim, 0.0);
+        for value in ["nan", "inf", "-inf"] {
+            let error = dim(value).unwrap_err().to_string();
+            assert!(error.contains("invalid inactive_dim"), "{error}");
+        }
+    }
+
+    #[test]
+    fn panes_section_rejects_bad_values_and_unknown_keys() {
+        let error = parse_error("[panes]\ngap = 1\n");
+        assert!(error.contains("gap") && error.contains("line 2"), "{error}");
+        assert!(parse("[panes]\ndivider_width = 0\n").is_err(), "non-zero");
+        assert!(parse("[panes]\ndivider_width = -1\n").is_err());
+        let error = parse_error("[panes]\ndivider_color = \"red\"\n");
+        assert!(error.contains("invalid color `red`"), "{error}");
+    }
+
+    #[test]
+    fn documented_sample_lists_the_panes_keys() {
+        for key in ["[panes]", "divider_color", "divider_width", "inactive_dim"] {
+            assert!(DEFAULT_CONFIG_TOML.contains(key), "{key} is not documented");
+        }
     }
 
     #[test]
