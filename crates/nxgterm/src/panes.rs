@@ -58,6 +58,18 @@ pub enum SplitError<E> {
     Make(E),
 }
 
+/// What closing a pane did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Closed<T> {
+    /// It was the only pane; the tree is unchanged and the caller drops
+    /// the whole tab.
+    Last,
+    /// The pane left the tree and its sibling took the space.
+    Removed(T),
+    /// No such pane (already closed): nothing changed.
+    Unknown,
+}
+
 /// Where a divider sits in the tree: `false` = first child, `true` =
 /// second, from the root. Any structural change invalidates it.
 pub type DividerPath = Vec<bool>;
@@ -146,6 +158,50 @@ fn cut(rect: CellRect, axis: Axis, ratio: u16) -> (CellRect, CellRect, CellRect)
     }
 }
 
+/// Cells shared by the spans `[a0, a0 + a_len)` and `[b0, b0 + b_len)`.
+fn overlap(a0: u16, a_len: u16, b0: u16, b_len: u16) -> u32 {
+    let start = u32::from(a0).max(u32::from(b0));
+    let end = (u32::from(a0) + u32::from(a_len)).min(u32::from(b0) + u32::from(b_len));
+    end.saturating_sub(start)
+}
+
+/// How much of `from`'s `dir` edge `to` faces across a 1-cell divider
+/// (`None` when it is not adjacent that way).
+fn facing_overlap(from: CellRect, to: CellRect, dir: Dir) -> Option<u32> {
+    let (near_from, near_to) = match dir {
+        Dir::Right => (
+            u32::from(from.col) + u32::from(from.cols) + 1,
+            u32::from(to.col),
+        ),
+        Dir::Left => (
+            u32::from(from.col),
+            u32::from(to.col) + u32::from(to.cols) + 1,
+        ),
+        Dir::Down => (
+            u32::from(from.row) + u32::from(from.rows) + 1,
+            u32::from(to.row),
+        ),
+        Dir::Up => (
+            u32::from(from.row),
+            u32::from(to.row) + u32::from(to.rows) + 1,
+        ),
+    };
+    if near_from != near_to {
+        return None;
+    }
+    let shared = match dir {
+        Dir::Left | Dir::Right => overlap(from.row, from.rows, to.row, to.rows),
+        Dir::Up | Dir::Down => overlap(from.col, from.cols, to.col, to.cols),
+    };
+    (shared > 0).then_some(shared)
+}
+
+/// What [`Node::remove`] found.
+struct Removal<T> {
+    leaf: Option<T>,
+    nearest: Option<PaneId>,
+}
+
 #[derive(Debug)]
 enum Node<T> {
     Leaf(PaneId, T),
@@ -207,6 +263,61 @@ impl<T> Node<T> {
                 b.lay_out(second, path, panes, dividers);
                 path.pop();
             }
+        }
+    }
+
+    /// The leaf of this subtree closest to a sibling that sat first
+    /// (`closed_first`) or second along `axis`.
+    fn nearest_leaf(&self, axis: Axis, closed_first: bool) -> PaneId {
+        match self {
+            Node::Leaf(id, _) => *id,
+            Node::Split {
+                axis: own, a, b, ..
+            } => {
+                if *own == axis && !closed_first {
+                    b.nearest_leaf(axis, closed_first)
+                } else {
+                    a.nearest_leaf(axis, closed_first)
+                }
+            }
+        }
+    }
+
+    /// Takes the leaf `target` out; its sibling subtree replaces the split.
+    fn remove(self, target: PaneId, out: &mut Removal<T>) -> Node<T> {
+        let Node::Split { axis, ratio, a, b } = self else {
+            return self;
+        };
+        let (a, b) = (*a, *b);
+        let a = match a.take_leaf(target) {
+            Ok(leaf) => {
+                out.leaf = Some(leaf);
+                out.nearest = Some(b.nearest_leaf(axis, true));
+                return b;
+            }
+            Err(a) => a,
+        };
+        let b = match b.take_leaf(target) {
+            Ok(leaf) => {
+                out.leaf = Some(leaf);
+                out.nearest = Some(a.nearest_leaf(axis, false));
+                return a;
+            }
+            Err(b) => b,
+        };
+        Node::Split {
+            axis,
+            ratio,
+            a: Box::new(a.remove(target, out)),
+            b: Box::new(b.remove(target, out)),
+        }
+    }
+
+    /// The payload when this node is the leaf `target`, itself otherwise.
+    fn take_leaf(self, target: PaneId) -> Result<T, Node<T>> {
+        match self {
+            Node::Leaf(id, leaf) if id == target => Ok(leaf),
+            other => Err(other),
         }
     }
 
@@ -341,6 +452,67 @@ impl<T> Panes<T> {
         match self.zoomed {
             Some(_) => Vec::new(),
             None => self.lay_out(area).1,
+        }
+    }
+
+    /// Removes `id` (shell exit or action); the sibling subtree takes the
+    /// space. If the pane had focus, it moves to the sibling's leaf
+    /// nearest the closed one. Closing the zoomed pane ends zoom.
+    pub fn close(&mut self, id: PaneId) -> Closed<T> {
+        if !self.contains(id) {
+            return Closed::Unknown;
+        }
+        if self.len() == 1 {
+            return Closed::Last;
+        }
+        let root = self.root.take().expect("the tree always has a root");
+        let mut removal = Removal {
+            leaf: None,
+            nearest: None,
+        };
+        self.root = Some(root.remove(id, &mut removal));
+        if self.focus == id {
+            self.focus = removal.nearest.expect("a sibling took the space");
+        }
+        if self.zoomed == Some(id) {
+            self.zoomed = None;
+        }
+        Closed::Removed(removal.leaf.expect("the pane was found"))
+    }
+
+    /// Focuses `id`; returns whether it exists. Changing focus ends zoom.
+    pub fn set_focus(&mut self, id: PaneId) -> bool {
+        if !self.contains(id) {
+            return false;
+        }
+        if id != self.focus {
+            self.focus = id;
+            self.zoomed = None;
+        }
+        true
+    }
+
+    /// Moves focus to the pane adjacent to the focused one in `dir`: the
+    /// one whose edge faces it across the divider with the largest
+    /// overlap, first in tree order on a tie. Returns false (and changes
+    /// nothing) when there is none.
+    pub fn focus_dir(&mut self, dir: Dir, area: (u16, u16)) -> bool {
+        let panes = self.lay_out(area).0;
+        let Some(&(_, from)) = panes.iter().find(|(id, _)| *id == self.focus) else {
+            return false;
+        };
+        let mut best: Option<(PaneId, u32)> = None;
+        for &(id, to) in &panes {
+            let Some(overlap) = facing_overlap(from, to, dir) else {
+                continue;
+            };
+            if best.is_none_or(|(_, most)| overlap > most) {
+                best = Some((id, overlap));
+            }
+        }
+        match best {
+            Some((id, _)) => self.set_focus(id),
+            None => false,
         }
     }
 
@@ -618,5 +790,178 @@ mod tests {
         assert_eq!(panes.zoomed(), Some(id(2)));
         split(&mut panes, Axis::Down, 3, (100, 30)).unwrap();
         assert_eq!(panes.zoomed(), None);
+    }
+
+    // 1.4 close
+
+    /// 1 | (2 / 3), with 3 focused.
+    fn three() -> Panes<u32> {
+        let mut panes = two();
+        split(&mut panes, Axis::Down, 3, (100, 30)).unwrap();
+        panes
+    }
+
+    #[test]
+    fn closing_a_pane_gives_its_space_to_the_sibling() {
+        let mut panes = two();
+        assert_eq!(panes.close(id(2)), Closed::Removed(2));
+        assert_eq!(panes.rects((100, 30)), vec![(id(1), rect(0, 0, 100, 30))]);
+        assert_eq!(panes.focused(), (id(1), &1));
+        assert!(!panes.contains(id(2)));
+    }
+
+    #[test]
+    fn closing_an_unfocused_pane_keeps_focus() {
+        let mut panes = three();
+        assert_eq!(panes.close(id(1)), Closed::Removed(1));
+        assert_eq!(panes.focused(), (id(3), &3));
+        assert_eq!(panes.len(), 2);
+        assert_tiles(&panes, (100, 30));
+    }
+
+    #[test]
+    fn closing_the_last_pane_reports_it_and_changes_nothing() {
+        let mut panes = Panes::new(id(1), 1);
+        assert_eq!(panes.close(id(1)), Closed::Last);
+        assert_eq!(panes.len(), 1);
+        assert!(panes.contains(id(1)));
+    }
+
+    #[test]
+    fn closing_an_unknown_pane_changes_nothing() {
+        let mut panes = two();
+        assert_eq!(panes.close(id(9)), Closed::Unknown);
+        assert_eq!(panes.len(), 2);
+        assert_eq!(panes.close(id(2)), Closed::Removed(2));
+        assert_eq!(panes.close(id(2)), Closed::Unknown);
+    }
+
+    #[test]
+    fn focus_moves_to_the_leaf_nearest_the_closed_pane() {
+        // 1 | (2 / 3): closing 1 leaves 2 / 3, nearest the left edge is 2.
+        let mut panes = three();
+        assert!(panes.set_focus(id(1)));
+        assert_eq!(panes.close(id(1)), Closed::Removed(1));
+        assert_eq!(panes.focused().0, id(2));
+
+        // (1 | 3) | 2: closing 2 leaves 1 | 3, nearest is 3 (beside it).
+        let mut panes = two();
+        assert!(panes.set_focus(id(1)));
+        split(&mut panes, Axis::Right, 3, (100, 30)).unwrap();
+        assert!(panes.set_focus(id(2)));
+        assert_eq!(panes.close(id(2)), Closed::Removed(2));
+        assert_eq!(panes.focused().0, id(3));
+    }
+
+    #[test]
+    fn closing_the_zoomed_pane_ends_zoom() {
+        let mut panes = two();
+        panes.toggle_zoom();
+        assert_eq!(panes.close(id(2)), Closed::Removed(2));
+        assert_eq!(panes.zoomed(), None);
+        assert_eq!(panes.rects((100, 30)).len(), 1);
+    }
+
+    #[test]
+    fn closing_another_pane_keeps_zoom() {
+        let mut panes = three();
+        panes.toggle_zoom();
+        assert_eq!(panes.close(id(1)), Closed::Removed(1));
+        assert_eq!(panes.zoomed(), Some(id(3)));
+    }
+
+    // 1.5 focus
+
+    #[test]
+    fn set_focus_selects_known_panes_only() {
+        let mut panes = two();
+        assert!(panes.set_focus(id(1)));
+        assert_eq!(panes.focused().0, id(1));
+        assert!(!panes.set_focus(id(9)));
+        assert_eq!(panes.focused().0, id(1));
+    }
+
+    #[test]
+    fn changing_focus_ends_zoom_but_keeping_it_does_not() {
+        let mut panes = two();
+        panes.toggle_zoom();
+        assert!(panes.set_focus(id(2)));
+        assert_eq!(panes.zoomed(), Some(id(2)));
+        assert!(panes.set_focus(id(1)));
+        assert_eq!(panes.zoomed(), None);
+    }
+
+    #[test]
+    fn focus_moves_to_the_adjacent_pane() {
+        let mut panes = two();
+        assert!(panes.set_focus(id(1)));
+        assert!(panes.focus_dir(Dir::Right, (100, 30)));
+        assert_eq!(panes.focused().0, id(2));
+        assert!(panes.focus_dir(Dir::Left, (100, 30)));
+        assert_eq!(panes.focused().0, id(1));
+    }
+
+    #[test]
+    fn focus_does_nothing_without_a_neighbour() {
+        let mut panes = two();
+        assert!(panes.set_focus(id(1)));
+        for dir in [Dir::Left, Dir::Up, Dir::Down] {
+            assert!(!panes.focus_dir(dir, (100, 30)));
+        }
+        assert_eq!(panes.focused().0, id(1));
+        assert!(!Panes::new(id(1), 1).focus_dir(Dir::Right, (100, 30)));
+    }
+
+    #[test]
+    fn focus_prefers_the_largest_overlap_then_tree_order() {
+        // 1 | (2 / 3): from 1 going right, 2 (15 rows) beats 3 (14).
+        let mut panes = three();
+        assert!(panes.set_focus(id(1)));
+        assert!(panes.focus_dir(Dir::Right, (100, 30)));
+        assert_eq!(panes.focused().0, id(2));
+        // With 31 rows both overlap 15: tree order picks 2.
+        assert!(panes.set_focus(id(1)));
+        assert!(panes.focus_dir(Dir::Right, (100, 31)));
+        assert_eq!(panes.focused().0, id(2));
+    }
+
+    #[test]
+    fn focus_picks_the_largest_neighbour_on_asymmetric_nests() {
+        // Left column: (1 / 4) over 3, so 3 is tall and last in tree order.
+        let mut panes = Panes::new(id(1), 1);
+        split(&mut panes, Axis::Right, 2, (100, 30)).unwrap();
+        assert!(panes.set_focus(id(1)));
+        split(&mut panes, Axis::Down, 3, (100, 30)).unwrap();
+        assert!(panes.set_focus(id(1)));
+        split(&mut panes, Axis::Down, 4, (100, 30)).unwrap();
+        assert_eq!(rect_of(&panes, (100, 30), 1).rows, 7);
+        assert_eq!(rect_of(&panes, (100, 30), 4).rows, 7);
+        assert_eq!(rect_of(&panes, (100, 30), 3).rows, 14);
+        assert!(panes.set_focus(id(2)));
+        assert!(panes.focus_dir(Dir::Left, (100, 30)));
+        assert_eq!(panes.focused().0, id(3));
+    }
+
+    #[test]
+    fn vertical_focus_crosses_the_divider_row() {
+        let mut panes = three();
+        assert!(panes.focus_dir(Dir::Up, (100, 30)));
+        assert_eq!(panes.focused().0, id(2));
+        assert!(panes.focus_dir(Dir::Down, (100, 30)));
+        assert_eq!(panes.focused().0, id(3));
+        assert!(panes.focus_dir(Dir::Left, (100, 30)));
+        assert_eq!(panes.focused().0, id(1));
+    }
+
+    #[test]
+    fn moving_focus_ends_zoom_and_failing_keeps_it() {
+        let mut panes = two();
+        assert!(panes.set_focus(id(1)));
+        panes.toggle_zoom();
+        assert!(!panes.focus_dir(Dir::Left, (100, 30)));
+        assert_eq!(panes.zoomed(), Some(id(1)));
+        assert!(panes.focus_dir(Dir::Right, (100, 30)));
+        assert_eq!(panes.zoomed(), None);
+        assert_eq!(panes.focused().0, id(2));
     }
 }
