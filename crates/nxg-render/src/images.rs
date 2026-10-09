@@ -27,11 +27,12 @@ pub struct ImageDraw {
     pub z: i32,
 }
 
-/// The grid area in window pixels as `(x, y, width, height)`.
+/// The grid area in window pixels as `(x, y, width, height)`, honoring the
+/// layout's `left` and `top` (a pane at a cell offset).
 pub fn grid_clip(term: &Terminal, layout: Layout) -> (u32, u32, u32, u32) {
     let size = term.size();
     (
-        layout.padding,
+        layout.padding + layout.left,
         layout.padding + layout.top,
         u32::from(size.cols()).saturating_mul(layout.cell.width),
         u32::from(size.rows()).saturating_mul(layout.cell.height),
@@ -56,7 +57,7 @@ pub fn draws(term: &Terminal, layout: Layout, above: bool) -> Vec<ImageDraw> {
         .filter_map(|p| {
             let rect = p.pixel_rect(cell);
             let dest = PixelRect {
-                x: rect.x + i64::from(layout.padding),
+                x: rect.x + i64::from(layout.padding + layout.left),
                 y: rect.y + i64::from(layout.padding + layout.top) + scrolled,
                 width: rect.width.min(MAX_DEST),
                 height: rect.height.min(MAX_DEST),
@@ -222,6 +223,49 @@ pub(crate) mod tests {
         let d = draws(&t, layout, true);
         assert_eq!((d[0].dest.x, d[0].dest.y), (1, 3));
         assert_eq!(grid_clip(&t, layout), (1, 3, 8, 4));
+    }
+
+    #[test]
+    fn draws_and_clip_move_right_by_the_left_offset() {
+        let mut t = term(4, 2);
+        show(&mut t, 1, 1, [0; 4], "");
+        let at_origin = draws(&t, LAYOUT, true);
+        // A pane three cells (6 px) to the right of the origin.
+        let layout = Layout { left: 6, ..LAYOUT };
+        let d = draws(&t, layout, true);
+        assert_eq!((d[0].dest.x, d[0].dest.y), (7, 1), "padding + left");
+        assert_eq!(d[0].dest.x - at_origin[0].dest.x, 6);
+        assert_eq!(grid_clip(&t, layout), (7, 1, 8, 4));
+        assert_eq!(grid_clip(&t, LAYOUT), (1, 1, 8, 4), "origin pane unchanged");
+    }
+
+    #[test]
+    fn an_image_in_a_pane_at_the_right_is_clipped_to_that_pane() {
+        let mut t = term(2, 2);
+        t.advance(b"\x1b[2;2H");
+        show(&mut t, 20, 20, [0, 0, 255, 255], "");
+        // Frame: 1 px padding + 4 px left pane + 4 px right pane + padding.
+        let layout = Layout { left: 4, ..LAYOUT };
+        let mut pixels = vec![0; 10 * 6];
+        paint(
+            &t,
+            &mut Frame::new(&mut pixels, 10, 6).unwrap(),
+            layout,
+            true,
+        );
+        let blue = rgb(0, 0, 255);
+        let inked: Vec<(usize, usize)> = (0..60)
+            .filter(|&i| pixels[i] == blue)
+            .map(|i| (i % 10, i / 10))
+            .collect();
+        assert_eq!(inked, [(7, 3), (8, 3), (7, 4), (8, 4)], "stays in the pane");
+        let origin = render(&t, true);
+        assert_eq!(origin.iter().filter(|&&p| p == blue).count(), 4);
+        assert_eq!(
+            origin[3 * 10 + 3],
+            blue,
+            "origin pane draws at its own cell"
+        );
     }
 
     fn render(t: &Terminal, above: bool) -> Vec<u32> {
