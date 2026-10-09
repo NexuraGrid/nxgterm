@@ -20,6 +20,12 @@ impl PaneId {
     pub fn new(raw: u64) -> Self {
         Self(raw)
     }
+
+    /// The number, for places that cannot name this type (the renderer
+    /// caches image textures by it).
+    pub fn raw(self) -> u64 {
+        self.0
+    }
 }
 
 /// A direction on screen.
@@ -726,6 +732,13 @@ mod tests {
 
     fn id(n: u64) -> PaneId {
         PaneId::new(n)
+    }
+
+    #[test]
+    fn a_pane_id_keeps_its_number() {
+        assert_eq!(id(0).raw(), 0);
+        assert_eq!(id(41).raw(), 41);
+        assert_ne!(id(1).raw(), id(2).raw());
     }
 
     fn split(

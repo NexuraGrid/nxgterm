@@ -76,3 +76,47 @@ Branch `feat/split-panes-s2` (stacked on S1). Mode: Strict TDD; RED was a failin
 ### Gates (S2)
 
 - `cargo fmt --all --check`: ok; clippy `-D warnings`: clean; `cargo test --workspace`: all pass; `cargo +1.87 check --workspace --all-targets`: ok.
+
+## S3: App refactor, one leaf per tab (done, 6/6)
+
+Branch `feat/split-panes-s3` (stacked on S2). Mode: Strict TDD; RED was a `todo!()` stub run (10/10 failing) for `tab.rs` and a compile failure (missing `Pane`, `focused`, `focused_mut`) for the rest. Review budget: 726 changed lines (598 added, 128 removed, `git diff --shortstat feat/split-panes-s2 -- . ':!openspec'`), within the pre-authorized 1,300; about 55% is tests.
+
+| Task | Status | Notes |
+|------|--------|-------|
+| 3.1 | [x] | `tab.rs`: `PaneIds` (global counter), `pane_mut` (stale id -> `None`), `shows` (active tab and not hidden by zoom), `exit` -> `Exit::{Stale, Pane, Tab}` (last tab closed leaves `Tabs` empty so the app exits) |
+| 3.2 | [x] | `Pane { terminal, pty, title }`, `Tab<T> { panes: Panes<T> }`; `Tab::fit` moved to `Pane::fit` (approval tests with a fake pty) |
+| 3.3 | [x] | `UserEvent::{Output(PaneId,_), Exited(PaneId)}`, reader/waiter and `spawn_pane` keyed by `PaneId`; routing through `tab::pane_mut`/`tab::exit` (no separate `find_pane`) |
+| 3.4 | [x] | `sync_grid_size` fits each pane to its `tab::placements` rect; title bar, tab bar hit-test and palette sized from `Session::content_size()` |
+| 3.5 | [x] | Input, paste, copy, select_all, selected_text, scroll, wheel, pointer use `tab::focused(_mut)`; tab label from the focused pane; `redraw` builds the `PaneView` list from the placements |
+| 3.6 | [x] | Single-pane behavior pinned: one pane fills the content area with focus, redraw rule, exit flow, `Pane::fit` rules. GUI not launched (headless run) |
+
+### TDD Cycle Evidence (S3)
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 3.1, 3.4 | `tab.rs` | Unit | 187/187 | 10/10 failing (`todo!()`) | 10/10 | two tabs, zoom hidden, stale, last pane vs one of two | none needed |
+| 3.2 | `app.rs` | Unit (fake pty) | n/a (new tests) | compile fail (`Pane`) | 4/4 | new size, same size no-op, cell-only change, `send` | none needed |
+| 3.5 | `tab.rs` | Unit | 187/187 | compile fail (`focused`, `focused_mut`, `each_mut`) | 12/12 | no tab, per-tab focus, 3 panes | none needed |
+| 3.3 | n/a | Wiring | 194/194 | n/a | green | Triangulation skipped: type change (`TabId` -> `PaneId`) checked by the compiler | none needed |
+| `PaneId::raw` | `panes.rs` | Unit | 51/51 | compile fail | green | 0, 41, distinct | none needed |
+
+### Work Unit Evidence (S3)
+
+| Evidence | Value |
+|---|---|
+| Focused test command | `cargo test -p nxgterm` -> 194 passed, 0 failed (12 `tab::`, 4 `app::`, 1 `panes::raw`) |
+| Runtime harness | N/A for the GUI (headless, no display); `cargo build --workspace` and `cargo clippy --workspace --all-targets` clean; pty/threads path covered by the compiler plus `Pane::fit`/`send` fake-pty tests |
+| Rollback boundary | `crates/nxgterm/src/{app,tab}.rs`, `PaneId::raw` in `panes.rs`, the removed `Tabs::index_of/get_mut` in `tabs.rs`, `mod tab;` in `main.rs` |
+
+### Deviations (S3)
+
+- `Pane` has no `pending_resize` yet (a field nothing reads fails `-D warnings`); S5 adds it with the throttle.
+- No `find_pane`: `tab::pane_mut`, `tab::shows` and `tab::exit` are free functions over `Tabs<Tab<T>>` (generic, testable without a window). Focus helpers are free functions too, so callers keep borrowing other `Session` fields.
+- Removed the now-unused `Tabs::index_of` and `Tabs::get_mut(TabId)` (and their assertions); `tabs.rs` is no longer unchanged.
+- `mod panes` keeps `#[allow(dead_code)]` (module level, comment updated): split, close, focus, resize, zoom and hit-test are wired in S4/S5. `mod tab` needs none.
+- Pointer mapping still uses the focused pane's terminal size at the origin; pane-relative `cell_at` is S5.
+- Panes hidden by zoom are not refit on a cell size change (S5 zoom wiring should refit them on unzoom).
+
+### Gates (S3)
+
+- `cargo fmt --all --check`: ok; clippy `-D warnings`: clean; `cargo test --workspace`: all pass; `cargo +1.87 check --workspace --all-targets`: ok.

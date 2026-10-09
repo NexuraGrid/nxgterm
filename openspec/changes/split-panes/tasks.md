@@ -54,12 +54,12 @@ Decision needed: confirm Feature Branch Chain (tracker `feat/split-panes` draft/
 
 ## S3: App refactor, one leaf per tab (`crates/nxgterm/src`)
 
-- [ ] 3.1 RED: pure helpers for event routing (stale `PaneId` dropped; `Output` redraws only for visible pane of active tab; last `Exited` closes tab, last tab exits); GREEN: `PaneId` counter `next_pane`.
-- [ ] 3.2 RED+GREEN: introduce `Pane` (terminal, pty, title, `pending_resize`) and `Tab { panes: Panes<Pane> }`; move `Tab::fit` to `Pane::fit`.
-- [ ] 3.3 GREEN: `UserEvent::{Output(PaneId,_), Exited(PaneId)}`, reader/waiter threads keyed by `PaneId`, `find_pane`.
-- [ ] 3.4 RED+GREEN: `sync_grid_size` via `rects(area)` + `Pane::fit`; content area from `grid_layout().grid_size(window)` for `title_bar.rs`, `tab_bar.rs`, `command_palette.rs` (sizes unchanged for one pane).
-- [ ] 3.5 GREEN: route key input, `send`, `paste`, `copy`, `select_all`, `selected_text`, `scroll_viewport` to the focused pane; tab title from focused pane; render via `draw_layers`.
-- [ ] 3.6 Pin single-pane behavior with tests for sizes, redraw rules and exit flow; manual run of `nxgterm`.
+- [x] 3.1 RED: pure helpers for event routing (stale `PaneId` dropped; `Output` redraws only for visible pane of active tab; last `Exited` closes tab, last tab exits); GREEN: `PaneId` counter `next_pane`.
+- [x] 3.2 RED+GREEN: introduce `Pane` (terminal, pty, title, `pending_resize`) and `Tab { panes: Panes<Pane> }`; move `Tab::fit` to `Pane::fit`.
+- [x] 3.3 GREEN: `UserEvent::{Output(PaneId,_), Exited(PaneId)}`, reader/waiter threads keyed by `PaneId`, `find_pane`.
+- [x] 3.4 RED+GREEN: `sync_grid_size` via `rects(area)` + `Pane::fit`; content area from `grid_layout().grid_size(window)` for `title_bar.rs`, `tab_bar.rs`, `command_palette.rs` (sizes unchanged for one pane).
+- [x] 3.5 GREEN: route key input, `send`, `paste`, `copy`, `select_all`, `selected_text`, `scroll_viewport` to the focused pane; tab title from focused pane; render via `draw_layers`.
+- [x] 3.6 Pin single-pane behavior with tests for sizes, redraw rules and exit flow; manual run of `nxgterm`.
 
 ## S4: Actions and split UX
 
