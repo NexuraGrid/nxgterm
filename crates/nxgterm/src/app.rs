@@ -31,8 +31,8 @@ use crate::bindings::Action;
 use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
 use crate::mouse::{Clicks, ViewportScroll, Wheel, WheelAction};
-use crate::panes::PaneId;
-use crate::tab::{self, Exit, PaneIds, Tab};
+use crate::panes::{Axis, PaneId, SplitError};
+use crate::tab::{self, Exit, PaneCommand, PaneIds, Tab};
 use crate::tabs::{TabId, Tabs};
 use crate::title_bar::{self, Button, ButtonColors, Chrome, Rect, Region};
 use crate::watch::ConfigWatcher;
@@ -517,6 +517,10 @@ impl App {
             }
             _ => {}
         }
+        if let Some(command) = tab::command(action) {
+            self.pane_command(command);
+            return true;
+        }
         let config = &self.config;
         let Some(session) = &mut self.session else {
             return true;
@@ -573,7 +577,7 @@ impl App {
             | Action::NextTab
             | Action::PreviousTab
             | Action::GotoTab(_)
-            // Wired next to the pane tree.
+            // Handled above (`tab::command`), or by S5.
             | Action::SplitRight
             | Action::SplitDown
             | Action::FocusPaneLeft
@@ -587,6 +591,32 @@ impl App {
             | Action::ClosePane
             | Action::ZoomPane
             | Action::EqualizePanes => true,
+        }
+    }
+
+    /// Runs a pane action on the active tab.
+    fn pane_command(&mut self, command: PaneCommand) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        let area = session.content_size();
+        match command {
+            PaneCommand::Split(axis) => session.split(axis, &self.config, &self.proxy),
+            PaneCommand::Focus(dir) => {
+                if tab::focus_active(&mut session.tabs, dir, area) {
+                    session.panes_changed();
+                }
+            }
+            PaneCommand::Resize(dir) => {
+                if tab::resize_active(&mut session.tabs, dir, area) {
+                    session.panes_changed();
+                }
+            }
+            PaneCommand::Close => {
+                if tab::close_focused(&mut session.tabs) != Exit::Stale {
+                    session.tab_switched();
+                }
+            }
         }
     }
 
@@ -757,6 +787,10 @@ impl ApplicationHandler<UserEvent> for App {
         }
         if let Some(outcome) = self.palette_mouse(&event) {
             self.palette_done(outcome);
+            // The palette may have closed the last tab.
+            if self.session.as_ref().is_some_and(|s| s.tabs.is_empty()) {
+                event_loop.exit();
+            }
             return;
         }
         let config = &self.config;
@@ -1057,6 +1091,41 @@ impl Session {
         if scrolled || extended {
             self.window.request_redraw();
         }
+    }
+
+    /// Splits the focused pane of the active tab along `axis`, running the
+    /// configured shell in the new pane at its final size. A pane that is
+    /// too small, or a shell that does not start, leaves the layout as it
+    /// was.
+    fn split(&mut self, axis: Axis, config: &Config, proxy: &EventLoopProxy<UserEvent>) {
+        let area = self.content_size();
+        let layout = self.grid_layout();
+        let cell = CellPixels::new(layout.cell.width, layout.cell.height);
+        let id = self.pane_ids.next();
+        let split = tab::split_active(&mut self.tabs, axis, id, area, |rect| {
+            let cells = TermSize::new(rect.cols, rect.rows)?;
+            let win_size = WinSize {
+                cells,
+                cell: Some(cell),
+            };
+            spawn_pane(id, config, win_size, proxy)
+        });
+        match split {
+            Some(Ok(())) => self.panes_changed(),
+            Some(Err(SplitError::TooSmall)) => eprintln!("nxgterm: pane too small to split"),
+            Some(Err(SplitError::Make(error))) => eprintln!("nxgterm: cannot split: {error}"),
+            None => {}
+        }
+    }
+
+    /// After the layout of the active tab changed (split, focus, resize):
+    /// forgets the held button and selection drag, which belonged to the
+    /// old layout, refits the panes and redraws.
+    fn panes_changed(&mut self) {
+        self.held = None;
+        self.drag = None;
+        self.sync_grid_size();
+        self.window.request_redraw();
     }
 
     /// After the active tab or the number of tabs changed: forgets the
