@@ -572,7 +572,21 @@ impl App {
             | Action::CloseTab
             | Action::NextTab
             | Action::PreviousTab
-            | Action::GotoTab(_) => true,
+            | Action::GotoTab(_)
+            // Wired next to the pane tree.
+            | Action::SplitRight
+            | Action::SplitDown
+            | Action::FocusPaneLeft
+            | Action::FocusPaneRight
+            | Action::FocusPaneUp
+            | Action::FocusPaneDown
+            | Action::ResizePaneLeft
+            | Action::ResizePaneRight
+            | Action::ResizePaneUp
+            | Action::ResizePaneDown
+            | Action::ClosePane
+            | Action::ZoomPane
+            | Action::EqualizePanes => true,
         }
     }
 

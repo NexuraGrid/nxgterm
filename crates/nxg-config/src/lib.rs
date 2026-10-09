@@ -142,13 +142,19 @@ copy_on_select = true
 #
 # Actions: zoom_in, zoom_out, reset_zoom, scroll_page_up, scroll_page_down,
 # scroll_to_top, scroll_to_bottom, new_tab, close_tab, next_tab, previous_tab,
-# goto_tab_1 to goto_tab_9, command_palette, copy, paste, select_all (unbound
-# by default), reload_config (unbound by default), none. Scrolling keys reach
+# goto_tab_1 to goto_tab_9, split_right, split_down, focus_pane_left,
+# focus_pane_right, focus_pane_up, focus_pane_down, resize_pane_left,
+# resize_pane_right, resize_pane_up, resize_pane_down, close_pane, zoom_pane,
+# equalize_panes (unbound by default), command_palette, copy, paste,
+# select_all (unbound by default), reload_config (unbound by default), none. Scrolling keys reach
 # the application on the alternate screen (full-screen programs). Copy does
 # nothing without a selection; ctrl+c stays an interrupt for the shell.
 #
-# The defaults (on macOS the zoom chords use cmd instead of ctrl, and copy
-# and paste are cmd+c and cmd+v):
+# The defaults (on macOS the zoom chords use cmd instead of ctrl, copy and
+# paste are cmd+c and cmd+v, and the pane focus and resize chords use cmd
+# instead of ctrl, because ctrl+arrows belong to Mission Control). On Linux
+# desktops (KDE, GNOME) ctrl+alt+arrows may switch workspaces: rebind the
+# focus_pane_* chords or free them with "none":
 # "ctrl+equal" = "zoom_in"
 # "ctrl+plus" = "zoom_in"
 # "ctrl+minus" = "zoom_out"
@@ -170,6 +176,18 @@ copy_on_select = true
 # "alt+7" = "goto_tab_7"
 # "alt+8" = "goto_tab_8"
 # "alt+9" = "goto_tab_9"
+# "ctrl+shift+o" = "split_right"
+# "ctrl+shift+e" = "split_down"
+# "ctrl+alt+left" = "focus_pane_left"
+# "ctrl+alt+right" = "focus_pane_right"
+# "ctrl+alt+up" = "focus_pane_up"
+# "ctrl+alt+down" = "focus_pane_down"
+# "ctrl+alt+shift+left" = "resize_pane_left"
+# "ctrl+alt+shift+right" = "resize_pane_right"
+# "ctrl+alt+shift+up" = "resize_pane_up"
+# "ctrl+alt+shift+down" = "resize_pane_down"
+# "ctrl+shift+x" = "close_pane"
+# "ctrl+shift+enter" = "zoom_pane"
 # "ctrl+shift+p" = "command_palette"
 # "ctrl+shift+c" = "copy"
 # "ctrl+shift+v" = "paste"
