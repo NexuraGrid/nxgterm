@@ -196,6 +196,17 @@ fn facing_overlap(from: CellRect, to: CellRect, dir: Dir) -> Option<u32> {
     (shared > 0).then_some(shared)
 }
 
+/// The ratio (permille) that gives the first half `first` of the cells
+/// left once the divider of a `len`-cell split is taken out.
+fn ratio_for(len: u16, first: u16) -> u16 {
+    let total = u32::from(len.saturating_sub(1));
+    if total == 0 {
+        return 500;
+    }
+    let ratio = (u32::from(first) * 1000 + total / 2) / total;
+    u16::try_from(ratio).unwrap_or(1000).min(1000)
+}
+
 /// What [`Node::remove`] found.
 struct Removal<T> {
     leaf: Option<T>,
@@ -263,6 +274,42 @@ impl<T> Node<T> {
                 b.lay_out(second, path, panes, dividers);
                 path.pop();
             }
+        }
+    }
+
+    fn leaf_count(&self) -> u32 {
+        match self {
+            Node::Leaf(..) => 1,
+            Node::Split { a, b, .. } => a.leaf_count() + b.leaf_count(),
+        }
+    }
+
+    /// Directions from this node down to the leaf `target`.
+    fn path_to(&self, target: PaneId) -> Option<DividerPath> {
+        match self {
+            Node::Leaf(id, _) => (*id == target).then(Vec::new),
+            Node::Split { a, b, .. } => a
+                .path_to(target)
+                .map(|mut path| {
+                    path.insert(0, false);
+                    path
+                })
+                .or_else(|| {
+                    b.path_to(target).map(|mut path| {
+                        path.insert(0, true);
+                        path
+                    })
+                }),
+        }
+    }
+
+    fn equalize(&mut self) {
+        if let Node::Split { ratio, a, b, .. } = self {
+            let (first, second) = (a.leaf_count(), b.leaf_count());
+            *ratio = u16::try_from((first * 1000 + (first + second) / 2) / (first + second))
+                .unwrap_or(500);
+            a.equalize();
+            b.equalize();
         }
     }
 
@@ -513,6 +560,98 @@ impl<T> Panes<T> {
         match best {
             Some((id, _)) => self.set_focus(id),
             None => false,
+        }
+    }
+
+    /// Moves the innermost divider above the focused pane whose axis
+    /// matches `dir` by `cells` toward `dir`, keeping both sides at the
+    /// minimum size. Returns whether it moved; a moved divider ends zoom.
+    pub fn resize(&mut self, dir: Dir, cells: u16, area: (u16, u16)) -> bool {
+        let wanted = match dir {
+            Dir::Left | Dir::Right => Axis::Right,
+            Dir::Up | Dir::Down => Axis::Down,
+        };
+        let grow = matches!(dir, Dir::Right | Dir::Down);
+        let Some(path) = self.root().path_to(self.focus) else {
+            return false;
+        };
+        for depth in (0..path.len()).rev() {
+            let Some((ratio, axis, rect)) = self.split_at_mut(&path[..depth], area) else {
+                continue;
+            };
+            if axis != wanted {
+                continue;
+            }
+            let len = len_of(rect, axis);
+            let (_, lo, hi) = bounds(len, min_of(axis));
+            let now = first_len(len, *ratio, min_of(axis));
+            let to = if grow {
+                now.saturating_add(cells)
+            } else {
+                now.saturating_sub(cells)
+            };
+            let to = to.clamp(lo, hi);
+            if to == now {
+                return false;
+            }
+            *ratio = ratio_for(len, to);
+            self.zoomed = None;
+            return true;
+        }
+        false
+    }
+
+    /// Puts the divider at `divider` under the pointer at cell `pos`
+    /// (a column for side-by-side splits, a row for stacked ones),
+    /// clamped to the minimums. A path that no longer names a split is
+    /// ignored.
+    pub fn drag(&mut self, divider: &DividerPath, pos: u16, area: (u16, u16)) {
+        let Some((ratio, axis, rect)) = self.split_at_mut(divider, area) else {
+            return;
+        };
+        let (len, origin) = match axis {
+            Axis::Right => (rect.cols, rect.col),
+            Axis::Down => (rect.rows, rect.row),
+        };
+        let (_, lo, hi) = bounds(len, min_of(axis));
+        *ratio = ratio_for(len, pos.saturating_sub(origin).clamp(lo, hi));
+    }
+
+    /// Gives every pane the same share: each split's ratio follows its
+    /// sides' leaf counts.
+    pub fn equalize(&mut self) {
+        if let Some(root) = self.root.as_mut() {
+            root.equalize();
+        }
+    }
+
+    /// The split at `path` from the root: its ratio, axis and rect.
+    fn split_at_mut(
+        &mut self,
+        path: &[bool],
+        area: (u16, u16),
+    ) -> Option<(&mut u16, Axis, CellRect)> {
+        let mut rect = CellRect {
+            col: 0,
+            row: 0,
+            cols: area.0,
+            rows: area.1,
+        };
+        let mut node = self.root.as_mut()?;
+        for &side in path {
+            let Node::Split { axis, ratio, a, b } = node else {
+                return None;
+            };
+            let (first, _, second) = cut(rect, *axis, *ratio);
+            (node, rect) = if side {
+                (&mut **b, second)
+            } else {
+                (&mut **a, first)
+            };
+        }
+        match node {
+            Node::Split { axis, ratio, .. } => Some((ratio, *axis, rect)),
+            Node::Leaf(..) => None,
         }
     }
 
@@ -963,5 +1102,141 @@ mod tests {
         assert!(panes.focus_dir(Dir::Right, (100, 30)));
         assert_eq!(panes.zoomed(), None);
         assert_eq!(panes.focused().0, id(2));
+    }
+
+    // 1.6 resize, drag, equalize
+
+    #[test]
+    fn resize_moves_the_divider_toward_the_direction() {
+        let mut panes = two();
+        assert!(panes.resize(Dir::Right, 2, (100, 30)));
+        assert_eq!(rect_of(&panes, (100, 30), 1).cols, 52);
+        assert_eq!(rect_of(&panes, (100, 30), 2), rect(53, 0, 47, 30));
+        assert!(panes.resize(Dir::Left, 5, (100, 30)));
+        assert_eq!(rect_of(&panes, (100, 30), 1).cols, 47);
+        assert_tiles(&panes, (100, 30));
+    }
+
+    #[test]
+    fn resize_needs_a_divider_on_that_axis() {
+        let mut panes = two();
+        let before = panes.rects((100, 30));
+        assert!(!panes.resize(Dir::Up, 1, (100, 30)));
+        assert!(!panes.resize(Dir::Down, 1, (100, 30)));
+        assert!(!Panes::new(id(1), 1).resize(Dir::Right, 1, (100, 30)));
+        assert_eq!(panes.rects((100, 30)), before);
+    }
+
+    #[test]
+    fn resize_keeps_both_panes_at_the_minimum() {
+        let mut panes = two();
+        assert!(panes.resize(Dir::Right, 1000, (100, 30)));
+        assert_eq!(rect_of(&panes, (100, 30), 2).cols, MIN_COLS);
+        assert!(!panes.resize(Dir::Right, 1, (100, 30)));
+        assert!(panes.resize(Dir::Left, 1000, (100, 30)));
+        assert_eq!(rect_of(&panes, (100, 30), 1).cols, MIN_COLS);
+        assert!(!panes.resize(Dir::Left, 1, (100, 30)));
+        assert_tiles(&panes, (100, 30));
+    }
+
+    #[test]
+    fn resize_uses_the_innermost_divider_of_the_axis() {
+        // 1 | (2 / 3), focus 3.
+        let mut panes = three();
+        assert!(panes.resize(Dir::Up, 3, (100, 30)));
+        assert_eq!(rect_of(&panes, (100, 30), 2).rows, 12);
+        assert_eq!(rect_of(&panes, (100, 30), 1).cols, 50);
+        // No Down divider is outside; Right reaches the root one.
+        assert!(panes.resize(Dir::Right, 2, (100, 30)));
+        assert_eq!(rect_of(&panes, (100, 30), 1).cols, 52);
+        assert_eq!(rect_of(&panes, (100, 30), 2).rows, 12);
+    }
+
+    #[test]
+    fn resize_ends_zoom() {
+        let mut panes = two();
+        panes.toggle_zoom();
+        assert!(panes.resize(Dir::Left, 1, (100, 30)));
+        assert_eq!(panes.zoomed(), None);
+    }
+
+    #[test]
+    fn drag_places_the_divider_at_the_pointer() {
+        let mut panes = two();
+        let path = panes.dividers((100, 30))[0].path.clone();
+        panes.drag(&path, 52, (100, 30));
+        assert_eq!(rect_of(&panes, (100, 30), 1).cols, 52);
+        assert_eq!(rect_of(&panes, (100, 30), 2), rect(53, 0, 47, 30));
+        assert_eq!(panes.dividers((100, 30))[0].rect.col, 52);
+        assert_tiles(&panes, (100, 30));
+    }
+
+    #[test]
+    fn drag_clamps_to_the_minimums() {
+        let mut panes = two();
+        let path = panes.dividers((100, 30))[0].path.clone();
+        panes.drag(&path, 0, (100, 30));
+        assert_eq!(rect_of(&panes, (100, 30), 1).cols, MIN_COLS);
+        panes.drag(&path, 500, (100, 30));
+        assert_eq!(rect_of(&panes, (100, 30), 2).cols, MIN_COLS);
+    }
+
+    #[test]
+    fn drag_is_relative_to_the_split_it_moves() {
+        // 1 | (2 | 3): the inner divider starts at col 51 + 25.
+        let mut panes = two();
+        split(&mut panes, Axis::Right, 3, (100, 30)).unwrap();
+        let inner = panes
+            .dividers((100, 30))
+            .into_iter()
+            .find(|d| d.path == vec![true])
+            .unwrap();
+        panes.drag(&inner.path, 80, (100, 30));
+        assert_eq!(rect_of(&panes, (100, 30), 2), rect(51, 0, 29, 30));
+        assert_eq!(rect_of(&panes, (100, 30), 1).cols, 50);
+        assert_tiles(&panes, (100, 30));
+    }
+
+    #[test]
+    fn dragging_a_stale_path_changes_nothing() {
+        let mut panes = two();
+        let before = panes.rects((100, 30));
+        panes.drag(&vec![true, false], 60, (100, 30));
+        panes.drag(&vec![false], 60, (100, 30));
+        assert_eq!(panes.rects((100, 30)), before);
+    }
+
+    #[test]
+    fn equalize_weights_splits_by_leaf_count() {
+        // 1 | (2 / 3): the left leaf gets a third of the width.
+        let mut panes = three();
+        panes.resize(Dir::Right, 20, (100, 30));
+        panes.resize(Dir::Up, 5, (100, 30));
+        panes.equalize();
+        assert_eq!(rect_of(&panes, (100, 30), 1).cols, 33);
+        let (r2, r3) = (rect_of(&panes, (100, 30), 2), rect_of(&panes, (100, 30), 3));
+        assert!(r2.rows.abs_diff(r3.rows) <= 1);
+        assert_tiles(&panes, (100, 30));
+    }
+
+    #[test]
+    fn equalize_makes_a_row_of_panes_even() {
+        let mut panes = two();
+        split(&mut panes, Axis::Right, 3, (100, 30)).unwrap();
+        split(&mut panes, Axis::Right, 4, (100, 30)).unwrap();
+        panes.resize(Dir::Left, 10, (100, 30));
+        panes.equalize();
+        let widths: Vec<u16> = panes.rects((100, 30)).iter().map(|(_, r)| r.cols).collect();
+        assert_eq!(widths.iter().sum::<u16>() + 3, 100);
+        let (min, max) = (widths.iter().min().unwrap(), widths.iter().max().unwrap());
+        assert!(max - min <= 1, "{widths:?}");
+    }
+
+    #[test]
+    fn equalize_keeps_zoom() {
+        let mut panes = two();
+        panes.toggle_zoom();
+        panes.equalize();
+        assert_eq!(panes.zoomed(), Some(id(2)));
     }
 }
