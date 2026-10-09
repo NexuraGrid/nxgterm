@@ -17,8 +17,8 @@ use nxg_core::selection::{Point, SelectionKind};
 use nxg_core::{CellPixels, TermSize, Terminal, WinSize};
 use nxg_pty::ShellCommand;
 use nxg_render::{
-    CellSize, CpuWindowRenderer, FontError, FontFaces, GpuRenderer, Layout, Overlay, Shape, Style,
-    WindowRenderer,
+    CellSize, CpuWindowRenderer, FontError, FontFaces, GpuRenderer, Layout, Overlay, PaneView,
+    Shape, Style, WindowRenderer,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -1284,7 +1284,7 @@ impl Session {
         });
         match self.renderer.draw_layers(
             bar.as_ref(),
-            &tab.terminal,
+            &[PaneView::single(&tab.terminal)],
             overlay,
             buttons.as_deref().unwrap_or_default(),
         ) {
@@ -1607,11 +1607,11 @@ impl WindowRenderer for Detached {
     fn draw_layers(
         &mut self,
         _header: Option<&Terminal>,
-        terminal: &Terminal,
+        _panes: &[PaneView<'_>],
         _overlay: Option<Overlay<'_>>,
         _shapes: &[Shape],
     ) -> Result<(), RenderError> {
-        self.draw(terminal)
+        Err(RenderError::Fatal("no renderer attached".into()))
     }
 }
 

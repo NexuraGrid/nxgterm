@@ -1,16 +1,19 @@
 //! Records and submits the draw for one frame into any texture view.
 
+use std::ops::Range;
+
 use nxg_core::Terminal;
 
 use super::atlas::{Atlas, Source};
 use super::device::Gpu;
 use super::format;
-use super::image::{self, IMAGE_INSTANCE_SIZE, ImageInstance, ImageTextures};
-use super::instance::{self, AtlasFull, GlyphSlot, INSTANCE_SIZE, Quads};
+use super::image::{self, IMAGE_INSTANCE_SIZE, ImageInstance, ImageTextures, TextureKey};
+use super::instance::{self, AtlasFull, GlyphSlot, INSTANCE_SIZE, Instance};
 use crate::images::{self as placements, ImageDraw};
 use crate::paint::{CellSize, Layout};
+use crate::palette::Palette;
 use crate::shape::Shape;
-use crate::style::{Overlay, Style};
+use crate::style::{Overlay, PaneView, Style};
 
 /// Instance capacity of the first vertex buffer; it grows on demand.
 const INITIAL_INSTANCES: u64 = 4096;
@@ -37,7 +40,15 @@ pub struct Painter {
 
 /// Image draws of one layer, ready to issue: texture key and the index of
 /// its instance in the image buffer.
-type Layer = Vec<(u64, u32)>;
+type Layer = Vec<(TextureKey, u32)>;
+
+/// A pane's image layers (below and above its text) and the pixels they
+/// are clipped to: the pane's own grid.
+struct PaneLayers {
+    below: Layer,
+    above: Layer,
+    clip: (u32, u32, u32, u32),
+}
 
 impl Painter {
     /// Builds the pipeline for targets of `format`.
@@ -169,10 +180,10 @@ impl Painter {
         self.atlas.clear();
     }
 
-    /// Draws `term` into `target` (`width x height` pixels) and submits,
-    /// with the rows of `header` at the top of the grid area, `term` below
-    /// them (see [`Layout::below`]), `overlay` over the grid (see
-    /// [`Layout::at`]) and `shapes` over everything.
+    /// Draws `panes` into `target` (`width x height` pixels) and submits,
+    /// with the rows of `header` at the top of the grid area, the panes
+    /// below them (see [`Layout::below`], [`Layout::at`]), `overlay` over the
+    /// grid and `shapes` over everything.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
@@ -181,40 +192,30 @@ impl Painter {
         width: u32,
         height: u32,
         header: Option<&Terminal>,
-        term: &Terminal,
+        panes: &[PaneView<'_>],
         overlay: Option<Overlay<'_>>,
         shapes: &[Shape],
     ) {
         let rows = header.map_or(0, |header| header.size().rows());
-        let layout = self.style.layout().below(rows);
+        let grid = self.style.layout().below(rows);
         let Frame {
-            quads: Quads {
-                instances,
-                backgrounds,
-            },
-            term_quads,
-        } = self.build(&gpu.queue, header, term, overlay, shapes);
+            quads: instances,
+            panes: ranges,
+            tail_start,
+        } = self.build(&gpu.queue, header, panes, overlay, shapes);
         let bytes = instance::to_bytes(&instances);
         if bytes.len() as u64 > self.instances.size() {
             let size = (bytes.len() as u64).next_power_of_two();
             self.instances = instance_buffer(&gpu.device, size);
         }
         gpu.queue.write_buffer(&self.instances, 0, &bytes);
-        let (below, above, image_bytes) = self.image_layers(gpu, term, layout);
+        let (layers, image_bytes) = self.image_layers(gpu, panes, grid, (width, height));
         if image_bytes.len() as u64 > self.image_instances.size() {
             let size = (image_bytes.len() as u64).next_power_of_two();
             self.image_instances = instance_buffer(&gpu.device, size);
         }
         gpu.queue
             .write_buffer(&self.image_instances, 0, &image_bytes);
-        // Images are clipped to the grid area (the padding stays clear).
-        let (cx, cy, cw, ch) = placements::grid_clip(term, layout);
-        let scissor = (
-            cx.min(width),
-            cy.min(height),
-            cw.min(width.saturating_sub(cx)),
-            ch.min(height.saturating_sub(cy)),
-        );
         let mut globals = Vec::with_capacity(16);
         globals.extend_from_slice(&(width as f32).to_ne_bytes());
         globals.extend_from_slice(&(height as f32).to_ne_bytes());
@@ -248,7 +249,7 @@ impl Painter {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            let quads = |pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>| {
+            let quads = |pass: &mut wgpu::RenderPass<'_>, range: Range<u32>| {
                 if !range.is_empty() {
                     // Undo the image layer's scissor: glyphs may overhang.
                     pass.set_scissor_rect(0, 0, width, height);
@@ -258,50 +259,71 @@ impl Painter {
                     pass.draw(0..4, range);
                 }
             };
-            let total = term_quads as u32;
-            quads(&mut pass, 0..backgrounds as u32);
-            self.draw_images(&mut pass, &below, scissor, &image_bytes);
-            quads(&mut pass, backgrounds as u32..total);
-            self.draw_images(&mut pass, &above, scissor, &image_bytes);
+            // Per pane: backgrounds, images below, text, images above. Each
+            // pane's images are clipped to its own grid.
+            for (quad_ranges, layers) in ranges.iter().zip(&layers) {
+                quads(&mut pass, quad_ranges.backgrounds.clone());
+                self.draw_images(&mut pass, &layers.below, layers.clip, &image_bytes);
+                quads(&mut pass, quad_ranges.text.clone());
+                self.draw_images(&mut pass, &layers.above, layers.clip, &image_bytes);
+            }
             // The header does not overlap the grid; the overlay and then
             // the shapes go over everything. None of them has images.
-            quads(&mut pass, total..instances.len() as u32);
+            quads(&mut pass, tail_start as u32..instances.len() as u32);
         }
         gpu.queue.submit([encoder.finish()]);
-        self.textures.prune(term);
+        let visible: Vec<_> = panes.iter().map(|pane| (pane.id, pane.terminal)).collect();
+        self.textures.prune(&visible);
     }
 
     /// Uploads the textures the frame needs and builds the image instances
-    /// for the layers below and above the text.
+    /// for the layers below and above the text of each pane, clipped to the
+    /// pane's grid within a `width x height` target.
     fn image_layers(
         &mut self,
         gpu: &Gpu,
-        term: &Terminal,
-        layout: Layout,
-    ) -> (Layer, Layer, Vec<u8>) {
+        panes: &[PaneView<'_>],
+        grid: Layout,
+        (width, height): (u32, u32),
+    ) -> (Vec<PaneLayers>, Vec<u8>) {
         let mut instances: Vec<ImageInstance> = Vec::new();
-        let mut layer = |draws: Vec<ImageDraw>, instances: &mut Vec<ImageInstance>| -> Layer {
-            let mut out = Vec::new();
-            for draw in draws {
-                let Some(image) = term.images().image(draw.key) else {
-                    continue;
-                };
-                let texture = self.textures.get_or_upload(
-                    &gpu.device,
-                    &gpu.queue,
-                    &self.layout,
-                    &self.globals,
-                    image,
-                );
-                let size = (image.width, image.height);
-                out.push((draw.key, instances.len() as u32));
-                instances.push(image::instance(&draw, size, texture.size));
-            }
-            out
-        };
-        let below = layer(placements::draws(term, layout, false), &mut instances);
-        let above = layer(placements::draws(term, layout, true), &mut instances);
-        (below, above, image::to_bytes(&instances))
+        let mut out = Vec::with_capacity(panes.len());
+        for pane in panes {
+            let term = pane.terminal;
+            let layout = grid.at(pane.col, pane.row);
+            let mut layer = |draws: Vec<ImageDraw>, instances: &mut Vec<ImageInstance>| -> Layer {
+                let mut out = Vec::new();
+                for draw in draws {
+                    let Some(image) = term.images().image(draw.key) else {
+                        continue;
+                    };
+                    let texture = self.textures.get_or_upload(
+                        &gpu.device,
+                        &gpu.queue,
+                        &self.layout,
+                        &self.globals,
+                        pane.id,
+                        image,
+                    );
+                    let size = (image.width, image.height);
+                    out.push(((pane.id, draw.key), instances.len() as u32));
+                    instances.push(image::instance(&draw, size, texture.size));
+                }
+                out
+            };
+            let below = layer(placements::draws(term, layout, false), &mut instances);
+            let above = layer(placements::draws(term, layout, true), &mut instances);
+            // The padding and the neighbours stay clear.
+            let (cx, cy, cw, ch) = placements::grid_clip(term, layout);
+            let clip = (
+                cx.min(width),
+                cy.min(height),
+                cw.min(width.saturating_sub(cx)),
+                ch.min(height.saturating_sub(cy)),
+            );
+            out.push(PaneLayers { below, above, clip });
+        }
+        (out, image::to_bytes(&instances))
     }
 
     /// Draws one image layer, each placement with its own texture.
@@ -326,48 +348,33 @@ impl Painter {
         }
     }
 
-    /// Builds the frame's instances: those of `term`, then those of
-    /// `header`, of `overlay` and of `shapes`. The overlay, and the header of a
-    /// translucent window, get opaque default backgrounds. When the atlas
+    /// Builds the frame's instances (see [`frame_quads`]). When the atlas
     /// fills up it is reset and the frame rebuilt once, dropping glyphs
     /// that still do not fit.
     fn build(
         &mut self,
         queue: &wgpu::Queue,
         header: Option<&Terminal>,
-        term: &Terminal,
+        panes: &[PaneView<'_>],
         overlay: Option<Overlay<'_>>,
         shapes: &[Shape],
     ) -> Frame {
         let layout = self.style.layout();
-        let rows = header.map_or(0, |header| header.size().rows());
-        let grid = layout.below(rows);
         let baseline = self.style.font.baseline();
         let opaque_header = self.background_alpha() < 1.0;
         let (atlas, font, palette) = (&mut self.atlas, &mut self.style.font, &self.style.palette);
         let all = |slot: &mut dyn FnMut(Source<'_>) -> Result<Option<GlyphSlot>, AtlasFull>| {
-            let glyph = &mut |ch, bold| slot(Source::Glyph(ch, bold));
-            let mut quads = instance::build(term, palette, grid, baseline, false, &mut *glyph)?;
-            let term_quads = quads.instances.len();
-            if let Some(header) = header {
-                let extra = instance::build(
-                    header,
-                    palette,
-                    layout,
-                    baseline,
-                    opaque_header,
-                    &mut *glyph,
-                )?;
-                quads.instances.extend(extra.instances);
-            }
-            if let Some(Overlay { terminal, col, row }) = overlay {
-                let at = grid.at(col, row);
-                let extra = instance::build(terminal, palette, at, baseline, true, &mut *glyph)?;
-                quads.instances.extend(extra.instances);
-            }
-            let extra = instance::shapes(shapes, |mask| slot(Source::Mask(mask)))?;
-            quads.instances.extend(extra);
-            Ok(Frame { quads, term_quads })
+            frame_quads(
+                panes,
+                header,
+                overlay,
+                shapes,
+                palette,
+                layout,
+                baseline,
+                opaque_header,
+                slot,
+            )
         };
         let first = all(&mut |source| atlas.slot(queue, font, source));
         first.unwrap_or_else(|_: AtlasFull| {
@@ -378,12 +385,82 @@ impl Painter {
     }
 }
 
-/// One frame's quads: those of the grid first (`term_quads` of them),
-/// then the header's and the overlay's.
+/// One frame's quads: those of each pane in order, then the tail
+/// (`quads[tail_start..]`): the header, the overlay and the shapes. The
+/// overlay, and the header of a translucent window, get opaque default
+/// backgrounds.
 #[derive(Debug, Default)]
 struct Frame {
-    quads: Quads,
-    term_quads: usize,
+    quads: Vec<Instance>,
+    panes: Vec<PaneQuads>,
+    tail_start: usize,
+}
+
+/// Where a pane's quads sit in [`Frame::quads`]: its cell backgrounds, then
+/// its cursor and glyphs, so images with `z < 0` can go between them.
+#[derive(Debug)]
+struct PaneQuads {
+    backgrounds: Range<u32>,
+    text: Range<u32>,
+}
+
+/// The quads of a frame whose panes sit below `header` at `layout` (the
+/// window-level layout). `slot` returns the atlas slot of a glyph or mask.
+#[allow(clippy::too_many_arguments)]
+fn frame_quads(
+    panes: &[PaneView<'_>],
+    header: Option<&Terminal>,
+    overlay: Option<Overlay<'_>>,
+    shapes: &[Shape],
+    palette: &Palette,
+    layout: Layout,
+    baseline: i32,
+    opaque_header: bool,
+    slot: &mut dyn FnMut(Source<'_>) -> Result<Option<GlyphSlot>, AtlasFull>,
+) -> Result<Frame, AtlasFull> {
+    let grid = layout.below(header.map_or(0, |header| header.size().rows()));
+    let glyph = &mut |ch, bold| slot(Source::Glyph(ch, bold));
+    let mut frame = Frame::default();
+    for pane in panes {
+        let at = grid.at(pane.col, pane.row);
+        let quads = instance::build_look(
+            pane.terminal,
+            palette,
+            at,
+            baseline,
+            false,
+            pane.look(),
+            &mut *glyph,
+        )?;
+        let start = frame.quads.len() as u32;
+        let split = start + quads.backgrounds as u32;
+        frame.panes.push(PaneQuads {
+            backgrounds: start..split,
+            text: split..start + quads.instances.len() as u32,
+        });
+        frame.quads.extend(quads.instances);
+    }
+    frame.tail_start = frame.quads.len();
+    if let Some(header) = header {
+        let extra = instance::build(
+            header,
+            palette,
+            layout,
+            baseline,
+            opaque_header,
+            &mut *glyph,
+        )?;
+        frame.quads.extend(extra.instances);
+    }
+    if let Some(Overlay { terminal, col, row }) = overlay {
+        let at = grid.at(col, row);
+        let extra = instance::build(terminal, palette, at, baseline, true, &mut *glyph)?;
+        frame.quads.extend(extra.instances);
+    }
+    frame
+        .quads
+        .extend(instance::shapes(shapes, |mask| slot(Source::Mask(mask)))?);
+    Ok(frame)
 }
 
 /// The image pipeline: same bind group layout as the glyph pipeline
@@ -466,4 +543,86 @@ fn instance_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::palette::{Palette, rgb};
+    use crate::style::PaneView;
+    use nxg_core::TermSize;
+
+    const CELL: CellSize = CellSize {
+        width: 10,
+        height: 20,
+    };
+    const LAYOUT: Layout = Layout {
+        cell: CELL,
+        padding: 0,
+        left: 0,
+        top: 0,
+    };
+
+    fn term(input: &[u8]) -> Terminal {
+        let mut term = Terminal::new(TermSize::new(2, 1).unwrap());
+        term.advance(input);
+        term
+    }
+
+    fn slot(source: Source<'_>) -> Result<Option<GlyphSlot>, AtlasFull> {
+        let uv = match source {
+            Source::Glyph(ch, _) => [ch as u32, 0],
+            Source::Mask(_) => [0, 0],
+        };
+        Ok(Some(GlyphSlot {
+            xmin: 0,
+            ymin: 0,
+            width: 4,
+            height: 6,
+            uv,
+        }))
+    }
+
+    #[test]
+    fn each_pane_records_its_background_and_text_ranges_before_the_tail() {
+        let left = term(b"\x1b[?25l\x1b[41ma ");
+        let right = term(b"\x1b[?25l\x1b[44mb");
+        let pane = |id, terminal, col| PaneView {
+            id,
+            col,
+            ..PaneView::single(terminal)
+        };
+        let panes = [pane(1, &left, 0), pane(2, &right, 3)];
+        let shapes = [Shape::Rect {
+            x: 20,
+            y: 0,
+            width: 1,
+            height: 20,
+            color: rgb(0, 255, 0),
+        }];
+        let mut slot = slot;
+        let frame = frame_quads(
+            &panes,
+            None,
+            None,
+            &shapes,
+            &Palette::default(),
+            LAYOUT,
+            15,
+            false,
+            &mut slot,
+        )
+        .unwrap();
+        // Left: two red cells, one glyph. Right: one blue cell, one glyph.
+        let ranges: Vec<_> = frame
+            .panes
+            .iter()
+            .map(|p| (p.backgrounds.clone(), p.text.clone()))
+            .collect();
+        assert_eq!(ranges, [(0..2, 2..3), (3..4, 4..5)]);
+        assert_eq!(frame.tail_start, 5);
+        assert_eq!(frame.quads.len(), 6, "the divider shape is the tail");
+        assert_eq!(frame.quads[3].pos, [30, 0], "right pane at column 3");
+        assert_eq!(frame.quads[5].pos, [20, 0]);
+    }
 }
