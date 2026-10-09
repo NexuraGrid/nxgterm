@@ -43,14 +43,14 @@ Decision needed: confirm Feature Branch Chain (tracker `feat/split-panes` draft/
 
 ## S2: N-pane renderer (`crates/nxg-render`)
 
-- [ ] 2.1 RED: `images::draws`/`grid_clip` at `layout.left > 0` place/clip at the right pixel (spec "Image in the right pane", "Clipped at pane edge"); GREEN: add `left` to dest.x and clip x. Includes "Origin pane unchanged" regression.
-- [ ] 2.2 RED+GREEN: `paint::dim(color, background, amount)` (0 is identity, 1 reaches background) in `paint.rs`.
-- [ ] 2.3 RED+GREEN: `PaneView` + `draw_layers(header, panes, overlay, shapes)` in `style.rs`; `Renderer::draw` wraps one origin pane; update `Detached` in `app.rs`.
-- [ ] 2.4 RED: CPU two-pane test (cells only inside rects, divider `Shape::Rect` visible, single pane equals old frame); GREEN: pane loop in `renderer.rs::render_layers` and `cpu_window.rs`.
-- [ ] 2.5 RED+GREEN: unfocused hollow cursor (1 px, 2 px at cell height >= 24; none when hidden; glyph keeps fg) and `dim` applied to backgrounds and glyph fg, CPU and `instance::build`.
-- [ ] 2.6 RED: GPU `Frame` per-pane ranges/`tail_start` unit test; GREEN: refactor `gpu/painter.rs` (`PaneQuads`, per-pane images below/above, scissor via `grid_clip`, tail draw).
-- [ ] 2.7 RED: image-cache key test, two terminals both with image key 1 must keep distinct textures; GREEN: key `(pane_id, image_key)` and `textures.prune(&[(id, &Terminal)])` in `gpu/image.rs` (D5).
-- [ ] 2.8 Offscreen GPU vs CPU two-pane + image scene (tolerance 2; skips without adapter) in `gpu/tests.rs`.
+- [x] 2.1 RED: `images::draws`/`grid_clip` at `layout.left > 0` place/clip at the right pixel (spec "Image in the right pane", "Clipped at pane edge"); GREEN: add `left` to dest.x and clip x. Includes "Origin pane unchanged" regression.
+- [x] 2.2 RED+GREEN: `paint::dim(color, background, amount)` (0 is identity, 1 reaches background) in `paint.rs`.
+- [x] 2.3 RED+GREEN: `PaneView` + `draw_layers(header, panes, overlay, shapes)` in `style.rs`; `Renderer::draw` wraps one origin pane; update `Detached` in `app.rs`.
+- [x] 2.4 RED: CPU two-pane test (cells only inside rects, divider `Shape::Rect` visible, single pane equals old frame); GREEN: pane loop in `renderer.rs::render_layers` and `cpu_window.rs`.
+- [x] 2.5 RED+GREEN: unfocused hollow cursor (1 px, 2 px at cell height >= 24; none when hidden; glyph keeps fg) and `dim` applied to backgrounds and glyph fg, CPU and `instance::build`.
+- [x] 2.6 RED: GPU `Frame` per-pane ranges/`tail_start` unit test; GREEN: refactor `gpu/painter.rs` (`PaneQuads`, per-pane images below/above, scissor via `grid_clip`, tail draw).
+- [x] 2.7 RED: image-cache key test, two terminals both with image key 1 must keep distinct textures; GREEN: key `(pane_id, image_key)` and `textures.prune(&[(id, &Terminal)])` in `gpu/image.rs` (D5).
+- [x] 2.8 Offscreen GPU vs CPU two-pane + image scene (tolerance 2; skips without adapter) in `gpu/tests.rs`.
 
 ## S3: App refactor, one leaf per tab (`crates/nxgterm/src`)
 
