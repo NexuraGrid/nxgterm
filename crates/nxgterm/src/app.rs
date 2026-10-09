@@ -579,7 +579,7 @@ impl App {
             | Action::NextTab
             | Action::PreviousTab
             | Action::GotoTab(_)
-            // Handled above (`tab::command`), or by S5.
+            // Handled above (`tab::command`).
             | Action::SplitRight
             | Action::SplitDown
             | Action::FocusPaneLeft
@@ -617,6 +617,16 @@ impl App {
             PaneCommand::Close => {
                 if tab::close_focused(&mut session.tabs) != Exit::Stale {
                     session.tab_switched();
+                }
+            }
+            PaneCommand::Zoom => {
+                if tab::zoom_active(&mut session.tabs) {
+                    session.panes_changed();
+                }
+            }
+            PaneCommand::Equalize => {
+                if tab::equalize_active(&mut session.tabs, area) {
+                    session.panes_changed();
                 }
             }
         }

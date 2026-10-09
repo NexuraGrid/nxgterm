@@ -302,7 +302,6 @@ impl<T> Node<T> {
         }
     }
 
-    #[allow(dead_code)] // Wired in S5 (mouse, zoom, equalize).
     fn leaf_count(&self) -> u32 {
         match self {
             Node::Leaf(..) => 1,
@@ -329,7 +328,6 @@ impl<T> Node<T> {
         }
     }
 
-    #[allow(dead_code)] // Wired in S5 (mouse, zoom, equalize).
     fn equalize(&mut self) {
         if let Node::Split { ratio, a, b, .. } = self {
             let (first, second) = (a.leaf_count(), b.leaf_count());
@@ -483,7 +481,6 @@ impl<T> Panes<T> {
 
     /// Zooms the focused pane, or restores the layout when zoomed. A
     /// single pane has nothing to zoom.
-    #[allow(dead_code)] // Wired in S5 (mouse, zoom, equalize).
     pub fn toggle_zoom(&mut self) {
         self.zoomed = match self.zoomed {
             Some(_) => None,
@@ -648,7 +645,6 @@ impl<T> Panes<T> {
 
     /// Gives every pane the same share: each split's ratio follows its
     /// sides' leaf counts.
-    #[allow(dead_code)] // Wired in S5 (mouse, zoom, equalize).
     pub fn equalize(&mut self) {
         if let Some(root) = self.root.as_mut() {
             root.equalize();

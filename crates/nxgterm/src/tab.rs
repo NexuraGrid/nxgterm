@@ -155,6 +155,8 @@ pub enum PaneCommand {
     Focus(Dir),
     Resize(Dir),
     Close,
+    Zoom,
+    Equalize,
 }
 
 /// The pane command `action` stands for.
@@ -171,6 +173,8 @@ pub fn command(action: Action) -> Option<PaneCommand> {
         Action::ResizePaneUp => PaneCommand::Resize(Dir::Up),
         Action::ResizePaneDown => PaneCommand::Resize(Dir::Down),
         Action::ClosePane => PaneCommand::Close,
+        Action::ZoomPane => PaneCommand::Zoom,
+        Action::EqualizePanes => PaneCommand::Equalize,
         _ => return None,
     })
 }
@@ -212,6 +216,28 @@ pub fn resize_active<T>(tabs: &mut Tabs<Tab<T>>, dir: Dir, area: TermSize) -> bo
     let area = (area.cols(), area.rows());
     tabs.active_mut()
         .is_some_and(|tab| tab.panes.resize(dir, resize_step(dir), area))
+}
+
+/// Zooms the focused pane of the active tab, or restores the layout;
+/// `false` when there is nothing to zoom (no tab, or a single pane).
+pub fn zoom_active<T>(tabs: &mut Tabs<Tab<T>>) -> bool {
+    let Some(tab) = tabs.active_mut() else {
+        return false;
+    };
+    let before = tab.panes.zoomed();
+    tab.panes.toggle_zoom();
+    tab.panes.zoomed() != before
+}
+
+/// Gives the panes of the active tab equal shares; whether any moved.
+pub fn equalize_active<T>(tabs: &mut Tabs<Tab<T>>, area: TermSize) -> bool {
+    let area = (area.cols(), area.rows());
+    let Some(tab) = tabs.active_mut() else {
+        return false;
+    };
+    let before = tab.panes.rects(area);
+    tab.panes.equalize();
+    tab.panes.rects(area) != before
 }
 
 /// Closes the focused pane of the active tab like an exit of its child
@@ -448,7 +474,43 @@ mod tests {
         );
         assert_eq!(map(Action::ClosePane), Some(PaneCommand::Close));
         assert_eq!(map(Action::NewTab), None, "not a pane action");
-        assert_eq!(map(Action::ZoomPane), None, "zoom and equalize are S5");
+        assert_eq!(map(Action::ZoomPane), Some(PaneCommand::Zoom));
+        assert_eq!(map(Action::EqualizePanes), Some(PaneCommand::Equalize));
+    }
+
+    #[test]
+    fn zoom_fills_the_area_and_the_layout_returns_with_the_same_sizes() {
+        let (mut tabs, mut ids) = (Tabs::new(), PaneIds::default());
+        open(&mut tabs, &mut ids, 1);
+        split(&mut tabs, &mut ids, 2);
+        let before = placements(tabs.active().unwrap(), size());
+        assert!(zoom_active(&mut tabs));
+        let zoomed = placements(tabs.active().unwrap(), size());
+        assert_eq!(zoomed.len(), 1);
+        assert_eq!(zoomed[0].rect.cols, 100);
+        assert!(zoom_active(&mut tabs), "the second toggle restores");
+        assert_eq!(placements(tabs.active().unwrap(), size()), before);
+    }
+
+    #[test]
+    fn a_single_pane_has_nothing_to_zoom() {
+        let (mut tabs, mut ids) = (Tabs::new(), PaneIds::default());
+        open(&mut tabs, &mut ids, 1);
+        assert!(!zoom_active(&mut tabs));
+        assert!(!zoom_active(&mut Tabs::<Tab<u32>>::new()), "no tab");
+    }
+
+    #[test]
+    fn equalize_undoes_a_resize_and_reports_whether_anything_moved() {
+        let (mut tabs, mut ids) = (Tabs::new(), PaneIds::default());
+        open(&mut tabs, &mut ids, 1);
+        split(&mut tabs, &mut ids, 2);
+        let equal = placements(tabs.active().unwrap(), size());
+        assert!(!equalize_active(&mut tabs, size()), "already equal");
+        assert!(resize_active(&mut tabs, Dir::Right, size()));
+        assert_ne!(placements(tabs.active().unwrap(), size()), equal);
+        assert!(equalize_active(&mut tabs, size()));
+        assert_eq!(placements(tabs.active().unwrap(), size()), equal);
     }
 
     #[test]
