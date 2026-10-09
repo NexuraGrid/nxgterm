@@ -14,6 +14,9 @@ mod command_palette;
 mod icon;
 mod keys;
 mod mouse;
+// S3 wires the pane tree into the app; until then nothing uses it.
+#[allow(dead_code)]
+mod panes;
 mod reload;
 mod tab_bar;
 mod tabs;
