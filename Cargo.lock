@@ -1212,7 +1212,7 @@ dependencies = [
 
 [[package]]
 name = "nxg-config"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "serde",
  "toml",
@@ -1220,7 +1220,7 @@ dependencies = [
 
 [[package]]
 name = "nxg-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "flate2",
  "png",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "nxg-pty"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "nxg-core",
  "portable-pty",
@@ -1238,7 +1238,7 @@ dependencies = [
 
 [[package]]
 name = "nxg-render"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "fontdb",
  "fontdue",
@@ -1252,7 +1252,7 @@ dependencies = [
 
 [[package]]
 name = "nxgterm"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arboard",
  "notify",

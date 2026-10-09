@@ -303,10 +303,14 @@ the defaults are used instead.
 | `Ctrl+Shift+T` / `Ctrl+Shift+W` | `new_tab` / `close_tab` |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | `next_tab` / `previous_tab` |
 | `Alt+1` ... `Alt+9` | `goto_tab_1` ... `goto_tab_9` |
+| `Ctrl+Shift+O` / `Ctrl+Shift+E` | `split_right` / `split_down` |
+| `Ctrl+Alt+Arrows` (`Cmd+Alt` on macOS) | `focus_pane_left` ... `focus_pane_down` |
+| `Ctrl+Shift+Alt+Arrows` (`Cmd+Shift+Alt` on macOS) | `resize_pane_left` ... `resize_pane_down` |
+| `Ctrl+Shift+X` / `Ctrl+Shift+Enter` | `close_pane` / `zoom_pane` |
 | `Ctrl+Shift+P` | `command_palette`: list and run every action |
 | `Ctrl+Shift+C` (`Cmd+C` on macOS) | `copy`: the selection to the clipboard |
 | `Ctrl+Shift+V` (`Cmd+V` on macOS), `Shift+Insert` | `paste`: the clipboard into the shell |
-| (unbound) | `select_all`, `reload_config` |
+| (unbound) | `select_all`, `reload_config`, `equalize_panes` |
 
 Bound keys are handled by the terminal and never reach the shell (the
 scrolling keys still do in full-screen programs, which have no history).
@@ -384,6 +388,27 @@ some desktop features are gone: the Windows 11 snap layouts shown when
 hovering the maximize button (dragging to a screen edge still snaps, and
 Win+arrow keys work) and, on Linux, the window manager's title bar menu.
 
+### Split panes
+
+A tab can be split into panes, each running its own shell on its own pty.
+`Ctrl+Shift+O` splits the focused pane to the right and `Ctrl+Shift+E`
+splits it down; splits nest freely. The new pane starts in the directory
+nxgterm was started in, like a new tab. Panes are separated by a one-cell
+divider drawn as a thin line.
+
+Click a pane or use `Ctrl+Alt+Arrows` to focus it; keys, paste, copy and the
+command palette go to the focused pane. Panes without focus show a hollow
+cursor and fade toward the background (`panes.inactive_dim`). Drag a divider
+or use `Ctrl+Shift+Alt+Arrows` to resize; `equalize_panes` resets every split
+to equal halves. `Ctrl+Shift+Enter` zooms the focused pane to fill the tab
+and back, while the others keep running. A pane closes when its program
+exits or with `Ctrl+Shift+X`, and its space goes to its neighbour; closing
+the last pane closes the tab.
+
+On KDE and GNOME `Ctrl+Alt+Arrows` may switch workspaces; rebind the
+`focus_pane_*` actions in `[keybindings]` if they do. The `[panes]` section
+sets the divider color and width and the dim amount, and reloads live.
+
 ### Scrolling and the mouse
 
 | Input | Action |
@@ -447,6 +472,8 @@ winpty (Windows Server 2016) does not pass images through either.
     window icon ✅
 12. 0.6.0: integrated title bar with tabs (default), window opacity and
     blur, Catppuccin Mocha flavor for Yazi ✅
+13. 0.7.0: split panes, font family lists, vector title bar buttons, theme
+    files and config imports ✅
 
 Planned work is tracked in
 [`openspec/RECOMMENDATIONS.md`](openspec/RECOMMENDATIONS.md).
