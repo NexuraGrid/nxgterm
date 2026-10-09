@@ -32,14 +32,14 @@ Decision needed: confirm Feature Branch Chain (tracker `feat/split-panes` draft/
 
 ## S1: Pure split tree (`crates/nxgterm/src/panes.rs`)
 
-- [ ] 1.1 RED+GREEN: types (`PaneId`, `Dir`, `Axis`, `CellRect`, MIN consts), `Panes::new`, `get/get_mut/focused/iter/contains`; tests with `Panes<u32>`.
-- [ ] 1.2 RED+GREEN: `rects` geometry (`a + 1 + b == len`, permille rounding, clamp, tiny area never panics).
-- [ ] 1.3 RED+GREEN: `split_with` (spec "Split right", "Split refused when too small": `TooSmall`, factory `Err` leaves tree unchanged, new pane focused, unzooms).
-- [ ] 1.4 RED+GREEN: `close` (sibling promoted, focus to nearest leaf, `Last/Removed/Unknown`, clears zoom; spec "Shell exits in a split").
-- [ ] 1.5 RED+GREEN: `focus_dir` on asymmetric nests (largest overlap, then tree order), `set_focus`.
-- [ ] 1.6 RED+GREEN: `resize` (innermost matching-axis divider, minimum clamp), `drag`, `equalize` (leaf-count weights).
-- [ ] 1.7 RED+GREEN: `toggle_zoom` (single leaf no-op; spec "Zoom toggle" restores sizes), `dividers`, `hit`.
-- [ ] 1.8 Register `mod panes;` in `main.rs`; clippy clean (allow dead code until S3).
+- [x] 1.1 RED+GREEN: types (`PaneId`, `Dir`, `Axis`, `CellRect`, MIN consts), `Panes::new`, `get/get_mut/focused/iter/contains`; tests with `Panes<u32>`.
+- [x] 1.2 RED+GREEN: `rects` geometry (`a + 1 + b == len`, permille rounding, clamp, tiny area never panics).
+- [x] 1.3 RED+GREEN: `split_with` (spec "Split right", "Split refused when too small": `TooSmall`, factory `Err` leaves tree unchanged, new pane focused, unzooms).
+- [x] 1.4 RED+GREEN: `close` (sibling promoted, focus to nearest leaf, `Last/Removed/Unknown`, clears zoom; spec "Shell exits in a split").
+- [x] 1.5 RED+GREEN: `focus_dir` on asymmetric nests (largest overlap, then tree order), `set_focus`.
+- [x] 1.6 RED+GREEN: `resize` (innermost matching-axis divider, minimum clamp), `drag`, `equalize` (leaf-count weights).
+- [x] 1.7 RED+GREEN: `toggle_zoom` (single leaf no-op; spec "Zoom toggle" restores sizes), `dividers`, `hit`.
+- [x] 1.8 Register `mod panes;` in `main.rs`; clippy clean (allow dead code until S3).
 
 ## S2: N-pane renderer (`crates/nxg-render`)
 
