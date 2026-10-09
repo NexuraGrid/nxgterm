@@ -12,7 +12,7 @@ use super::device::Gpu;
 use super::format;
 use super::painter::Painter;
 use crate::shape::Shape;
-use crate::style::{Overlay, Style, WindowRenderer};
+use crate::style::{Overlay, PaneView, Style, WindowRenderer};
 
 /// GPU renderer presenting to a window surface.
 #[derive(Debug)]
@@ -112,7 +112,7 @@ impl Renderer for GpuRenderer {
     }
 
     fn draw(&mut self, terminal: &Terminal) -> Result<(), RenderError> {
-        self.draw_layers(None, terminal, None, &[])
+        self.draw_layers(None, &[PaneView::single(terminal)], None, &[])
     }
 }
 
@@ -128,7 +128,7 @@ impl WindowRenderer for GpuRenderer {
     fn draw_layers(
         &mut self,
         header: Option<&Terminal>,
-        terminal: &Terminal,
+        panes: &[PaneView<'_>],
         overlay: Option<Overlay<'_>>,
         shapes: &[Shape],
     ) -> Result<(), RenderError> {
@@ -138,6 +138,10 @@ impl WindowRenderer for GpuRenderer {
         if !self.visible() {
             return Ok(()); // Minimized.
         }
+        // The painter still draws one terminal; panes follow in the next change.
+        let Some(terminal) = panes.first().map(|pane| pane.terminal) else {
+            return Ok(());
+        };
         let (frame, suboptimal) = match self.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(frame) => (frame, false),
             CurrentSurfaceTexture::Suboptimal(frame) => (frame, true),

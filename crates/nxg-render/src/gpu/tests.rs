@@ -17,7 +17,7 @@ use crate::images::tests::encode_base64;
 use crate::palette::{Palette, rgb};
 use crate::renderer::CpuRenderer;
 use crate::shape::{Mask, Segment, Shape};
-use crate::style::{Overlay, Style};
+use crate::style::{Overlay, PaneView, Style};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -222,7 +222,7 @@ fn gpu_output_matches_cpu_renderer() {
     let mut expected = vec![0; (w * h) as usize];
     cpu.render_layers(
         header,
-        &term,
+        &[PaneView::single(&term)],
         overlay,
         &shapes,
         &mut Frame::new(&mut expected, w, h).unwrap(),
