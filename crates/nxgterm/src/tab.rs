@@ -47,6 +47,16 @@ impl<T> Tab<T> {
         let (id, _) = self.panes.focused();
         self.panes.get_mut(id).expect("focus is always a leaf")
     }
+
+    /// Runs `f` on every pane.
+    pub fn each_mut(&mut self, mut f: impl FnMut(&mut T)) {
+        let ids: Vec<PaneId> = self.panes.iter().map(|(id, _)| id).collect();
+        for id in ids {
+            if let Some(pane) = self.panes.get_mut(id) {
+                f(pane);
+            }
+        }
+    }
 }
 
 /// A pane of the visible layout.
@@ -70,6 +80,17 @@ pub fn placements<T>(tab: &Tab<T>, area: TermSize) -> Vec<Placement> {
             focused: id == focus,
         })
         .collect()
+}
+
+/// The focused pane of the active tab: where input, paste and the
+/// pointer go. Free functions (not a method of the session) so callers
+/// keep borrowing the other fields of the session.
+pub fn focused<T>(tabs: &Tabs<Tab<T>>) -> Option<&T> {
+    tabs.active().map(Tab::focused)
+}
+
+pub fn focused_mut<T>(tabs: &mut Tabs<Tab<T>>) -> Option<&mut T> {
+    tabs.active_mut().map(Tab::focused_mut)
 }
 
 /// Position of the tab that holds pane `id`.
@@ -290,5 +311,32 @@ mod tests {
             Exit::Stale,
             "a second exit is dropped"
         );
+    }
+    #[test]
+    fn the_active_tab_gives_its_focused_pane() {
+        let (mut tabs, mut ids) = (Tabs::new(), PaneIds::default());
+        assert!(focused(&tabs).is_none(), "no tab, no pane");
+        assert!(focused_mut(&mut tabs).is_none());
+        open(&mut tabs, &mut ids, 1);
+        open(&mut tabs, &mut ids, 2);
+        split(&mut tabs, &mut ids, 3);
+        assert_eq!(focused(&tabs), Some(&3));
+        *focused_mut(&mut tabs).unwrap() = 4;
+        assert_eq!(focused(&tabs), Some(&4));
+        tabs.select(0);
+        assert_eq!(focused(&tabs), Some(&1), "each tab has its own focus");
+    }
+
+    #[test]
+    fn each_mut_visits_every_pane_of_the_tab() {
+        let (mut tabs, mut ids) = (Tabs::new(), PaneIds::default());
+        open(&mut tabs, &mut ids, 1);
+        split(&mut tabs, &mut ids, 2);
+        split(&mut tabs, &mut ids, 3);
+        let tab = tabs.active_mut().unwrap();
+        tab.each_mut(|value| *value *= 10);
+        let values: Vec<u32> = tab.panes.iter().map(|(_, value)| *value).collect();
+        assert_eq!(values.len(), 3);
+        assert!(values.contains(&10) && values.contains(&20) && values.contains(&30));
     }
 }
