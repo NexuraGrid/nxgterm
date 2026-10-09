@@ -55,7 +55,7 @@ focused pane.
 ### Requirement: Resize, equalize and zoom
 
 `resize_*` actions MUST move the nearest divider in that direction by one
-cell, keeping both panes at least the minimum size. `equalize_panes` MUST
+step (2 columns horizontally, 1 row vertically), keeping both panes at least the minimum size. `equalize_panes` MUST
 reset every split to equal halves. `zoom_pane` MUST toggle the focused pane to
 fill the content area while the others keep their shells running; any split,
 close or focus change MUST end zoom.

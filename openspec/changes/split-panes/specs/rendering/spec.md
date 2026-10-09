@@ -29,7 +29,9 @@ width. A single pane at the origin MUST render exactly as before.
 ### Requirement: Inactive pane treatment
 
 An unfocused pane MUST show a hollow cursor outline instead of a solid block
-(none when the cursor is hidden) and MUST be dimmed by `panes.inactive_dim`.
+(none when the cursor is hidden), and its text and backgrounds MUST be
+dimmed by `panes.inactive_dim` (inline images and the cursor outline are not
+dimmed).
 The focused pane MUST NOT be dimmed. A dim of 0 MUST disable dimming.
 
 #### Scenario: Hollow cursor
