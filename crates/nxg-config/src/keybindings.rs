@@ -16,6 +16,7 @@ pub enum Category {
     Scrollback,
     Clipboard,
     Tabs,
+    Panes,
     General,
 }
 
@@ -26,6 +27,7 @@ impl Category {
             Self::Scrollback => "Scrollback",
             Self::Clipboard => "Clipboard",
             Self::Tabs => "Tabs",
+            Self::Panes => "Panes",
             Self::General => "General",
         }
     }
@@ -51,12 +53,25 @@ pub enum Action {
     PreviousTab,
     /// Tab number 1-9, named `goto_tab_1`..`goto_tab_9`.
     GotoTab(u8),
+    SplitRight,
+    SplitDown,
+    FocusPaneLeft,
+    FocusPaneRight,
+    FocusPaneUp,
+    FocusPaneDown,
+    ResizePaneLeft,
+    ResizePaneRight,
+    ResizePaneUp,
+    ResizePaneDown,
+    ClosePane,
+    ZoomPane,
+    EqualizePanes,
     CommandPalette,
     ReloadConfig,
 }
 
 /// Name, title and category of every action, in listing order.
-const ACTIONS: [(Action, &str, &str, Category); 25] = [
+const ACTIONS: [(Action, &str, &str, Category); 38] = [
     (Action::ZoomIn, "zoom_in", "Zoom In", Category::Font),
     (Action::ZoomOut, "zoom_out", "Zoom Out", Category::Font),
     (
@@ -159,6 +174,79 @@ const ACTIONS: [(Action, &str, &str, Category); 25] = [
         "goto_tab_9",
         "Go to Tab 9",
         Category::Tabs,
+    ),
+    (
+        Action::SplitRight,
+        "split_right",
+        "Split Right",
+        Category::Panes,
+    ),
+    (
+        Action::SplitDown,
+        "split_down",
+        "Split Down",
+        Category::Panes,
+    ),
+    (
+        Action::FocusPaneLeft,
+        "focus_pane_left",
+        "Focus Pane Left",
+        Category::Panes,
+    ),
+    (
+        Action::FocusPaneRight,
+        "focus_pane_right",
+        "Focus Pane Right",
+        Category::Panes,
+    ),
+    (
+        Action::FocusPaneUp,
+        "focus_pane_up",
+        "Focus Pane Up",
+        Category::Panes,
+    ),
+    (
+        Action::FocusPaneDown,
+        "focus_pane_down",
+        "Focus Pane Down",
+        Category::Panes,
+    ),
+    (
+        Action::ResizePaneLeft,
+        "resize_pane_left",
+        "Resize Pane Left",
+        Category::Panes,
+    ),
+    (
+        Action::ResizePaneRight,
+        "resize_pane_right",
+        "Resize Pane Right",
+        Category::Panes,
+    ),
+    (
+        Action::ResizePaneUp,
+        "resize_pane_up",
+        "Resize Pane Up",
+        Category::Panes,
+    ),
+    (
+        Action::ResizePaneDown,
+        "resize_pane_down",
+        "Resize Pane Down",
+        Category::Panes,
+    ),
+    (
+        Action::ClosePane,
+        "close_pane",
+        "Close Pane",
+        Category::Panes,
+    ),
+    (Action::ZoomPane, "zoom_pane", "Zoom Pane", Category::Panes),
+    (
+        Action::EqualizePanes,
+        "equalize_panes",
+        "Equalize Panes",
+        Category::Panes,
     ),
     (
         Action::CommandPalette,
@@ -479,8 +567,9 @@ impl<'de> Visitor<'de> for EntriesVisitor {
 
 /// The built-in bindings as config text; `PRIMARY` is Ctrl, or Cmd on
 /// macOS, and `CLIPBOARD` is Ctrl+Shift, or Cmd on macOS (Ctrl+C and
-/// Ctrl+V belong to the shell elsewhere).
-const DEFAULTS: [(&str, Action); 25] = [
+/// Ctrl+V belong to the shell elsewhere). The pane focus and resize chords
+/// use `PRIMARY` too: Ctrl+Left/Right belong to Mission Control on macOS.
+const DEFAULTS: [(&str, Action); 37] = [
     ("PRIMARY+equal", Action::ZoomIn),
     ("PRIMARY+plus", Action::ZoomIn),
     ("PRIMARY+minus", Action::ZoomOut),
@@ -502,6 +591,18 @@ const DEFAULTS: [(&str, Action); 25] = [
     ("alt+7", Action::GotoTab(7)),
     ("alt+8", Action::GotoTab(8)),
     ("alt+9", Action::GotoTab(9)),
+    ("ctrl+shift+o", Action::SplitRight),
+    ("ctrl+shift+e", Action::SplitDown),
+    ("PRIMARY+alt+left", Action::FocusPaneLeft),
+    ("PRIMARY+alt+right", Action::FocusPaneRight),
+    ("PRIMARY+alt+up", Action::FocusPaneUp),
+    ("PRIMARY+alt+down", Action::FocusPaneDown),
+    ("PRIMARY+shift+alt+left", Action::ResizePaneLeft),
+    ("PRIMARY+shift+alt+right", Action::ResizePaneRight),
+    ("PRIMARY+shift+alt+up", Action::ResizePaneUp),
+    ("PRIMARY+shift+alt+down", Action::ResizePaneDown),
+    ("ctrl+shift+x", Action::ClosePane),
+    ("ctrl+shift+enter", Action::ZoomPane),
     ("ctrl+shift+p", Action::CommandPalette),
     ("CLIPBOARD+c", Action::Copy),
     ("CLIPBOARD+v", Action::Paste),
@@ -848,5 +949,111 @@ mod tests {
         assert_eq!(find(Action::GotoTab(2)).as_deref(), Some("Alt+2"));
         let mac = Bindings::defaults(true).shortcuts();
         assert_eq!(mac[2], (Action::ResetZoom, Some("Cmd+0".into())));
+    }
+
+    const PANE_ACTIONS: [(Action, &str, &str); 13] = [
+        (Action::SplitRight, "split_right", "Split Right"),
+        (Action::SplitDown, "split_down", "Split Down"),
+        (Action::FocusPaneLeft, "focus_pane_left", "Focus Pane Left"),
+        (
+            Action::FocusPaneRight,
+            "focus_pane_right",
+            "Focus Pane Right",
+        ),
+        (Action::FocusPaneUp, "focus_pane_up", "Focus Pane Up"),
+        (Action::FocusPaneDown, "focus_pane_down", "Focus Pane Down"),
+        (
+            Action::ResizePaneLeft,
+            "resize_pane_left",
+            "Resize Pane Left",
+        ),
+        (
+            Action::ResizePaneRight,
+            "resize_pane_right",
+            "Resize Pane Right",
+        ),
+        (Action::ResizePaneUp, "resize_pane_up", "Resize Pane Up"),
+        (
+            Action::ResizePaneDown,
+            "resize_pane_down",
+            "Resize Pane Down",
+        ),
+        (Action::ClosePane, "close_pane", "Close Pane"),
+        (Action::ZoomPane, "zoom_pane", "Zoom Pane"),
+        (Action::EqualizePanes, "equalize_panes", "Equalize Panes"),
+    ];
+
+    #[test]
+    fn pane_actions_have_names_titles_and_the_panes_category() {
+        assert_eq!(Action::ALL.len(), 38);
+        for (action, name, title) in PANE_ACTIONS {
+            assert_eq!(action.name(), name);
+            assert_eq!(action.title(), title);
+            assert_eq!(action.category(), Category::Panes);
+            assert_eq!(Action::from_name(name), Some(action));
+            assert!(Action::ALL.contains(&action));
+        }
+        assert_eq!(Category::Panes.title(), "Panes");
+        assert_eq!(Action::ALL.last(), Some(&Action::ReloadConfig));
+    }
+
+    #[test]
+    fn pane_defaults_on_linux_and_windows() {
+        let b = Bindings::defaults(false);
+        let on = |text: &str| b.action(&chord(text));
+        assert_eq!(on("ctrl+shift+o"), Some(Action::SplitRight));
+        assert_eq!(on("ctrl+shift+e"), Some(Action::SplitDown));
+        assert_eq!(on("ctrl+alt+left"), Some(Action::FocusPaneLeft));
+        assert_eq!(on("ctrl+alt+right"), Some(Action::FocusPaneRight));
+        assert_eq!(on("ctrl+alt+up"), Some(Action::FocusPaneUp));
+        assert_eq!(on("ctrl+alt+down"), Some(Action::FocusPaneDown));
+        assert_eq!(on("ctrl+shift+alt+left"), Some(Action::ResizePaneLeft));
+        assert_eq!(on("ctrl+shift+alt+right"), Some(Action::ResizePaneRight));
+        assert_eq!(on("ctrl+shift+alt+up"), Some(Action::ResizePaneUp));
+        assert_eq!(on("ctrl+shift+alt+down"), Some(Action::ResizePaneDown));
+        assert_eq!(on("ctrl+shift+x"), Some(Action::ClosePane));
+        assert_eq!(on("ctrl+shift+enter"), Some(Action::ZoomPane));
+        let equalize = b.shortcuts();
+        let equalize = equalize.iter().find(|(a, _)| *a == Action::EqualizePanes);
+        assert_eq!(equalize.unwrap().1, None, "palette only");
+    }
+
+    #[test]
+    fn pane_defaults_on_macos_avoid_mission_control() {
+        let b = Bindings::defaults(true);
+        let on = |text: &str| b.action(&chord(text));
+        assert_eq!(on("cmd+alt+left"), Some(Action::FocusPaneLeft));
+        assert_eq!(on("cmd+alt+down"), Some(Action::FocusPaneDown));
+        assert_eq!(on("cmd+shift+alt+right"), Some(Action::ResizePaneRight));
+        assert_eq!(on("cmd+shift+alt+up"), Some(Action::ResizePaneUp));
+        assert_eq!(on("ctrl+alt+left"), None);
+        assert_eq!(on("ctrl+left"), None);
+        assert_eq!(on("ctrl+shift+o"), Some(Action::SplitRight));
+        assert_eq!(on("ctrl+shift+x"), Some(Action::ClosePane));
+    }
+
+    #[test]
+    fn default_chords_never_collide() {
+        for macos in [false, true] {
+            let chords: Vec<Chord> = Bindings::defaults(macos)
+                .entries()
+                .iter()
+                .map(|(c, _)| *c)
+                .collect();
+            let mut unique = chords.clone();
+            unique.sort_by_key(|c| c.to_string());
+            unique.dedup();
+            assert_eq!(unique.len(), chords.len(), "macos={macos}");
+        }
+    }
+
+    #[test]
+    fn pane_chords_can_be_rebound_or_removed() {
+        let parsed =
+            config("\"ctrl+shift+o\" = \"none\"\n\"ctrl+alt+n\" = \"split_down\"\n").unwrap();
+        let b = Bindings::new(&parsed, false);
+        assert_eq!(b.action(&chord("ctrl+shift+o")), None);
+        assert_eq!(b.action(&chord("ctrl+alt+n")), Some(Action::SplitDown));
+        assert_eq!(b.action(&chord("ctrl+shift+e")), Some(Action::SplitDown));
     }
 }

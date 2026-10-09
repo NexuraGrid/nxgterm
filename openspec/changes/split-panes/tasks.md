@@ -63,11 +63,11 @@ Decision needed: confirm Feature Branch Chain (tracker `feat/split-panes` draft/
 
 ## S4: Actions and split UX
 
-- [ ] 4.1 RED: `keybindings.rs` tests for 13 action names/titles, `Category::Panes`, `ACTIONS` 38, defaults parse without collisions, override/`"none"` removal ("Rebinding"), palette lists `equalize_panes`; GREEN: add actions, chords, macOS placeholders (resolve open question).
-- [ ] 4.2 RED+GREEN: `spawn_pane` and `perform(SplitRight|SplitDown)` through `split_with`; spawn error logs `nxgterm: ...`, tree unchanged; `sync_grid_size` after.
-- [ ] 4.3 RED+GREEN: `FocusPane(Dir)`, `ResizePane(Dir)` (2 cols / 1 row), `ClosePane` (last pane closes tab) wired in `perform`.
-- [ ] 4.4 RED+GREEN: divider `Shape::Rect` emission (default color: fg 25% into bg; width 1) in `app.rs`.
-- [ ] 4.5 Document chords and the KDE/GNOME `ctrl+alt+arrows` clash in the default TOML comments.
+- [x] 4.1 RED: `keybindings.rs` tests for 13 action names/titles, `Category::Panes`, `ACTIONS` 38, defaults parse without collisions, override/`"none"` removal ("Rebinding"), palette lists `equalize_panes`; GREEN: add actions, chords, macOS placeholders (resolve open question).
+- [x] 4.2 RED+GREEN: `spawn_pane` and `perform(SplitRight|SplitDown)` through `split_with`; spawn error logs `nxgterm: ...`, tree unchanged; `sync_grid_size` after.
+- [x] 4.3 RED+GREEN: `FocusPane(Dir)`, `ResizePane(Dir)` (2 cols / 1 row), `ClosePane` (last pane closes tab) wired in `perform`.
+- [x] 4.4 RED+GREEN: divider `Shape::Rect` emission (default color: fg 25% into bg; width 1) in `app.rs`.
+- [x] 4.5 Document chords and the KDE/GNOME `ctrl+alt+arrows` clash in the default TOML comments.
 
 ## S5: Mouse, config, zoom/equalize/dim
 

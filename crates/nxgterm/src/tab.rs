@@ -7,7 +7,8 @@
 
 use nxg_core::TermSize;
 
-use crate::panes::{CellRect, Closed, PaneId, Panes};
+use crate::bindings::Action;
+use crate::panes::{Axis, CellRect, Closed, Dir, PaneId, Panes, SplitError};
 use crate::tabs::Tabs;
 
 /// Hands out pane ids, each once.
@@ -142,12 +143,87 @@ pub fn exit<T>(tabs: &mut Tabs<Tab<T>>, id: PaneId) -> Exit {
     }
 }
 
+/// What a pane action does to the active tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneCommand {
+    Split(Axis),
+    Focus(Dir),
+    Resize(Dir),
+    Close,
+}
+
+/// The pane command `action` stands for.
+pub fn command(action: Action) -> Option<PaneCommand> {
+    Some(match action {
+        Action::SplitRight => PaneCommand::Split(Axis::Right),
+        Action::SplitDown => PaneCommand::Split(Axis::Down),
+        Action::FocusPaneLeft => PaneCommand::Focus(Dir::Left),
+        Action::FocusPaneRight => PaneCommand::Focus(Dir::Right),
+        Action::FocusPaneUp => PaneCommand::Focus(Dir::Up),
+        Action::FocusPaneDown => PaneCommand::Focus(Dir::Down),
+        Action::ResizePaneLeft => PaneCommand::Resize(Dir::Left),
+        Action::ResizePaneRight => PaneCommand::Resize(Dir::Right),
+        Action::ResizePaneUp => PaneCommand::Resize(Dir::Up),
+        Action::ResizePaneDown => PaneCommand::Resize(Dir::Down),
+        Action::ClosePane => PaneCommand::Close,
+        _ => return None,
+    })
+}
+
+/// Cells a divider moves per resize key press: two columns (cells are
+/// about twice as tall as wide) or one row.
+pub fn resize_step(dir: Dir) -> u16 {
+    match dir {
+        Dir::Left | Dir::Right => 2,
+        Dir::Up | Dir::Down => 1,
+    }
+}
+
+/// Splits the focused pane of the active tab (`None` without a tab); see
+/// [`Panes::split_with`].
+pub fn split_active<T, E>(
+    tabs: &mut Tabs<Tab<T>>,
+    axis: Axis,
+    id: PaneId,
+    area: TermSize,
+    make: impl FnOnce(CellRect) -> Result<T, E>,
+) -> Option<Result<(), SplitError<E>>> {
+    let tab = tabs.active_mut()?;
+    Some(
+        tab.panes
+            .split_with(axis, id, (area.cols(), area.rows()), make),
+    )
+}
+
+/// Moves focus to the neighbour of the active tab in `dir`.
+pub fn focus_active<T>(tabs: &mut Tabs<Tab<T>>, dir: Dir, area: TermSize) -> bool {
+    let area = (area.cols(), area.rows());
+    tabs.active_mut()
+        .is_some_and(|tab| tab.panes.focus_dir(dir, area))
+}
+
+/// Moves the divider next to the focused pane of the active tab in `dir`.
+pub fn resize_active<T>(tabs: &mut Tabs<Tab<T>>, dir: Dir, area: TermSize) -> bool {
+    let area = (area.cols(), area.rows());
+    tabs.active_mut()
+        .is_some_and(|tab| tab.panes.resize(dir, resize_step(dir), area))
+}
+
+/// Closes the focused pane of the active tab like an exit of its child
+/// would; the caller exits the app when no tab is left.
+pub fn close_focused<T>(tabs: &mut Tabs<Tab<T>>) -> Exit {
+    match tabs.active().map(|tab| tab.panes.focused().0) {
+        Some(id) => exit(tabs, id),
+        None => Exit::Stale,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;
 
     use super::*;
-    use crate::panes::Axis;
+    use crate::panes::{Axis, Dir, SplitError};
 
     const AREA: (u16, u16) = (100, 30);
 
@@ -338,5 +414,130 @@ mod tests {
         let values: Vec<u32> = tab.panes.iter().map(|(_, value)| *value).collect();
         assert_eq!(values.len(), 3);
         assert!(values.contains(&10) && values.contains(&20) && values.contains(&30));
+    }
+
+    #[test]
+    fn actions_map_to_pane_commands() {
+        use nxg_config::keybindings::Action;
+        let map = |a| command(a);
+        assert_eq!(
+            map(Action::SplitRight),
+            Some(PaneCommand::Split(Axis::Right))
+        );
+        assert_eq!(map(Action::SplitDown), Some(PaneCommand::Split(Axis::Down)));
+        assert_eq!(
+            map(Action::FocusPaneLeft),
+            Some(PaneCommand::Focus(Dir::Left))
+        );
+        assert_eq!(
+            map(Action::FocusPaneDown),
+            Some(PaneCommand::Focus(Dir::Down))
+        );
+        assert_eq!(
+            map(Action::ResizePaneRight),
+            Some(PaneCommand::Resize(Dir::Right))
+        );
+        assert_eq!(
+            map(Action::ResizePaneUp),
+            Some(PaneCommand::Resize(Dir::Up))
+        );
+        assert_eq!(map(Action::ClosePane), Some(PaneCommand::Close));
+        assert_eq!(map(Action::NewTab), None, "not a pane action");
+        assert_eq!(map(Action::ZoomPane), None, "zoom and equalize are S5");
+    }
+
+    #[test]
+    fn resize_moves_two_columns_or_one_row() {
+        assert_eq!(resize_step(Dir::Left), 2);
+        assert_eq!(resize_step(Dir::Right), 2);
+        assert_eq!(resize_step(Dir::Up), 1);
+        assert_eq!(resize_step(Dir::Down), 1);
+    }
+
+    #[test]
+    fn a_split_adds_and_focuses_a_pane_of_the_active_tab_only() {
+        let (mut tabs, mut ids) = (Tabs::new(), PaneIds::default());
+        open(&mut tabs, &mut ids, 1);
+        open(&mut tabs, &mut ids, 2);
+        let id = ids.next();
+        let rect = std::cell::Cell::new(None);
+        let done = split_active(&mut tabs, Axis::Right, id, size(), |r| {
+            rect.set(Some(r));
+            Ok::<_, Infallible>(3)
+        });
+        assert!(matches!(done, Some(Ok(()))));
+        let tab = tabs.active().unwrap();
+        assert_eq!(tab.panes.len(), 2);
+        assert_eq!(tab.panes.focused().0, id);
+        assert_eq!(
+            rect.get().unwrap().rows,
+            30,
+            "the factory sees the new rect"
+        );
+        tabs.select(0);
+        assert_eq!(tabs.active().unwrap().panes.len(), 1, "other tab untouched");
+    }
+
+    #[test]
+    fn a_refused_or_failed_split_changes_nothing() {
+        let (mut tabs, mut ids) = (Tabs::new(), PaneIds::default());
+        let first = open(&mut tabs, &mut ids, 1);
+        let tiny = TermSize::new(5, 30).unwrap();
+        let id = ids.next();
+        let done = split_active(&mut tabs, Axis::Right, id, tiny, |_| Ok::<_, Infallible>(2));
+        assert!(matches!(done, Some(Err(SplitError::TooSmall))));
+        let done = split_active(&mut tabs, Axis::Down, id, size(), |_| Err("no shell"));
+        assert!(matches!(done, Some(Err(SplitError::Make("no shell")))));
+        let tab = tabs.active().unwrap();
+        assert_eq!(tab.panes.len(), 1);
+        assert_eq!(tab.panes.focused().0, first);
+        let mut none: Tabs<Tab<u32>> = Tabs::new();
+        let done = split_active(&mut none, Axis::Right, id, size(), |_| {
+            Ok::<_, Infallible>(1)
+        });
+        assert!(done.is_none(), "no tab, no split");
+    }
+
+    #[test]
+    fn focus_and_resize_act_on_the_active_tab() {
+        let (mut tabs, mut ids) = (Tabs::new(), PaneIds::default());
+        let first = open(&mut tabs, &mut ids, 1);
+        let second = split(&mut tabs, &mut ids, 2);
+        assert!(!focus_active(&mut tabs, Dir::Right, size()), "no neighbour");
+        assert!(focus_active(&mut tabs, Dir::Left, size()));
+        assert_eq!(tabs.active().unwrap().panes.focused().0, first);
+        let width = |tabs: &Tabs<Tab<u32>>| placements(tabs.active().unwrap(), size())[0].rect.cols;
+        let before = width(&tabs);
+        assert!(resize_active(&mut tabs, Dir::Right, size()));
+        assert_eq!(width(&tabs), before + 2);
+        assert!(
+            !resize_active(&mut tabs, Dir::Down, size()),
+            "no horizontal divider"
+        );
+        assert!(focus_active(&mut tabs, Dir::Right, size()));
+        assert_eq!(tabs.active().unwrap().panes.focused().0, second);
+        let mut none: Tabs<Tab<u32>> = Tabs::new();
+        assert!(!focus_active(&mut none, Dir::Left, size()));
+        assert!(!resize_active(&mut none, Dir::Left, size()));
+    }
+
+    #[test]
+    fn closing_the_focused_pane_follows_the_exit_rules() {
+        let (mut tabs, mut ids) = (Tabs::new(), PaneIds::default());
+        let first = open(&mut tabs, &mut ids, 1);
+        open(&mut tabs, &mut ids, 2);
+        split(&mut tabs, &mut ids, 3);
+        assert_eq!(close_focused(&mut tabs), Exit::Pane);
+        assert_eq!(tabs.len(), 2);
+        assert_eq!(
+            close_focused(&mut tabs),
+            Exit::Tab,
+            "last pane closes the tab"
+        );
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs.active().unwrap().panes.focused().0, first);
+        assert_eq!(close_focused(&mut tabs), Exit::Tab);
+        assert!(tabs.is_empty(), "last tab: the app exits");
+        assert_eq!(close_focused(&mut tabs), Exit::Stale);
     }
 }

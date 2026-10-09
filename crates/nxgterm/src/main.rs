@@ -11,12 +11,10 @@ mod choice;
 mod cli;
 mod clipboard;
 mod command_palette;
+mod dividers;
 mod icon;
 mod keys;
 mod mouse;
-// The app uses the tree with one pane per tab; S4 (split, focus, close) and
-// S5 (resize, zoom, mouse) wire the rest.
-#[allow(dead_code)]
 mod panes;
 mod reload;
 mod tab;

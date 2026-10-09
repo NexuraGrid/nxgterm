@@ -467,8 +467,24 @@ mod tests {
 
     #[test]
     fn prefix_matches_come_before_substring_matches() {
-        assert_eq!(titles(&typed("zo")), ["Zoom In", "Zoom Out", "Reset Zoom"]);
+        assert_eq!(
+            titles(&typed("zo")),
+            [
+                "Zoom In",
+                "Zoom Out",
+                "Zoom Pane",
+                "Reset Zoom",
+                "Resize Pane Down"
+            ]
+        );
         assert_eq!(titles(&typed("ZOOM")), titles(&typed("zoom")), "any case");
+    }
+
+    #[test]
+    fn pane_actions_are_listed_and_found_by_name() {
+        assert_eq!(titles(&typed("equalize")), ["Equalize Panes"]);
+        assert_eq!(titles(&typed("split"))[..2], ["Split Right", "Split Down"]);
+        assert!(titles(&typed("panes")).contains(&"Close Pane"));
     }
 
     #[test]
@@ -664,11 +680,11 @@ mod tests {
         };
         let term = palette.render(rect, (1, 2, 3));
         assert_eq!(term.size(), TermSize::new(40, 5).unwrap());
-        assert_eq!(text(&term, 0), " Command Palette                   3/24 ");
+        assert_eq!(text(&term, 0), " Command Palette                   5/37 ");
         assert_eq!(text(&term, 1), " > zo                                   ");
         assert_eq!(text(&term, 2), " Font        Zoom In             Ctrl+= ");
         assert_eq!(text(&term, 3), " Font        Zoom Out            Ctrl+- ");
-        assert_eq!(text(&term, 4), " Font        Reset Zoom          Ctrl+0 ");
+        assert_eq!(text(&term, 4), " Panes       Zoom Pane Ctrl+Shift+Enter ");
         let cursor = term.display_cursor();
         assert!(cursor.visible);
         assert_eq!((cursor.col, cursor.row), (5, 1));
