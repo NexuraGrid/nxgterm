@@ -120,3 +120,47 @@ Branch `feat/split-panes-s3` (stacked on S2). Mode: Strict TDD; RED was a `todo!
 ### Gates (S3)
 
 - `cargo fmt --all --check`: ok; clippy `-D warnings`: clean; `cargo test --workspace`: all pass; `cargo +1.87 check --workspace --all-targets`: ok.
+
+## S4: Actions and split UX (done, 5/5)
+
+Branch `feat/split-panes-s4` (stacked on S3). Mode: Strict TDD; RED was a compile failure (missing variants/functions) for 4.1 and 4.2-4.3, and the existing `documented_sample_lists_every_default_binding` test failing for 4.5. Review budget: 745 changed lines (720 added, 25 removed, `git diff --shortstat feat/split-panes-s3 -- . ':!openspec'`), within the pre-authorized 1,300; about 60% is tests.
+
+| Task | Status | Notes |
+|------|--------|-------|
+| 4.1 | [x] | 13 `Action` variants (flat, `Dir` lives in nxgterm), `Category::Panes`, `ACTIONS` 25 -> 38, `DEFAULTS` 25 -> 37, palette entries; macOS chords decided (below) |
+| 4.2 | [x] | `tab::split_active` through `Panes::split_with`; `Session::split` spawns the shell at the new rect size; TooSmall/spawn error log `nxgterm: ...` and leave the tree unchanged; `panes_changed` refits |
+| 4.3 | [x] | `tab::{command, resize_step, focus_active, resize_active, close_focused}` and `App::pane_command`; last pane closes the tab, last tab exits the app (also from a palette click) |
+| 4.4 | [x] | `dividers.rs`: `shapes` (1 px centred in the divider cell, clamped to the cell) and `default_color` (fg 25% into bg); emitted in `Session::redraw` under the window buttons |
+| 4.5 | [x] | `DEFAULT_CONFIG_TOML` lists the 12 chords, the 13 names, the macOS variant and the KDE/GNOME `ctrl+alt+arrows` clash |
+
+### TDD Cycle Evidence (S4)
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 4.1 | `keybindings.rs` | Unit | 83/83 nxg-config | compile fail (36 errors) | 88/88 | names/titles, Linux defaults, macOS defaults, no collisions per platform, rebind/`none` | none needed |
+| 4.1 palette | `command_palette.rs` | Unit | 195/195 nxgterm | 2 existing tests failing (counts 24 -> 37, "zo" list) | 18/18 | `equalize`, `split`, `panes` queries | none needed |
+| 4.5 | `lib.rs` | Unit | 88/88 | `documented_sample_lists_every_default_binding` failing | green | every default and every name documented | none needed |
+| 4.2, 4.3 | `tab.rs` | Unit | 194/194 | compile fail (`command`, `split_active`, ...) | 18/18 `tab::` | action map, step 2 cols/1 row, split active tab only, TooSmall, factory Err, no tab, focus/resize no-neighbour, close rules | none needed |
+| 4.4 | `dividers.rs` | Unit | n/a (new file) | tests written with the code (not RED-first); mutation check: dropping the centring fails the vertical test | 8/8 | vertical, horizontal, clamp 0/3/99, nested, no divider, colour | none needed |
+
+### Work Unit Evidence (S4)
+
+| Evidence | Value |
+|---|---|
+| Focused test command | `cargo test -p nxg-config -p nxgterm` -> 88 + 207 passed, 0 failed |
+| Runtime harness | N/A for the GUI (headless, no display): split/focus/close/resize paths are covered by `tab::` tests on `Panes<u32>`; `Session::split` (pty spawn) and divider drawing are checked by the compiler and clippy only. Manual run of `nxgterm` is still pending |
+| Rollback boundary | `keybindings.rs` + sample TOML in `lib.rs`; `tab.rs` helpers + `pane_command`/`split`/`panes_changed` in `app.rs`; `dividers.rs` + its call in `redraw`; palette test updates |
+
+### Decisions and deviations (S4)
+
+- macOS chords (open question resolved): split, close and zoom keep the `ctrl+shift` chords like `new_tab`/`close_tab` (no system clash); focus and resize use the `PRIMARY` placeholder (cmd on macOS): `cmd+alt+arrows` and `cmd+shift+alt+arrows`, so `ctrl+arrows` (Mission Control) are never bound.
+- `zoom_pane` and `equalize_panes` exist as actions (palette, defaults, names) but do nothing until S5 wires them (`perform` arm returns `true`, `tab::command` maps them to `None`).
+- Resize step is 2 columns / 1 row (`tab::resize_step`); the divider width is the constant 1 px until `[panes]` lands in S5.
+- Every layout change (split, focus, resize) resets `held`/`drag` (`panes_changed`); close reuses `tab_switched`.
+- Fix outside the plain scope: the app now also exits when a palette click closes the last tab (`palette_done` path in `window_event`).
+- The module-level `#[allow(dead_code)]` on `mod panes` is gone; item-level allows remain on `CellRect::contains`, `Hit`, `leaf_count`, `equalize` (x2), `toggle_zoom`, `drag`, `hit` (S5).
+- Divider drawing was written together with its tests (no separate RED run); a mutation check proved the tests bite.
+
+### Gates (S4)
+
+- `cargo fmt --all --check`: ok; clippy `-D warnings`: clean; `cargo test --workspace`: all pass; `cargo +1.87 check --workspace --all-targets`: ok.
