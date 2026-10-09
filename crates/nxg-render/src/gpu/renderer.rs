@@ -138,10 +138,6 @@ impl WindowRenderer for GpuRenderer {
         if !self.visible() {
             return Ok(()); // Minimized.
         }
-        // The painter still draws one terminal; panes follow in the next change.
-        let Some(terminal) = panes.first().map(|pane| pane.terminal) else {
-            return Ok(());
-        };
         let (frame, suboptimal) = match self.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(frame) => (frame, false),
             CurrentSurfaceTexture::Suboptimal(frame) => (frame, true),
@@ -171,7 +167,7 @@ impl WindowRenderer for GpuRenderer {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let (width, height) = (self.config.width, self.config.height);
         self.painter.render(
-            &self.gpu, &view, width, height, header, terminal, overlay, shapes,
+            &self.gpu, &view, width, height, header, panes, overlay, shapes,
         );
         self.gpu.queue.present(frame);
         if suboptimal {

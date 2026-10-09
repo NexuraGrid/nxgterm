@@ -51,10 +51,19 @@ fn render_offscreen_with(
     w: u32,
     h: u32,
 ) -> Vec<u32> {
-    render_rgba(gpu, painter, header, term, overlay, shapes, w, h)
-        .into_iter()
-        .map(|[r, g, b, _]| rgb(r, g, b))
-        .collect()
+    render_rgba(
+        gpu,
+        painter,
+        header,
+        &[PaneView::single(term)],
+        overlay,
+        shapes,
+        w,
+        h,
+    )
+    .into_iter()
+    .map(|[r, g, b, _]| rgb(r, g, b))
+    .collect()
 }
 
 /// [`render_offscreen_with`], keeping the alpha: RGBA pixels.
@@ -63,7 +72,7 @@ fn render_rgba(
     gpu: &Gpu,
     painter: &mut Painter,
     header: Option<&Terminal>,
-    term: &Terminal,
+    panes: &[PaneView<'_>],
     overlay: Option<Overlay<'_>>,
     shapes: &[Shape],
     w: u32,
@@ -84,7 +93,7 @@ fn render_rgba(
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    painter.render(gpu, &view, w, h, header, term, overlay, shapes);
+    painter.render(gpu, &view, w, h, header, panes, overlay, shapes);
 
     let row = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -372,7 +381,16 @@ fn translucent_targets_get_a_premultiplied_default_background_only() {
     let red = [(red >> 16) as u8, (red >> 8) as u8, red as u8, 255];
 
     painter.set_translucent(true);
-    let pixels = render_rgba(&gpu, &mut painter, Some(&header), &term, None, &[], w, h);
+    let pixels = render_rgba(
+        &gpu,
+        &mut painter,
+        Some(&header),
+        &[PaneView::single(&term)],
+        None,
+        &[],
+        w,
+        h,
+    );
     let half = [0x20, 0x40, 0x60, 0x80];
     let close = |a: [u8; 4], b: [u8; 4]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 1);
     assert!(
@@ -392,7 +410,121 @@ fn translucent_targets_get_a_premultiplied_default_background_only() {
     );
 
     painter.set_translucent(false);
-    let opaque = render_rgba(&gpu, &mut painter, Some(&header), &term, None, &[], w, h);
+    let opaque = render_rgba(
+        &gpu,
+        &mut painter,
+        Some(&header),
+        &[PaneView::single(&term)],
+        None,
+        &[],
+        w,
+        h,
+    );
     assert_eq!(at(&opaque, 0, 0), [0x40, 0x80, 0xc0, 255], "opaque surface");
     assert_eq!(gpu.failure(), None);
+}
+
+/// Two panes side by side, each with an image that has key 1 in its own
+/// terminal, the second one dimmed and unfocused.
+#[test]
+fn two_panes_with_images_match_the_cpu_renderer_and_keep_their_textures() {
+    let Some(gpu) = headless_gpu() else { return };
+    let (Ok(gpu_font), Ok(cpu_font)) = (Font::system(DEFAULT_PX), Font::system(DEFAULT_PX)) else {
+        eprintln!("skipping GPU test: no system monospace font");
+        return;
+    };
+    let style = |font| Style {
+        font,
+        palette: Palette::default(),
+        padding: 3,
+        background_opacity: 1.0,
+    };
+    let mut cpu = CpuRenderer::new(style(cpu_font));
+    let cell = cpu.cell_size();
+    // Images at native size: `cells` cells wide, one row tall, at column 4.
+    let pane_term = |text: &str, cells: u32, rgba: [u8; 4]| {
+        let mut term = Terminal::new(TermSize::new(6, 3).unwrap());
+        term.set_cell_pixels(cell.width, cell.height);
+        let (iw, ih) = (cells * cell.width, cell.height);
+        let data = encode_base64(&rgba.repeat((iw * ih) as usize));
+        term.advance(
+            format!(
+                "\x1b[1;1H{text}\x1b[1;5H\x1b_Ga=T,s={iw},v={ih},C=1,q=2;{data}\x1b\\\x1b[3;2H"
+            )
+            .as_bytes(),
+        );
+        assert_eq!(
+            term.images().placements()[0].image,
+            1,
+            "key 1 in every store"
+        );
+        term
+    };
+    // A's image runs over the divider cell; B's runs past its right edge.
+    let left = pane_term("left", 3, [255, 0, 0, 255]);
+    let right = pane_term("right", 9, [0, 0, 255, 255]);
+    let panes = [
+        PaneView {
+            id: 10,
+            ..PaneView::single(&left)
+        },
+        PaneView {
+            id: 11,
+            col: 7,
+            focused: false,
+            dim: 0.3,
+            ..PaneView::single(&right)
+        },
+    ];
+    let (w, h) = cpu.layout().window_size(TermSize::new(13, 3).unwrap());
+    let divider_x = 3 + 6 * cell.width + cell.width / 2;
+    let shapes = [Shape::Rect {
+        x: divider_x as i32,
+        y: 3,
+        width: 1,
+        height: 3 * cell.height,
+        color: rgb(0, 255, 0),
+    }];
+    let mut expected = vec![0; (w * h) as usize];
+    cpu.render_layers(
+        None,
+        &panes,
+        None,
+        &shapes,
+        &mut Frame::new(&mut expected, w, h).unwrap(),
+    );
+
+    let mut painter = Painter::new(&gpu, FORMAT, style(gpu_font));
+    let actual: Vec<u32> = render_rgba(&gpu, &mut painter, None, &panes, None, &shapes, w, h)
+        .into_iter()
+        .map(|[r, g, b, _]| rgb(r, g, b))
+        .collect();
+    assert_eq!(painter.texture_count(), 2, "one texture per pane, same key");
+    assert_eq!(gpu.failure(), None);
+
+    let mismatches: Vec<_> = (0..expected.len())
+        .filter(|&i| channel_diff(expected[i], actual[i]) > 2)
+        .map(|i| (i as u32 % w, i as u32 / w, expected[i], actual[i]))
+        .collect();
+    assert!(
+        mismatches.is_empty(),
+        "{} of {} pixels differ, first (x, y, cpu, gpu): {:x?}",
+        mismatches.len(),
+        expected.len(),
+        &mismatches[..mismatches.len().min(8)]
+    );
+    for frame in [&expected, &actual] {
+        let at = |x: u32, y: u32| frame[(y * w + x) as usize];
+        let y = 3 + 1;
+        assert_eq!(at(3 + 4 * cell.width + 1, y), rgb(255, 0, 0), "A's image");
+        assert_eq!(
+            at(3 + 11 * cell.width + 1, y + 1),
+            rgb(0, 0, 255),
+            "B's image"
+        );
+        let background = Palette::default().background;
+        assert_eq!(at(3 + 6 * cell.width + 1, y), background, "divider cell");
+        assert_eq!(at(divider_x, y), rgb(0, 255, 0), "divider line");
+        assert_eq!(at(3 + 13 * cell.width, y + 1), background, "right padding");
+    }
 }
