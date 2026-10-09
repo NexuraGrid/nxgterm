@@ -2,7 +2,7 @@
 
 use nxg_core::{Flags, Terminal};
 
-use crate::paint::{self, Layout};
+use crate::paint::{self, Layout, Look};
 use crate::palette::{Palette, Rgb};
 use crate::shape::{Mask, Shape};
 
@@ -73,6 +73,24 @@ pub fn build<F>(
 where
     F: FnMut(char, bool) -> Result<Option<GlyphSlot>, AtlasFull>,
 {
+    build_look(term, palette, layout, baseline, opaque, Look::ACTIVE, glyph)
+}
+
+/// [`build`] for a pane drawn with `look`: an unfocused pane gets an
+/// outline cursor (four solid quads, the glyph under it keeps its color)
+/// and every color is dimmed. Mirrors the CPU renderer's `paint`.
+pub fn build_look<F>(
+    term: &Terminal,
+    palette: &Palette,
+    layout: Layout,
+    baseline: i32,
+    opaque: bool,
+    look: Look,
+    glyph: F,
+) -> Result<Quads, AtlasFull>
+where
+    F: FnMut(char, bool) -> Result<Option<GlyphSlot>, AtlasFull>,
+{
     let mut glyph = glyph;
     let rows = term.size().rows();
     let cell = layout.cell;
@@ -93,7 +111,7 @@ where
     for row in 0..rows {
         let selected = term.selected_cols(row);
         for (col, c) in term.display_row(row).iter().enumerate() {
-            let (_, bg) = paint::shown_colors(c, paint::is_selected(&selected, col), palette);
+            let (_, bg) = paint::look_colors(c, paint::is_selected(&selected, col), palette, look);
             if background_quad(bg, palette, opaque) {
                 instances.push(solid(cell_pos(col, row), bg));
             }
@@ -102,11 +120,20 @@ where
 
     let backgrounds = instances.len();
     let cursor = term.display_cursor();
-    if cursor.visible {
+    if cursor.visible && look.focused {
         instances.push(solid(
             cell_pos(usize::from(cursor.col), cursor.row),
             palette.cursor,
         ));
+    } else if cursor.visible {
+        let [x, y] = cell_pos(usize::from(cursor.col), cursor.row);
+        for (dx, dy, w, h) in paint::cursor_outline(cell) {
+            instances.push(Instance {
+                pos: [x + dx as i32, y + dy as i32],
+                size: [w, h],
+                ..solid([0, 0], palette.cursor)
+            });
+        }
     }
 
     for row in 0..rows {
@@ -119,8 +146,9 @@ where
                 continue;
             };
             let selected = paint::is_selected(&selected, col);
-            let (mut fg, bg) = paint::shown_colors(c, selected, palette);
-            if cursor.visible && (usize::from(cursor.col), cursor.row) == (col, row) {
+            let (mut fg, bg) = paint::look_colors(c, selected, palette, look);
+            let on_block = look.focused && cursor.visible;
+            if on_block && (usize::from(cursor.col), cursor.row) == (col, row) {
                 fg = bg;
             }
             let [x, y] = cell_pos(col, row);
@@ -540,6 +568,79 @@ mod tests {
             chars,
             [('a', 7), ('b', 27)],
             "no cursor quad, history on top"
+        );
+    }
+
+    const INACTIVE: Look = Look {
+        focused: false,
+        dim: 0.0,
+    };
+
+    fn build_inactive(term: &Terminal, palette: &Palette, look: Look) -> Quads {
+        build_look(term, palette, FLUSH, BASELINE, false, look, slot).unwrap()
+    }
+
+    #[test]
+    fn an_unfocused_cursor_is_four_outline_quads_after_the_backgrounds() {
+        let palette = Palette::default();
+        let term = term(3, 2, b"\x1b[41m \x1b[0m\r\n");
+        let quads = build_inactive(&term, &palette, INACTIVE);
+        let edge = |x: i32, y: i32, w: u32, h: u32| Instance {
+            size: [w, h],
+            ..solid(x, y, palette.cursor)
+        };
+        assert_eq!(quads.backgrounds, 1);
+        assert_eq!(quads.instances[0], solid(0, 0, palette.ansi[1]));
+        assert_eq!(
+            quads.instances[1..],
+            [
+                edge(0, 20, 10, 1),
+                edge(0, 39, 10, 1),
+                edge(0, 21, 1, 18),
+                edge(9, 21, 1, 18)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unfocused_hidden_cursor_has_no_quads() {
+        let term = term(2, 1, b"\x1b[?25l");
+        let quads = build_inactive(&term, &Palette::default(), INACTIVE);
+        assert!(quads.instances.is_empty());
+    }
+
+    #[test]
+    fn the_glyph_under_an_unfocused_cursor_keeps_its_color() {
+        let palette = Palette::default();
+        let term = term(2, 1, b"C\x1b[D");
+        let quads = build_inactive(&term, &palette, INACTIVE);
+        let glyph = quads.instances.last().unwrap();
+        assert_eq!(quads.instances.len(), 5, "four edges and the glyph");
+        assert_eq!((glyph.kind, glyph.color), (KIND_GLYPH, palette.foreground));
+    }
+
+    #[test]
+    fn dim_mixes_backgrounds_and_glyph_colors_toward_the_background() {
+        let palette = Palette::default();
+        let term = term(2, 1, b"\x1b[?25l\x1b[41mx");
+        let look = Look {
+            focused: false,
+            dim: 0.5,
+        };
+        let quads = build_inactive(&term, &palette, look);
+        let bg = palette.background;
+        assert_eq!(
+            quads.instances[0].color,
+            paint::dim(palette.ansi[1], bg, 0.5)
+        );
+        assert_eq!(
+            quads.instances[1].color,
+            paint::dim(palette.foreground, bg, 0.5)
+        );
+        let plain = build_inactive(&term, &palette, INACTIVE);
+        assert_eq!(
+            plain.instances[0].color, palette.ansi[1],
+            "dim 0 changes nothing"
         );
     }
 }
