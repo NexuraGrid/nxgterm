@@ -49,6 +49,16 @@ pub struct CellRect {
     pub rows: u16,
 }
 
+impl CellRect {
+    /// Whether the cell (`col`, `row`) is inside.
+    pub fn contains(&self, col: u16, row: u16) -> bool {
+        let inside = |at: u16, start: u16, len: u16| {
+            at >= start && u32::from(at) < u32::from(start) + u32::from(len)
+        };
+        inside(col, self.col, self.cols) && inside(row, self.row, self.rows)
+    }
+}
+
 /// Why a split did not happen.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SplitError<E> {
@@ -68,6 +78,13 @@ pub enum Closed<T> {
     Removed(T),
     /// No such pane (already closed): nothing changed.
     Unknown,
+}
+
+/// What lies under a cell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Hit {
+    Pane(PaneId),
+    Divider(DividerPath),
 }
 
 /// Where a divider sits in the tree: `false` = first child, `true` =
@@ -655,6 +672,22 @@ impl<T> Panes<T> {
         }
     }
 
+    /// What lies under the cell (`col`, `row`) of an `area`: a pane or a
+    /// divider (none outside the area).
+    pub fn hit(&self, area: (u16, u16), col: u16, row: u16) -> Option<Hit> {
+        if let Some((id, _)) = self
+            .rects(area)
+            .into_iter()
+            .find(|(_, rect)| rect.contains(col, row))
+        {
+            return Some(Hit::Pane(id));
+        }
+        self.dividers(area)
+            .into_iter()
+            .find(|divider| divider.rect.contains(col, row))
+            .map(|divider| Hit::Divider(divider.path))
+    }
+
     /// Splits the focused pane. `make` gets the new pane's rect (so its
     /// pty can start at the right size) and builds the leaf; when it
     /// fails, or the halves would be too small, nothing changes. A
@@ -1238,5 +1271,82 @@ mod tests {
         panes.toggle_zoom();
         panes.equalize();
         assert_eq!(panes.zoomed(), Some(id(2)));
+    }
+
+    // 1.7 zoom, dividers, hit
+
+    #[test]
+    fn a_single_pane_cannot_zoom() {
+        let mut panes = Panes::new(id(1), 1);
+        panes.toggle_zoom();
+        assert_eq!(panes.zoomed(), None);
+    }
+
+    #[test]
+    fn zoom_fills_the_area_and_unzoom_restores_the_sizes() {
+        let mut panes = two();
+        assert!(panes.set_focus(id(1)));
+        let before = panes.rects((100, 30));
+        panes.toggle_zoom();
+        assert_eq!(panes.zoomed(), Some(id(1)));
+        assert_eq!(panes.rects((100, 30)), vec![(id(1), rect(0, 0, 100, 30))]);
+        assert!(panes.dividers((100, 30)).is_empty());
+        panes.toggle_zoom();
+        assert_eq!(panes.rects((100, 30)), before);
+        assert_eq!(panes.dividers((100, 30)).len(), 1);
+    }
+
+    #[test]
+    fn zoom_keeps_hidden_panes_in_the_tree() {
+        let mut panes = two();
+        panes.toggle_zoom();
+        assert_eq!(panes.len(), 2);
+        assert_eq!(panes.get(id(1)), Some(&1));
+    }
+
+    #[test]
+    fn dividers_sit_between_the_halves() {
+        let panes = three();
+        let dividers = panes.dividers((100, 30));
+        assert_eq!(dividers.len(), 2);
+        assert!(dividers.contains(&Divider {
+            rect: rect(50, 0, 1, 30),
+            axis: Axis::Right,
+            path: vec![],
+        }));
+        assert!(dividers.contains(&Divider {
+            rect: rect(51, 15, 49, 1),
+            axis: Axis::Down,
+            path: vec![true],
+        }));
+    }
+
+    #[test]
+    fn hit_finds_panes_and_dividers() {
+        let panes = three();
+        let area = (100, 30);
+        assert_eq!(panes.hit(area, 0, 0), Some(Hit::Pane(id(1))));
+        assert_eq!(panes.hit(area, 49, 29), Some(Hit::Pane(id(1))));
+        assert_eq!(panes.hit(area, 51, 0), Some(Hit::Pane(id(2))));
+        assert_eq!(panes.hit(area, 99, 14), Some(Hit::Pane(id(2))));
+        assert_eq!(panes.hit(area, 51, 16), Some(Hit::Pane(id(3))));
+        assert_eq!(panes.hit(area, 50, 10), Some(Hit::Divider(vec![])));
+        assert_eq!(panes.hit(area, 70, 15), Some(Hit::Divider(vec![true])));
+    }
+
+    #[test]
+    fn hit_outside_the_area_is_none() {
+        let panes = three();
+        assert_eq!(panes.hit((100, 30), 100, 0), None);
+        assert_eq!(panes.hit((100, 30), 0, 30), None);
+        assert_eq!(Panes::new(id(1), 1).hit((80, 24), 80, 5), None);
+    }
+
+    #[test]
+    fn hit_while_zoomed_sees_only_the_zoomed_pane() {
+        let mut panes = two();
+        panes.toggle_zoom();
+        assert_eq!(panes.hit((100, 30), 10, 10), Some(Hit::Pane(id(2))));
+        assert_eq!(panes.hit((100, 30), 50, 10), Some(Hit::Pane(id(2))));
     }
 }
