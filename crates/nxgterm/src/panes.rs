@@ -57,6 +57,7 @@ pub struct CellRect {
 
 impl CellRect {
     /// Whether the cell (`col`, `row`) is inside.
+    #[allow(dead_code)] // Wired in S5 (mouse, zoom, equalize).
     pub fn contains(&self, col: u16, row: u16) -> bool {
         let inside = |at: u16, start: u16, len: u16| {
             at >= start && u32::from(at) < u32::from(start) + u32::from(len)
@@ -88,6 +89,7 @@ pub enum Closed<T> {
 
 /// What lies under a cell.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // Wired in S5 (mouse).
 pub enum Hit {
     Pane(PaneId),
     Divider(DividerPath),
@@ -300,6 +302,7 @@ impl<T> Node<T> {
         }
     }
 
+    #[allow(dead_code)] // Wired in S5 (mouse, zoom, equalize).
     fn leaf_count(&self) -> u32 {
         match self {
             Node::Leaf(..) => 1,
@@ -326,6 +329,7 @@ impl<T> Node<T> {
         }
     }
 
+    #[allow(dead_code)] // Wired in S5 (mouse, zoom, equalize).
     fn equalize(&mut self) {
         if let Node::Split { ratio, a, b, .. } = self {
             let (first, second) = (a.leaf_count(), b.leaf_count());
@@ -479,6 +483,7 @@ impl<T> Panes<T> {
 
     /// Zooms the focused pane, or restores the layout when zoomed. A
     /// single pane has nothing to zoom.
+    #[allow(dead_code)] // Wired in S5 (mouse, zoom, equalize).
     pub fn toggle_zoom(&mut self) {
         self.zoomed = match self.zoomed {
             Some(_) => None,
@@ -628,6 +633,7 @@ impl<T> Panes<T> {
     /// (a column for side-by-side splits, a row for stacked ones),
     /// clamped to the minimums. A path that no longer names a split is
     /// ignored.
+    #[allow(dead_code)] // Wired in S5 (mouse, zoom, equalize).
     pub fn drag(&mut self, divider: &DividerPath, pos: u16, area: (u16, u16)) {
         let Some((ratio, axis, rect)) = self.split_at_mut(divider, area) else {
             return;
@@ -642,6 +648,7 @@ impl<T> Panes<T> {
 
     /// Gives every pane the same share: each split's ratio follows its
     /// sides' leaf counts.
+    #[allow(dead_code)] // Wired in S5 (mouse, zoom, equalize).
     pub fn equalize(&mut self) {
         if let Some(root) = self.root.as_mut() {
             root.equalize();
@@ -680,6 +687,7 @@ impl<T> Panes<T> {
 
     /// What lies under the cell (`col`, `row`) of an `area`: a pane or a
     /// divider (none outside the area).
+    #[allow(dead_code)] // Wired in S5 (mouse, zoom, equalize).
     pub fn hit(&self, area: (u16, u16), col: u16, row: u16) -> Option<Hit> {
         if let Some((id, _)) = self
             .rects(area)

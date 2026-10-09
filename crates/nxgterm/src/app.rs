@@ -36,7 +36,9 @@ use crate::tab::{self, Exit, PaneCommand, PaneIds, Tab};
 use crate::tabs::{TabId, Tabs};
 use crate::title_bar::{self, Button, ButtonColors, Chrome, Rect, Region};
 use crate::watch::ConfigWatcher;
-use crate::{appearance, bindings, choice, clipboard, icon, keys, mouse, reload, tab_bar};
+use crate::{
+    appearance, bindings, choice, clipboard, dividers, icon, keys, mouse, reload, tab_bar,
+};
 
 /// Events posted to the event loop from background threads.
 #[derive(Debug)]
@@ -1388,17 +1390,24 @@ impl Session {
                 })
             })
             .collect();
+        // Dividers first, so the window buttons stay on top.
+        let theme = appearance::palette(&config.colors.resolve());
+        let mut shapes = dividers::shapes(
+            &tab.panes.dividers((content.cols(), content.rows())),
+            self.grid_layout(),
+            dividers::DEFAULT_WIDTH,
+            dividers::default_color(theme.foreground, theme.background),
+        );
+        shapes.extend(buttons.into_iter().flatten());
         let overlay = palette.as_ref().map(|(terminal, rect)| Overlay {
             terminal,
             col: rect.col,
             row: rect.row,
         });
-        match self.renderer.draw_layers(
-            bar.as_ref(),
-            &views,
-            overlay,
-            buttons.as_deref().unwrap_or_default(),
-        ) {
+        match self
+            .renderer
+            .draw_layers(bar.as_ref(), &views, overlay, &shapes)
+        {
             Ok(()) => {
                 self.skipped_frames = 0;
                 Ok(())
