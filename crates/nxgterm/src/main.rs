@@ -19,6 +19,9 @@ mod mouse;
 mod panes;
 mod reload;
 mod tab_bar;
+// The app takes these over when it holds a pane tree per tab.
+#[allow(dead_code)]
+mod tab;
 mod tabs;
 mod title_bar;
 mod watch;
