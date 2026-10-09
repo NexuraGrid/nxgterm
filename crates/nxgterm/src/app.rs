@@ -719,6 +719,9 @@ impl App {
                 let blur = appearance::blur(session.transparent, new.window.blur);
                 appearance::apply_blur(&session.window, blur);
             }
+            if changes.panes {
+                session.window.request_redraw();
+            }
             if changes.scrollback {
                 for tab in session.tabs.iter_mut() {
                     tab.each_mut(|pane| pane.terminal.set_scrollback_limit(new.scrollback.lines));
@@ -1386,17 +1389,18 @@ impl Session {
                     col: placed.rect.col,
                     row: placed.rect.row,
                     focused: placed.focused,
-                    dim: 0.0,
+                    dim: tab::dim_of(placed.focused, config.panes.inactive_dim),
                 })
             })
             .collect();
         // Dividers first, so the window buttons stay on top.
         let theme = appearance::palette(&config.colors.resolve());
+        let (width, color) = dividers::style(&config.panes, theme.foreground, theme.background);
         let mut shapes = dividers::shapes(
             &tab.panes.dividers((content.cols(), content.rows())),
             self.grid_layout(),
-            dividers::DEFAULT_WIDTH,
-            dividers::default_color(theme.foreground, theme.background),
+            width,
+            color,
         );
         shapes.extend(buttons.into_iter().flatten());
         let overlay = palette.as_ref().map(|(terminal, rect)| Overlay {

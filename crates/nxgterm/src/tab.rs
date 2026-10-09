@@ -83,6 +83,11 @@ pub fn placements<T>(tab: &Tab<T>, area: TermSize) -> Vec<Placement> {
         .collect()
 }
 
+/// How far a pane fades: not at all with focus, `inactive` without.
+pub fn dim_of(focused: bool, inactive: f32) -> f32 {
+    if focused { 0.0 } else { inactive }
+}
+
 /// The focused pane of the active tab: where input, paste and the
 /// pointer go. Free functions (not a method of the session) so callers
 /// keep borrowing the other fields of the session.
@@ -539,5 +544,12 @@ mod tests {
         assert_eq!(close_focused(&mut tabs), Exit::Tab);
         assert!(tabs.is_empty(), "last tab: the app exits");
         assert_eq!(close_focused(&mut tabs), Exit::Stale);
+    }
+
+    #[test]
+    fn only_panes_without_focus_dim() {
+        assert_eq!(dim_of(true, 0.25), 0.0);
+        assert_eq!(dim_of(false, 0.25), 0.25);
+        assert_eq!(dim_of(false, 0.0), 0.0, "0 disables dimming");
     }
 }
