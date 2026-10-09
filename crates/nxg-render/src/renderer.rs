@@ -4,7 +4,7 @@ use nxg_core::{Flags, Terminal};
 
 use crate::frame::Frame;
 use crate::images;
-use crate::paint::{self, CellSize, Layout};
+use crate::paint::{self, CellSize, Layout, Look};
 use crate::shape;
 use crate::shape::Shape;
 use crate::style::{Overlay, Style};
@@ -68,9 +68,9 @@ impl CpuRenderer {
     /// images.
     fn paint(&mut self, term: &Terminal, frame: &mut Frame<'_>, layout: Layout) {
         let palette = &self.style.palette;
-        paint::paint_backgrounds(term, frame, layout, palette);
+        paint::paint_backgrounds(term, frame, layout, palette, Look::ACTIVE);
         images::paint(term, frame, layout, false);
-        paint::paint_cursor(term, frame, layout, palette);
+        paint::paint_cursor(term, frame, layout, palette, Look::ACTIVE);
         let cursor = term.display_cursor();
         for row in 0..term.size().rows() {
             let selected = term.selected_cols(row);
