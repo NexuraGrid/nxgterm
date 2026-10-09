@@ -57,7 +57,6 @@ pub struct CellRect {
 
 impl CellRect {
     /// Whether the cell (`col`, `row`) is inside.
-    #[allow(dead_code)] // Wired in S5 (mouse, zoom, equalize).
     pub fn contains(&self, col: u16, row: u16) -> bool {
         let inside = |at: u16, start: u16, len: u16| {
             at >= start && u32::from(at) < u32::from(start) + u32::from(len)
@@ -89,7 +88,6 @@ pub enum Closed<T> {
 
 /// What lies under a cell.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // Wired in S5 (mouse).
 pub enum Hit {
     Pane(PaneId),
     Divider(DividerPath),
@@ -630,7 +628,6 @@ impl<T> Panes<T> {
     /// (a column for side-by-side splits, a row for stacked ones),
     /// clamped to the minimums. A path that no longer names a split is
     /// ignored.
-    #[allow(dead_code)] // Wired in S5 (mouse, zoom, equalize).
     pub fn drag(&mut self, divider: &DividerPath, pos: u16, area: (u16, u16)) {
         let Some((ratio, axis, rect)) = self.split_at_mut(divider, area) else {
             return;
@@ -683,7 +680,6 @@ impl<T> Panes<T> {
 
     /// What lies under the cell (`col`, `row`) of an `area`: a pane or a
     /// divider (none outside the area).
-    #[allow(dead_code)] // Wired in S5 (mouse, zoom, equalize).
     pub fn hit(&self, area: (u16, u16), col: u16, row: u16) -> Option<Hit> {
         if let Some((id, _)) = self
             .rects(area)
