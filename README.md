@@ -474,6 +474,8 @@ winpty (Windows Server 2016) does not pass images through either.
     blur, Catppuccin Mocha flavor for Yazi ✅
 13. 0.7.0: split panes, font family lists, vector title bar buttons, theme
     files and config imports ✅
+14. 0.8.0: wide characters (emoji, CJK), combining marks, Windows and macOS
+    symbol font fallbacks ✅
 
 Planned work is tracked in
 [`openspec/RECOMMENDATIONS.md`](openspec/RECOMMENDATIONS.md).
