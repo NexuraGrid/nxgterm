@@ -28,6 +28,12 @@ impl State {
                 region.is_full(rows) || (region.top < region.bottom && region.bottom < rows),
                 "invalid region {region:?} for {rows} rows"
             );
+            for row in 0..rows {
+                let cells = screen.grid.row(row);
+                let mut repaired = cells.to_vec();
+                crate::cell::repair_wide(&mut repaired);
+                assert_eq!(cells, repaired, "orphan wide-char half in row {row}");
+            }
             if let Some(saved) = screen.saved {
                 assert!(
                     saved.col < cols && saved.row < rows,
@@ -176,6 +182,14 @@ mod tests {
         assert!(msg.contains("placement"), "{msg}");
         let msg = failure_after(|t| t.state.images.drop_image_keeping_placements(1));
         assert!(msg.contains("stashed placement"), "{msg}");
+    }
+
+    #[test]
+    fn invariants_catch_an_orphan_wide_char_half() {
+        let msg = failure_after(|t| {
+            t.state.screen.grid.row_mut(0)[5].flags = crate::Flags::WIDE;
+        });
+        assert!(msg.contains("orphan"), "{msg}");
     }
 
     #[test]

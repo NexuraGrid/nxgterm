@@ -59,7 +59,7 @@ pub struct Quads {
 /// pixel; the default background comes from the clear color instead (see
 /// [`background_quad`]).
 ///
-/// `glyph` returns the atlas slot for `(char, bold)`, `None` for glyphs
+/// `glyph` returns the atlas slot for `(char, bold, wide)`, `None` for glyphs
 /// without ink, or [`AtlasFull`].
 pub fn build<F>(
     term: &Terminal,
@@ -70,7 +70,7 @@ pub fn build<F>(
     glyph: F,
 ) -> Result<Quads, AtlasFull>
 where
-    F: FnMut(char, bool) -> Result<Option<GlyphSlot>, AtlasFull>,
+    F: FnMut(char, bool, bool) -> Result<Option<GlyphSlot>, AtlasFull>,
 {
     let mut glyph = glyph;
     let rows = term.size().rows();
@@ -102,19 +102,25 @@ where
     let backgrounds = instances.len();
     let cursor = term.display_cursor();
     if cursor.visible {
-        instances.push(solid(
-            cell_pos(usize::from(cursor.col), cursor.row),
-            palette.cursor,
-        ));
+        instances.push(Instance {
+            size: [cell.width * paint::cursor_cells(term, cursor), cell.height],
+            ..solid(
+                cell_pos(usize::from(cursor.col), cursor.row),
+                palette.cursor,
+            )
+        });
     }
 
     for row in 0..rows {
         let selected = term.selected_cols(row);
-        for (col, c) in term.display_row(row).iter().enumerate() {
+        let cells = term.display_row(row);
+        for (col, c) in cells.iter().enumerate() {
+            // Wide-char spacers are blank too: only their background.
             if c.ch == ' ' {
                 continue;
             }
-            let Some(slot) = glyph(c.ch, c.flags.contains(Flags::BOLD))? else {
+            let wide = paint::is_wide(cells, col);
+            let Some(slot) = glyph(c.ch, c.flags.contains(Flags::BOLD), wide)? else {
                 continue;
             };
             let selected = paint::is_selected(&selected, col);
@@ -195,7 +201,7 @@ mod tests {
     }
 
     /// A 4x6 glyph sitting 1px right of the pen and 2px above the baseline.
-    fn slot(ch: char, bold: bool) -> Result<Option<GlyphSlot>, AtlasFull> {
+    fn slot(ch: char, bold: bool, _wide: bool) -> Result<Option<GlyphSlot>, AtlasFull> {
         Ok(Some(GlyphSlot {
             xmin: 1,
             ymin: 2,
@@ -371,7 +377,7 @@ mod tests {
             FLUSH,
             BASELINE,
             false,
-            |ch, _| {
+            |ch, _, _| {
                 asked.push(ch);
                 Ok(None)
             },
@@ -383,6 +389,39 @@ mod tests {
     }
 
     #[test]
+    fn wide_cells_ask_for_wide_glyphs_and_spacers_for_nothing() {
+        let mut asked = Vec::new();
+        let term = term(4, 1, "\x1b[?25l日x".as_bytes());
+        build(
+            &term,
+            &Palette::default(),
+            FLUSH,
+            BASELINE,
+            false,
+            |ch, _, wide| {
+                asked.push((ch, wide));
+                Ok(None)
+            },
+        )
+        .unwrap();
+        assert_eq!(asked, [('日', true), ('x', false)]);
+    }
+
+    #[test]
+    fn the_cursor_covers_both_cells_of_a_wide_char() {
+        let palette = Palette::default();
+        let term = term(4, 1, "日\x1b[1G".as_bytes());
+        let instances = build(&term, &palette, FLUSH, BASELINE, false, slot)
+            .unwrap()
+            .instances;
+        let cursor = Instance {
+            size: [2 * CELL.width, CELL.height],
+            ..solid(0, 0, palette.cursor)
+        };
+        assert_eq!(instances[0], cursor);
+    }
+
+    #[test]
     fn propagates_atlas_full() {
         let term = term(2, 1, b"ab");
         let result = build(
@@ -391,7 +430,7 @@ mod tests {
             FLUSH,
             BASELINE,
             false,
-            |_, _| Err(AtlasFull),
+            |_, _, _| Err(AtlasFull),
         );
         assert_eq!(result, Err(AtlasFull));
     }

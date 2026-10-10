@@ -274,7 +274,7 @@ pub struct Font {
     cell: CellSize,
     /// Distance from the cell top to the baseline in pixels.
     baseline: i32,
-    cache: HashMap<(char, bool), Glyph>,
+    cache: HashMap<(char, bool, bool), Glyph>,
 }
 
 impl fmt::Debug for Font {
@@ -347,16 +347,18 @@ impl Font {
     /// The first face that has `ch` draws it: bold (when asked), regular,
     /// then the fallbacks; a fallback glyph that rasterizes blank (e.g. a
     /// color-only emoji) is skipped. Without any, the primary face draws
-    /// its missing-glyph box. The result is cached per character.
-    pub fn glyph(&mut self, ch: char, bold: bool) -> &Glyph {
-        if !self.cache.contains_key(&(ch, bold)) {
-            let glyph = self.rasterize(ch, bold);
-            self.cache.insert((ch, bold), glyph);
+    /// its missing-glyph box. A `wide` glyph (a double-width cell) is
+    /// fitted into two cells. The result is cached per character.
+    pub fn glyph(&mut self, ch: char, bold: bool, wide: bool) -> &Glyph {
+        let key = (ch, bold, wide);
+        if !self.cache.contains_key(&key) {
+            let glyph = self.rasterize(ch, bold, wide);
+            self.cache.insert(key, glyph);
         }
-        &self.cache[&(ch, bold)]
+        &self.cache[&key]
     }
 
-    fn rasterize(&self, ch: char, bold: bool) -> Glyph {
+    fn rasterize(&self, ch: char, bold: bool, wide: bool) -> Glyph {
         let primary = match (&self.bold, bold) {
             (Some(face), true) => face,
             _ => &self.regular,
@@ -368,16 +370,17 @@ impl Font {
         self.fallbacks
             .iter()
             .filter(|face| has(face))
-            .map(|face| self.fitted(face, ch))
+            .map(|face| self.fitted(face, ch, 1 + u32::from(wide)))
             .find(|glyph| glyph.coverage.iter().any(|&a| a > 0))
             .unwrap_or_else(|| raster(primary, ch, self.px, 0))
     }
 
-    /// `ch` from the fallback `face`, scaled down to fit the cell when
-    /// wider or taller than it and centered horizontally in the cell.
-    fn fitted(&self, face: &fontdue::Font, ch: char) -> Glyph {
+    /// `ch` from the fallback `face`, scaled down to fit a box of `cells`
+    /// cells when wider or taller than it and centered horizontally in it.
+    fn fitted(&self, face: &fontdue::Font, ch: char, cells: u32) -> Glyph {
         let metrics = face.metrics(ch, self.px);
-        let (cell_w, cell_h) = (self.cell.width as f32, self.cell.height as f32);
+        let cell_w = (self.cell.width * cells) as f32;
+        let cell_h = self.cell.height as f32;
         let mut scale = 1.0_f32;
         if metrics.advance_width > cell_w {
             scale = cell_w / metrics.advance_width;
@@ -426,9 +429,14 @@ mod tests {
         let Some(mut font) = system_font() else {
             return;
         };
-        let glyph = font.glyph('A', false);
+        let glyph = font.glyph('A', false, false);
         assert!(glyph.width > 0 && glyph.coverage.iter().any(|&a| a > 0));
-        assert!(font.glyph(' ', true).coverage.iter().all(|&a| a == 0));
+        assert!(
+            font.glyph(' ', true, false)
+                .coverage
+                .iter()
+                .all(|&a| a == 0)
+        );
         assert_eq!(font.cache.len(), 2);
     }
 
@@ -498,8 +506,8 @@ mod tests {
     #[test]
     fn missing_glyph_without_fallback_is_blank() {
         let mut font = box_fonts(&['M'], &[]);
-        assert!(inked(font.glyph('M', false)));
-        assert!(!inked(font.glyph(ICON, false)));
+        assert!(inked(font.glyph('M', false, false)));
+        assert!(!inked(font.glyph(ICON, false, false)));
     }
 
     #[test]
@@ -511,17 +519,17 @@ mod tests {
         let primary_cell = box_fonts(&['M'], &[]).cell_size();
         assert_eq!(font.cell_size(), primary_cell, "fallbacks keep the cell");
         // 400-unit face: 200 units (4 px) of ink, centered in the 12 px cell.
-        let icon = font.glyph(ICON, false).clone();
+        let icon = font.glyph(ICON, false, false).clone();
         assert!(inked(&icon));
         assert_eq!((icon.xmin, icon.width), (4, 4));
-        let y = font.glyph('y', false);
+        let y = font.glyph('y', false, false);
         assert_eq!((y.xmin, y.width), (2, 8), "only the last face has it");
     }
 
     #[test]
     fn primary_glyphs_win_over_fallbacks() {
         let mut font = box_fonts(&['M'], &[(&['M'], 400)]);
-        let m = font.glyph('M', false);
+        let m = font.glyph('M', false, false);
         assert_eq!((m.xmin, m.width), (2, 8));
     }
 
@@ -529,7 +537,7 @@ mod tests {
     fn wide_fallback_glyphs_are_scaled_into_the_cell() {
         let mut font = box_fonts(&['M'], &[(&[ICON], 1500)]);
         let cell = font.cell_size();
-        let icon = font.glyph(ICON, false).clone();
+        let icon = font.glyph(ICON, false, false).clone();
         assert!(inked(&icon));
         assert!(icon.xmin >= 0, "starts inside the cell: {}", icon.xmin);
         assert!(icon.xmin + icon.width as i32 <= cell.width as i32);
@@ -537,11 +545,29 @@ mod tests {
     }
 
     #[test]
+    fn wide_glyphs_are_fitted_into_two_cells() {
+        let mut font = box_fonts(&['M'], &[(&[ICON], 1500)]);
+        let cell = font.cell_size().width as i32;
+        let narrow = font.glyph(ICON, false, false).clone();
+        let wide = font.glyph(ICON, false, true).clone();
+        assert!(
+            wide.width > narrow.width,
+            "cached apart from the narrow one"
+        );
+        assert!(
+            wide.width as i32 > cell,
+            "wider than one cell: {}",
+            wide.width
+        );
+        assert!(wide.xmin >= 0 && wide.xmin + wide.width as i32 <= 2 * cell);
+    }
+
+    #[test]
     fn bold_falls_back_to_the_regular_face_first() {
         let regular = test_font::box_font(&['M', 'A'], 600);
         let bold = test_font::box_font(&['M'], 600);
         let mut font = Font::from_bytes(regular, 0, Some((bold, 0)), PX).unwrap();
-        assert!(inked(font.glyph('A', true)));
+        assert!(inked(font.glyph('A', true, false)));
     }
 
     fn names(names: &[&str]) -> Vec<String> {

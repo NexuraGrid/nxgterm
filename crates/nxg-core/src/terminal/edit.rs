@@ -229,7 +229,7 @@ impl State {
     pub(super) fn erase(&mut self, row: u16, cols: std::ops::Range<u16>) {
         self.damage(row, row);
         let blank = self.blank();
-        self.screen.grid.row_mut(row)[usize::from(cols.start)..usize::from(cols.end)].fill(blank);
+        self.screen.grid.erase_cells(row, cols.clone(), blank);
         self.images.remove_sixels_over(row, cols, self.cell);
     }
 
@@ -751,5 +751,56 @@ mod tests {
         assert_eq!(pos(&t), (0, 0), "below the region it may cross it");
         t.advance(b"\x1b[1;3H\x1b[99E");
         assert_eq!(pos(&t), (0, 4), "above the region it may cross it");
+    }
+
+    /// The edit `seq` applied to a 6-column row holding `日本x`, read back
+    /// with `+` for each wide spacer.
+    fn after_edit(seq: &str) -> String {
+        let mut t = sized(6, 1);
+        t.advance(format!("日本x{seq}").as_bytes());
+        t.state.assert_invariants();
+        let line: String = t
+            .row(0)
+            .iter()
+            .map(|c| match c.flags.contains(crate::Flags::WIDE_SPACER) {
+                true => '+',
+                false => c.ch,
+            })
+            .collect();
+        line.trim_end().to_owned()
+    }
+
+    #[test]
+    fn erasing_either_half_of_a_wide_char_blanks_both() {
+        assert_eq!(after_edit("\x1b[2G\x1b[X"), "  本+x", "ECH on the spacer");
+        assert_eq!(after_edit("\x1b[3G\x1b[X"), "日+  x", "ECH on the char");
+        assert_eq!(after_edit("\x1b[2G\x1b[K"), "", "EL 0 from the spacer");
+        assert_eq!(after_edit("\x1b[3G\x1b[1K"), "    x", "EL 1 to the char");
+        assert_eq!(after_edit("\x1b[3G\x1b[1J"), "    x", "ED 1 to the char");
+    }
+
+    #[test]
+    fn inserting_or_deleting_inside_a_wide_char_blanks_both_halves() {
+        assert_eq!(after_edit("\x1b[2G\x1b[@"), "   本+x", "ICH splits 日");
+        assert_eq!(
+            after_edit("\x1b[1G\x1b[P"),
+            " 本+x",
+            "DCH removes 日's left half"
+        );
+        assert_eq!(
+            after_edit("\x1b[1G\x1b[2P"),
+            "本+x",
+            "DCH removes all of 日"
+        );
+        assert_eq!(
+            after_edit("\x1b[1G\x1b[@"),
+            " 日+本+x",
+            "ICH moves whole pairs"
+        );
+        assert_eq!(
+            after_edit("\x1b[1G\x1b[3@"),
+            "   日+",
+            "本 pushed half off the edge"
+        );
     }
 }

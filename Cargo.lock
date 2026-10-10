@@ -1224,6 +1224,7 @@ version = "0.6.0"
 dependencies = [
  "flate2",
  "png",
+ "unicode-width",
  "vte",
 ]
 

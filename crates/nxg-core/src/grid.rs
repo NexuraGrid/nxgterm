@@ -1,7 +1,7 @@
 //! Fixed-size grid of cells.
 
 use crate::TermSize;
-use crate::cell::Cell;
+use crate::cell::{Cell, repair_wide};
 
 /// An inclusive range of rows (a scroll region). Valid regions keep
 /// `top < bottom < rows`; anything else means the whole screen.
@@ -91,13 +91,15 @@ impl Grid {
 
     /// ICH: opens `n` blank cells at `col`, pushing the rest of the row right;
     /// cells pushed past the edge are lost. `n` is clamped to the remaining
-    /// width. Panics on a row outside the grid, like `row()`.
+    /// width. Panics on a row outside the grid, like `row()`. Like every cell
+    /// edit here, it blanks wide-char halves it separates (see [`repair_wide`]).
     pub fn insert_cells(&mut self, row: u16, col: u16, n: u16, blank: Cell) {
         let cells = self.row_mut(row);
         let col = usize::from(col).min(cells.len());
         let n = usize::from(n).min(cells.len() - col);
         cells[col..].rotate_right(n);
         cells[col..col + n].fill(blank);
+        repair_wide(cells);
     }
 
     /// DCH: removes `n` cells at `col`, pulling the rest of the row left and
@@ -109,6 +111,7 @@ impl Grid {
         cells[col..].rotate_left(n);
         let len = cells.len();
         cells[len - n..].fill(blank);
+        repair_wide(cells);
     }
 
     /// ECH: blanks `cols` in place; the range is clamped to the row.
@@ -117,14 +120,17 @@ impl Grid {
         let end = usize::from(cols.end).min(cells.len());
         let start = usize::from(cols.start).min(end);
         cells[start..end].fill(blank);
+        repair_wide(cells);
     }
 
-    /// Resizes keeping the top-left content; new cells are blank.
+    /// Resizes keeping the top-left content; new cells are blank and a wide
+    /// char cut at the right edge is blanked.
     pub fn resize(&mut self, size: TermSize) {
         let mut next = Self::new(size);
         let cols = usize::from(size.cols().min(self.size.cols()));
         for row in 0..size.rows().min(self.size.rows()) {
             next.row_mut(row)[..cols].copy_from_slice(&self.row(row)[..cols]);
+            repair_wide(next.row_mut(row));
         }
         *self = next;
     }

@@ -32,6 +32,8 @@ raw-window-handle = "0.6"
 serde = { version = "1", features = ["derive"] }
 softbuffer = "0.4"
 toml = "1"
+# Display width of characters: wide CJK/emoji, zero-width marks.
+unicode-width = "0.2"
 vte = "0.15"
 # 30 declares Rust 1.87. `webgpu` (wasm only) is left out.
 wgpu = { version = "30", default-features = false, features = [

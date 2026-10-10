@@ -24,6 +24,10 @@ impl Flags {
     /// row through scrolling and into the history, and disappears when that
     /// cell is rewritten or erased.
     pub const WRAPLINE: Self = Self(1 << 4);
+    /// A double-width character; the next cell is its [`Flags::WIDE_SPACER`].
+    pub const WIDE: Self = Self(1 << 5);
+    /// The blank right half of the [`Flags::WIDE`] cell before it.
+    pub const WIDE_SPACER: Self = Self(1 << 6);
 
     pub fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
@@ -64,6 +68,29 @@ pub fn wraps(row: &[Cell]) -> bool {
         .is_some_and(|cell| cell.flags.contains(Flags::WRAPLINE))
 }
 
+/// Blanks every half of a wide pair in `row` whose other half is gone, so
+/// that edits never leave a wide character without its spacer or a spacer
+/// without its character. The orphan keeps its colors.
+pub fn repair_wide(row: &mut [Cell]) {
+    let is = |cell: Option<&Cell>, flag| cell.is_some_and(|c| c.flags.contains(flag));
+    for i in 0..row.len() {
+        let orphan = (is(row.get(i), Flags::WIDE) && !is(row.get(i + 1), Flags::WIDE_SPACER))
+            || (is(row.get(i), Flags::WIDE_SPACER) && !(i > 0 && is(row.get(i - 1), Flags::WIDE)));
+        if orphan {
+            row[i].unwide();
+        }
+    }
+}
+
+impl Cell {
+    /// Turns either half of a wide pair into a plain blank, keeping colors.
+    pub fn unwide(&mut self) {
+        self.ch = ' ';
+        self.flags.remove(Flags::WIDE);
+        self.flags.remove(Flags::WIDE_SPACER);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,6 +103,32 @@ mod tests {
         assert!(flags.contains(Flags::BOLD) && flags.contains(Flags::INVERSE));
         flags.remove(Flags::BOLD);
         assert!(!flags.contains(Flags::BOLD) && flags.contains(Flags::INVERSE));
+    }
+
+    fn cell(ch: char, flags: Flags) -> Cell {
+        Cell {
+            ch,
+            bg: Color::Indexed(1),
+            flags,
+            ..Cell::default()
+        }
+    }
+
+    #[test]
+    fn repair_wide_blanks_orphan_halves_and_keeps_whole_pairs() {
+        let (wide, spacer, none) = (Flags::WIDE, Flags::WIDE_SPACER, Flags::default());
+        let mut row = [
+            cell('日', wide),
+            cell(' ', spacer),
+            cell('本', wide),
+            cell('x', none),
+            cell(' ', spacer),
+            cell('語', wide),
+        ];
+        repair_wide(&mut row);
+        let blank = cell(' ', none);
+        assert_eq!(row[..2], [cell('日', wide), cell(' ', spacer)]);
+        assert_eq!(row[2..], [blank, cell('x', none), blank, blank]);
     }
 
     #[test]

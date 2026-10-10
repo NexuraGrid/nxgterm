@@ -294,4 +294,15 @@ mod tests {
         t.start_selection(SelectionKind::Word, t.point_at(6, 0));
         assert_eq!(selected(&t).as_deref(), Some("~/a/b.txt|x"));
     }
+
+    #[test]
+    fn wide_char_spacers_are_left_out_of_the_text() {
+        let mut t = term(10, 1);
+        t.advance("日本x 語".as_bytes());
+        drag(&mut t, (0, 0), (7, 0));
+        assert_eq!(selected(&t).as_deref(), Some("日本x 語"));
+        // A word runs through the spacers, clicked on either half.
+        t.start_selection(SelectionKind::Word, t.point_at(1, 0));
+        assert_eq!(selected(&t).as_deref(), Some("日本x"));
+    }
 }

@@ -70,7 +70,9 @@ impl CpuRenderer {
         let cursor = term.display_cursor();
         for row in 0..term.size().rows() {
             let selected = term.selected_cols(row);
-            for (col, c) in term.display_row(row).iter().enumerate() {
+            let cells = term.display_row(row);
+            for (col, c) in cells.iter().enumerate() {
+                // Wide-char spacers are blank too: only their background.
                 if c.ch == ' ' {
                     continue;
                 }
@@ -81,15 +83,25 @@ impl CpuRenderer {
                 }
                 let (x, y) = layout.origin(col as u32, u32::from(row));
                 let (x, y) = (i64::from(x), i64::from(y));
-                self.draw_glyph(frame, c.ch, c.flags.contains(Flags::BOLD), x, y, fg);
+                let bold = c.flags.contains(Flags::BOLD);
+                let wide = paint::is_wide(cells, col);
+                self.draw_glyph(frame, c.ch, bold, wide, (x, y), fg);
             }
         }
         images::paint(term, frame, layout, true);
     }
 
-    fn draw_glyph(&mut self, frame: &mut Frame<'_>, ch: char, bold: bool, x: i64, y: i64, fg: u32) {
+    fn draw_glyph(
+        &mut self,
+        frame: &mut Frame<'_>,
+        ch: char,
+        bold: bool,
+        wide: bool,
+        (x, y): (i64, i64),
+        fg: u32,
+    ) {
         let baseline = i64::from(self.style.font.baseline());
-        let glyph = self.style.font.glyph(ch, bold);
+        let glyph = self.style.font.glyph(ch, bold, wide);
         let left = x + i64::from(glyph.xmin);
         let top = y + baseline - i64::from(glyph.ymin) - glyph.height as i64;
         for (i, &alpha) in glyph.coverage.iter().enumerate() {
@@ -163,6 +175,39 @@ mod tests {
         assert_eq!(ink(primary()), 0, "the primary font has no icon");
         let with_fallback = primary().with_fallbacks(vec![fallback].into());
         assert!(ink(with_fallback) > 0, "the fallback face draws it");
+    }
+
+    #[test]
+    fn a_wide_char_is_drawn_across_its_two_cells() {
+        use crate::font::parse_face;
+        use crate::test_font::box_font;
+        // 1200 units: exactly two 12 px cells, so it is not scaled.
+        let fallback = parse_face(box_font(&['日'], 1200), 0).unwrap();
+        let font = Font::from_bytes(box_font(&['M'], 600), 0, None, 20.0)
+            .unwrap()
+            .with_fallbacks(vec![fallback].into());
+        let mut renderer = CpuRenderer::new(Style {
+            font,
+            palette: Palette::default(),
+            padding: 0,
+            background_opacity: 1.0,
+        });
+        let cell = renderer.cell_size();
+        let mut term = Terminal::new(TermSize::new(3, 1).unwrap());
+        term.advance("\x1b[?25l日".as_bytes());
+        let (w, h) = (cell.width * 3, cell.height);
+        let mut pixels = vec![0; (w * h) as usize];
+        let mut frame = Frame::new(&mut pixels, w, h).unwrap();
+        renderer.render(&term, &mut frame);
+        let bg = Palette::default().background;
+        let inked =
+            |x0: u32, x1: u32| (x0..x1).any(|x| (0..h).any(|y| frame.pixel(x, y) != Some(bg)));
+        assert!(inked(0, cell.width), "left half");
+        assert!(
+            inked(cell.width, 2 * cell.width),
+            "right half, over the spacer"
+        );
+        assert!(!inked(2 * cell.width, w), "the next cell stays blank");
     }
 
     #[test]

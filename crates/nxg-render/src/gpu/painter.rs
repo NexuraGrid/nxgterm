@@ -342,7 +342,7 @@ impl Painter {
         let baseline = self.style.font.baseline();
         let opaque_header = self.background_alpha() < 1.0;
         let (atlas, font, palette) = (&mut self.atlas, &mut self.style.font, &self.style.palette);
-        let all = |glyph: &mut dyn FnMut(char, bool) -> Result<Option<GlyphSlot>, AtlasFull>| {
+        let all = |glyph: &mut SlotFn| {
             let mut quads = instance::build(term, palette, grid, baseline, false, &mut *glyph)?;
             let term_quads = quads.instances.len();
             if let Some(header) = header {
@@ -363,14 +363,17 @@ impl Painter {
             }
             Ok(Frame { quads, term_quads })
         };
-        let first = all(&mut |ch, bold| atlas.slot(queue, font, ch, bold));
+        let first = all(&mut |ch, bold, wide| atlas.slot(queue, font, ch, bold, wide));
         first.unwrap_or_else(|_: AtlasFull| {
             atlas.clear();
-            all(&mut |ch, bold| Ok(atlas.slot(queue, font, ch, bold).unwrap_or(None)))
+            all(&mut |ch, bold, wide| Ok(atlas.slot(queue, font, ch, bold, wide).unwrap_or(None)))
                 .unwrap_or_default()
         })
     }
 }
+
+/// Looks up the atlas slot of `(char, bold, wide)` (see [`instance::build`]).
+type SlotFn<'a> = dyn FnMut(char, bool, bool) -> Result<Option<GlyphSlot>, AtlasFull> + 'a;
 
 /// One frame's quads: those of the grid first (`term_quads` of them),
 /// then the header's and the overlay's.

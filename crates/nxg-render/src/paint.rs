@@ -1,6 +1,6 @@
 //! Font-independent drawing: cell geometry, colors, backgrounds and cursor.
 
-use nxg_core::{Cell, Color, Flags, TermSize, Terminal};
+use nxg_core::{Cell, Color, Cursor, Flags, TermSize, Terminal};
 
 use crate::frame::Frame;
 use crate::palette::{Palette, Rgb};
@@ -146,13 +146,26 @@ pub fn paint_backgrounds(
     }
 }
 
-/// Draws a block cursor when it is visible.
+/// Whether `cells[col]` is a wide char with room for both of its cells
+/// (a history line wider than the grid may cut it at the edge).
+pub fn is_wide(cells: &[Cell], col: usize) -> bool {
+    col + 1 < cells.len() && cells[col].flags.contains(Flags::WIDE)
+}
+
+/// How many cells the cursor covers: two over a wide char, else one.
+pub fn cursor_cells(term: &Terminal, cursor: Cursor) -> u32 {
+    let cells = term.display_row(cursor.row);
+    1 + u32::from(is_wide(cells, usize::from(cursor.col)))
+}
+
+/// Draws a block cursor when it is visible, over both cells of a wide char.
 pub fn paint_cursor(term: &Terminal, frame: &mut Frame<'_>, layout: Layout, palette: &Palette) {
     let cursor = term.display_cursor();
     if cursor.visible {
         let (x, y) = layout.origin(u32::from(cursor.col), u32::from(cursor.row));
         let cell = layout.cell;
-        frame.fill_rect(x, y, cell.width, cell.height, palette.cursor);
+        let width = cell.width * cursor_cells(term, cursor);
+        frame.fill_rect(x, y, width, cell.height, palette.cursor);
     }
 }
 
@@ -403,6 +416,16 @@ mod tests {
         let mut frame = Frame::new(&mut pixels, 4, 2).unwrap();
         paint_cursor(&term, &mut frame, FLUSH, &palette);
         assert!(pixels.iter().all(|&p| p == 0));
+    }
+
+    #[test]
+    fn the_cursor_covers_both_cells_of_a_wide_char() {
+        let palette = Palette::default();
+        let term = term(2, 1, "日\x1b[1G".as_bytes());
+        let mut pixels = vec![0; 4 * 2];
+        let mut frame = Frame::new(&mut pixels, 4, 2).unwrap();
+        paint_cursor(&term, &mut frame, FLUSH, &palette);
+        assert_eq!(pixels, [palette.cursor; 8]);
     }
 
     #[test]

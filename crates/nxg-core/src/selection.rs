@@ -13,7 +13,7 @@
 
 use std::ops::{Range, RangeInclusive};
 
-use crate::cell::{Cell, wraps};
+use crate::cell::{Cell, Flags, wraps};
 
 /// A cell position: absolute line, then column. Ordered in reading order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -177,10 +177,16 @@ pub fn is_word_char(ch: char) -> bool {
     !ch.is_whitespace() && !WORD_SEPARATORS.contains(ch)
 }
 
-/// The character at `point`, blank past the end of a short line.
+/// The character at `point`, blank past the end of a short line. A wide
+/// char's spacer reads as the char, so words run through it.
 fn char_at(lines: &impl Lines, point: Point) -> Option<char> {
     let line = lines.line(point.line)?;
-    Some(line.get(usize::from(point.col)).map_or(' ', |cell| cell.ch))
+    let col = usize::from(point.col);
+    let cell = match line.get(col) {
+        Some(cell) if cell.flags.contains(Flags::WIDE_SPACER) && col > 0 => line.get(col - 1),
+        cell => cell,
+    };
+    Some(cell.map_or(' ', |cell| cell.ch))
 }
 
 /// The cell before `point`, continuing on the end of the previous line
@@ -257,7 +263,8 @@ fn logical_last(lines: &impl Lines, mut line: u64) -> u64 {
     line
 }
 
-/// The text of `span`: each line's selected cells with trailing blanks
+/// The text of `span`: each line's selected cells (wide-char spacers left
+/// out) with trailing blanks
 /// trimmed, lines joined with `\n`, except that a line that soft-wraps
 /// into the next joins it directly (and keeps its trailing blanks, which
 /// are real spaces). Lines that no longer exist are left out.
@@ -279,7 +286,11 @@ pub fn text(span: &Span, lines: &impl Lines) -> String {
             usize::from(cols.end).min(cells.len())
         };
         let start = usize::from(cols.start).min(end);
-        let chunk: String = cells[start..end].iter().map(|cell| cell.ch).collect();
+        let chunk: String = cells[start..end]
+            .iter()
+            .filter(|cell| !cell.flags.contains(Flags::WIDE_SPACER))
+            .map(|cell| cell.ch)
+            .collect();
         let joined = to_end && wraps(cells);
         if joined {
             out.push_str(&chunk);

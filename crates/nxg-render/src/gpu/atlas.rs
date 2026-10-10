@@ -11,13 +11,13 @@ use crate::font::Font;
 const SIZE: u32 = 1024;
 
 /// Glyph coverage texture plus the slot of every glyph uploaded so far,
-/// keyed like the CPU glyph cache: `(char, bold)`.
+/// keyed like the CPU glyph cache: `(char, bold, wide)`.
 #[derive(Debug)]
 pub struct Atlas {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     packer: ShelfPacker,
-    slots: HashMap<(char, bool), Option<GlyphSlot>>,
+    slots: HashMap<(char, bool, bool), Option<GlyphSlot>>,
 }
 
 impl Atlas {
@@ -49,7 +49,8 @@ impl Atlas {
         &self.view
     }
 
-    /// The slot for `(ch, bold)`, rasterizing and uploading it on first use.
+    /// The slot for `(ch, bold, wide)`, rasterizing and uploading it on first
+    /// use.
     /// `None` means the glyph has no ink (or can never fit the atlas).
     pub fn slot(
         &mut self,
@@ -57,11 +58,13 @@ impl Atlas {
         font: &mut Font,
         ch: char,
         bold: bool,
+        wide: bool,
     ) -> Result<Option<GlyphSlot>, AtlasFull> {
-        if let Some(&slot) = self.slots.get(&(ch, bold)) {
+        let key = (ch, bold, wide);
+        if let Some(&slot) = self.slots.get(&key) {
             return Ok(slot);
         }
-        let glyph = font.glyph(ch, bold);
+        let glyph = font.glyph(ch, bold, wide);
         let (width, height) = (glyph.width as u32, glyph.height as u32);
         let slot = if width == 0 || height == 0 || width > SIZE || height > SIZE {
             None
@@ -98,7 +101,7 @@ impl Atlas {
                 uv,
             })
         };
-        self.slots.insert((ch, bold), slot);
+        self.slots.insert(key, slot);
         Ok(slot)
     }
 
