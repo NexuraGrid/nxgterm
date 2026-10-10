@@ -34,6 +34,8 @@ softbuffer = "0.4"
 toml = "1"
 # Display width of characters: wide CJK/emoji, zero-width marks.
 unicode-width = "0.2"
+# Canonical composition of a base char and a combining mark (NFC).
+unicode-normalization = "0.1"
 vte = "0.15"
 # 30 declares Rust 1.87. `webgpu` (wasm only) is left out.
 wgpu = { version = "30", default-features = false, features = [

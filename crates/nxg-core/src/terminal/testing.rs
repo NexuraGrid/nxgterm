@@ -33,6 +33,10 @@ impl State {
                 let mut repaired = cells.to_vec();
                 crate::cell::repair_wide(&mut repaired);
                 assert_eq!(cells, repaired, "orphan wide-char half in row {row}");
+                let spacer_marks = cells.iter().any(|cell| {
+                    cell.flags.contains(crate::Flags::WIDE_SPACER) && !cell.marks.is_empty()
+                });
+                assert!(!spacer_marks, "marks on a wide-char spacer in row {row}");
             }
             if let Some(saved) = screen.saved {
                 assert!(
@@ -190,6 +194,17 @@ mod tests {
             t.state.screen.grid.row_mut(0)[5].flags = crate::Flags::WIDE;
         });
         assert!(msg.contains("orphan"), "{msg}");
+    }
+
+    #[test]
+    fn invariants_catch_marks_on_a_wide_char_spacer() {
+        let msg = failure_after(|t| {
+            let row = t.state.screen.grid.row_mut(0);
+            row[0].flags = crate::Flags::WIDE;
+            row[1].flags = crate::Flags::WIDE_SPACER;
+            row[1].marks.push('\u{301}');
+        });
+        assert!(msg.contains("spacer"), "{msg}");
     }
 
     #[test]

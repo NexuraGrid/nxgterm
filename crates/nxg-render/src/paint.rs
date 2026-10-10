@@ -152,6 +152,14 @@ pub fn is_wide(cells: &[Cell], col: usize) -> bool {
     col + 1 < cells.len() && cells[col].flags.contains(Flags::WIDE)
 }
 
+/// The chars drawn in `cell`, in order: its char unless blank (spaces and
+/// wide-char spacers), then the combining marks drawn over it.
+pub fn glyph_chars(cell: &Cell) -> impl Iterator<Item = char> {
+    std::iter::once(cell.ch)
+        .filter(|&ch| ch != ' ')
+        .chain(cell.marks.iter())
+}
+
 /// How many cells the cursor covers: two over a wide char, else one.
 pub fn cursor_cells(term: &Terminal, cursor: Cursor) -> u32 {
     let cells = term.display_row(cursor.row);

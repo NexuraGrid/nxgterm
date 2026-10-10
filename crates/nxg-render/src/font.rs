@@ -348,7 +348,9 @@ impl Font {
     /// then the fallbacks; a fallback glyph that rasterizes blank (e.g. a
     /// color-only emoji) is skipped. Without any, the primary face draws
     /// its missing-glyph box. A `wide` glyph (a double-width cell) is
-    /// fitted into two cells. The result is cached per character.
+    /// fitted into two cells. A zero-width char (a combining mark, see
+    /// [`Font::mark`]) is centered in its base's cells instead. The result is
+    /// cached per character.
     pub fn glyph(&mut self, ch: char, bold: bool, wide: bool) -> &Glyph {
         let key = (ch, bold, wide);
         if !self.cache.contains_key(&key) {
@@ -359,10 +361,10 @@ impl Font {
     }
 
     fn rasterize(&self, ch: char, bold: bool, wide: bool) -> Glyph {
-        let primary = match (&self.bold, bold) {
-            (Some(face), true) => face,
-            _ => &self.regular,
-        };
+        let primary = self.primary(bold);
+        if nxg_core::cell::is_zero_width(ch) {
+            return self.mark(ch, bold, 1 + u32::from(wide));
+        }
         let has = |face: &fontdue::Font| face.lookup_glyph_index(ch) != 0;
         if let Some(face) = [primary, &self.regular].into_iter().find(|face| has(face)) {
             return raster(face, ch, self.px, 0);
@@ -373,6 +375,40 @@ impl Font {
             .map(|face| self.fitted(face, ch, 1 + u32::from(wide)))
             .find(|glyph| glyph.coverage.iter().any(|&a| a > 0))
             .unwrap_or_else(|| raster(primary, ch, self.px, 0))
+    }
+
+    fn primary(&self, bold: bool) -> &fontdue::Font {
+        match (&self.bold, bold) {
+            (Some(face), true) => face,
+            _ => &self.regular,
+        }
+    }
+
+    /// The combining mark `ch`, drawn over a base char of `cells` cells:
+    /// the inked glyph of the first face that has it (bold, regular, then
+    /// the fallbacks), centered horizontally in the cells. Font bearings of
+    /// marks are left out: they place the mark relative to the advance of
+    /// a proportional base glyph, which a fitted or fallback base does not
+    /// have. Invisible chars (joiners, variation selectors) and marks no
+    /// face has draw nothing rather than a missing-glyph box.
+    fn mark(&self, ch: char, bold: bool, cells: u32) -> Glyph {
+        let faces = [self.primary(bold), &self.regular]
+            .into_iter()
+            .chain(self.fallbacks.iter());
+        let mut glyph = faces
+            .filter(|face| !is_invisible(ch) && face.lookup_glyph_index(ch) != 0)
+            .map(|face| raster(face, ch, self.px, 0))
+            .find(|glyph| glyph.coverage.iter().any(|&a| a > 0))
+            .unwrap_or(Glyph {
+                xmin: 0,
+                ymin: 0,
+                width: 0,
+                height: 0,
+                coverage: Vec::new(),
+            });
+        let box_width = (self.cell.width * cells) as i32;
+        glyph.xmin = (box_width - glyph.width as i32) / 2;
+        glyph
     }
 
     /// `ch` from the fallback `face`, scaled down to fit a box of `cells`
@@ -392,6 +428,20 @@ impl Font {
         let shift = ((cell_w - advance) / 2.0).round() as i32;
         raster(face, ch, self.px * scale, shift)
     }
+}
+
+/// Default-ignorable zero-width chars, which have no ink of their own:
+/// joiners, directional marks, variation selectors and tags.
+fn is_invisible(ch: char) -> bool {
+    matches!(ch,
+        '\u{034f}'
+        | '\u{180b}'..='\u{180f}'
+        | '\u{200b}'..='\u{200f}'
+        | '\u{202a}'..='\u{202e}'
+        | '\u{2060}'..='\u{206f}'
+        | '\u{fe00}'..='\u{fe0f}'
+        | '\u{feff}'
+        | '\u{e0000}'..='\u{e0fff}')
 }
 
 /// `ch` from `face` at `px`, moved right by `shift` pixels.
@@ -524,6 +574,43 @@ mod tests {
         assert_eq!((icon.xmin, icon.width), (4, 4));
         let y = font.glyph('y', false, false);
         assert_eq!((y.xmin, y.width), (2, 8), "only the last face has it");
+    }
+
+    const ACUTE: char = '\u{301}';
+
+    /// A face with `chars` drawn like a combining mark: zero advance and
+    /// 200 units (4 px) of ink 300..100 units left of the pen.
+    fn mark_face(chars: &[char]) -> fontdue::Font {
+        parse_face(test_font::ink_font(chars, 0, -300, -100), 0).unwrap()
+    }
+
+    #[test]
+    fn combining_marks_are_centered_in_the_cells_of_their_base() {
+        let fallback = box_fonts(&['M'], &[]).with_fallbacks(vec![mark_face(&[ACUTE])].into());
+        let primary = Font::from_bytes(
+            test_font::ink_font(&['M', ACUTE], 600, -300, -100),
+            0,
+            None,
+            PX,
+        )
+        .unwrap();
+        for mut font in [fallback, primary] {
+            let narrow = font.glyph(ACUTE, false, false).clone();
+            assert!(inked(&narrow));
+            // (12 - 4) / 2 in one cell, (24 - 4) / 2 across two.
+            assert_eq!((narrow.xmin, narrow.width), (4, 4));
+            let wide = font.glyph(ACUTE, false, true);
+            assert_eq!((wide.xmin, wide.width), (10, 4));
+        }
+    }
+
+    #[test]
+    fn invisible_zero_width_chars_draw_nothing_even_when_a_face_maps_them() {
+        let invisible = ['\u{200d}', '\u{fe0f}', '\u{e0101}'];
+        let mut font = Font::from_bytes(test_font::box_font(&invisible, 600), 0, None, PX).unwrap();
+        for ch in invisible {
+            assert!(!inked(font.glyph(ch, false, false)), "{ch:?}");
+        }
     }
 
     #[test]

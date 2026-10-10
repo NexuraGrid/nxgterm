@@ -1,11 +1,12 @@
 //! Terminal state machine: feeds child output through a VT parser into a grid.
 
 use crate::apc::{ApcFilter, Event};
-use crate::cell::{Cell, Color, Flags};
+use crate::cell::{Cell, Color, Flags, Marks};
 use crate::image::{ImageStore, Placement, SrcRect};
 use crate::kitty::{self, Graphics};
 use crate::sixel::{self, SixelDecoder};
 use crate::{CellPixels, TermSize};
+use unicode_normalization::char::compose;
 use unicode_width::UnicodeWidthChar;
 
 mod edit;
@@ -199,6 +200,45 @@ impl State {
             bg: self.pen.bg,
             ..Cell::default()
         }
+    }
+
+    /// Attaches the zero-width `mark` to the char just written: the cell
+    /// before the cursor, or the cursor cell while a wrap is pending (the
+    /// wide cell for a spacer). When Unicode has a precomposed form of the
+    /// same width (NFC, e.g. `e` + U+0301 is `é`, Hangul jamo make a
+    /// syllable) the char is replaced; otherwise the mark is stored on the
+    /// cell, or dropped once it holds [`Marks::CAPACITY`]. A mark with no
+    /// cell before it (column 0, no pending wrap) is dropped. Without
+    /// autowrap a char written in the last column is not tracked: the mark
+    /// goes to the cell before it.
+    fn attach_mark(&mut self, mark: char) {
+        let (col, row) = (self.screen.col, self.screen.row);
+        let col = match (self.screen.wrap_pending, col) {
+            (true, col) => col,
+            (false, 0) => return,
+            (false, col) => col - 1,
+        };
+        let cells = self.screen.grid.row_mut(row);
+        let mut col = usize::from(col);
+        if col > 0 && cells[col].flags.contains(Flags::WIDE_SPACER) {
+            col -= 1;
+        }
+        let cell = &mut cells[col];
+        let width = |ch| UnicodeWidthChar::width(ch);
+        let composed = compose(cell.ch, mark)
+            .filter(|&ch| cell.marks.is_empty() && width(ch) == width(cell.ch));
+        match composed {
+            Some(ch) => {
+                cell.ch = ch;
+                if self.last_char.is_some() {
+                    self.last_char = Some(ch);
+                }
+            }
+            None => {
+                cell.marks.push(mark);
+            }
+        }
+        self.damage(row, row);
     }
 
     /// Autowrap: marks the cursor row as soft-wrapped and moves to the
@@ -400,11 +440,12 @@ fn byte(value: u16) -> u8 {
 impl vte::Perform for State {
     /// Writes `ch` at the cursor. A wide char takes its cell plus a
     /// [`Flags::WIDE_SPACER`] cell after it. Zero-width chars (combining
-    /// marks, ZWJ, variation selectors) are dropped: drawing them over the
-    /// previous char is not supported. Controls (width `None`) never get here.
+    /// marks, ZWJ, variation selectors) go to the previous char (see
+    /// [`State::attach_mark`]). Controls (width `None`) never get here.
     fn print(&mut self, ch: char) {
         let width = UnicodeWidthChar::width(ch).unwrap_or(0);
         if width == 0 {
+            self.attach_mark(ch);
             return;
         }
         // A one-column grid cannot hold a wide char; it takes one cell.
@@ -434,10 +475,18 @@ impl vte::Perform for State {
         if last + 1 < cells.len() && cells[last].flags.contains(Flags::WIDE) {
             cells[last + 1].unwide();
         }
-        cells[first] = Cell { ch, ..pen };
+        cells[first] = Cell {
+            ch,
+            marks: Marks::default(),
+            ..pen
+        };
         if wide {
             cells[first].flags.insert(Flags::WIDE);
-            cells[last] = Cell { ch: ' ', ..pen };
+            cells[last] = Cell {
+                ch: ' ',
+                marks: Marks::default(),
+                ..pen
+            };
             cells[last].flags.insert(Flags::WIDE_SPACER);
         }
         self.images.remove_sixels_over(row, col..end + 1, self.cell);
@@ -1188,6 +1237,11 @@ mod tests {
     }
 
     /// Row `row` with `+` for each wide spacer, trailing blanks trimmed.
+    /// The combining marks stored on cell `col` of `row`.
+    fn marks(t: &Terminal, row: u16, col: usize) -> String {
+        t.row(row)[col].marks.iter().collect()
+    }
+
     fn cells(t: &Terminal, row: u16) -> String {
         let line: String = t
             .row(row)
@@ -1275,12 +1329,69 @@ mod tests {
     }
 
     #[test]
-    fn zero_width_chars_take_no_cell_and_do_not_move_the_cursor() {
+    fn a_combining_mark_composes_with_the_previous_char() {
         let mut t = term(8, 1);
-        // Combining acute, zero width joiner, variation selectors 15 and 16.
-        t.advance("e\u{301}a\u{200d}\u{fe0e}\u{fe0f}b".as_bytes());
-        assert_eq!(cells(&t, 0), "eab");
-        assert_eq!(pos(&t), (3, 0));
+        t.advance("e\u{301}x".as_bytes());
+        assert_eq!(cells(&t, 0), "éx");
+        assert_eq!(pos(&t), (2, 0));
+        // Hangul jamo: a wide leading consonant, then a vowel and a final.
+        t.advance("\u{1100}\u{1161}\u{11a8}".as_bytes());
+        assert_eq!(cells(&t, 0), "éx각+");
+        t.state.assert_invariants();
+    }
+
+    #[test]
+    fn a_combining_mark_after_the_last_column_composes_with_it() {
+        let mut t = term(2, 2);
+        t.advance("ae\u{301}".as_bytes());
+        assert_eq!(cells(&t, 0), "aé");
+        assert_eq!(pos(&t), (1, 0));
+    }
+
+    #[test]
+    fn zero_width_chars_without_a_precomposed_form_are_kept_on_the_cell() {
+        let mut t = term(8, 1);
+        // Combining acute on q, zero width joiner, then a mark on a wide char.
+        t.advance("q\u{301}\u{200d}日\u{301}b".as_bytes());
+        assert_eq!(cells(&t, 0), "q日+b");
+        assert_eq!(pos(&t), (4, 0));
+        assert_eq!(marks(&t, 0, 0), "\u{301}\u{200d}");
+        assert_eq!(marks(&t, 0, 1), "\u{301}", "the wide cell, not its spacer");
+        assert_eq!(marks(&t, 0, 2), "");
+        t.state.assert_invariants();
+    }
+
+    #[test]
+    fn marks_beyond_the_cell_capacity_are_dropped() {
+        let mut t = term(4, 1);
+        t.advance("q\u{301}\u{302}\u{303}".as_bytes());
+        assert_eq!(marks(&t, 0, 0), "\u{301}\u{302}");
+    }
+
+    #[test]
+    fn a_zero_width_char_with_no_previous_cell_is_dropped() {
+        let mut t = term(4, 2);
+        t.advance("\u{301}a".as_bytes());
+        assert_eq!(cells(&t, 0), "a");
+        assert_eq!(marks(&t, 0, 0), "");
+        assert_eq!(pos(&t), (1, 0));
+    }
+
+    #[test]
+    fn overwriting_or_erasing_a_cell_clears_its_marks() {
+        let mut t = term(6, 1);
+        t.advance("q\u{301}r\u{301}s\u{301}\r".as_bytes());
+        t.advance(b"x\x1b[K");
+        assert_eq!(cells(&t, 0), "x");
+        assert_eq!(
+            (marks(&t, 0, 0), marks(&t, 0, 1)),
+            (String::new(), String::new())
+        );
+        // Overwriting half of a wide char drops the marks of the other half.
+        t.advance("\r日\u{301}\x1b[2Gz".as_bytes());
+        assert_eq!(cells(&t, 0), " z");
+        assert_eq!(marks(&t, 0, 0), "");
+        t.state.assert_invariants();
     }
 
     #[test]
@@ -1371,6 +1482,9 @@ mod tests {
             "\x1b[2J",
             "日本",
             "a\u{301}\u{200d}",
+            "\u{301}\u{302}\u{303}",
+            "\u{1100}\u{1161}\u{11a8}",
+            "日\u{301}",
         ]
         .iter()
         .map(|s| s.as_bytes().to_vec())

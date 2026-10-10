@@ -264,7 +264,7 @@ fn logical_last(lines: &impl Lines, mut line: u64) -> u64 {
 }
 
 /// The text of `span`: each line's selected cells (wide-char spacers left
-/// out) with trailing blanks
+/// out, each char followed by its combining marks) with trailing blanks
 /// trimmed, lines joined with `\n`, except that a line that soft-wraps
 /// into the next joins it directly (and keeps its trailing blanks, which
 /// are real spaces). Lines that no longer exist are left out.
@@ -289,7 +289,7 @@ pub fn text(span: &Span, lines: &impl Lines) -> String {
         let chunk: String = cells[start..end]
             .iter()
             .filter(|cell| !cell.flags.contains(Flags::WIDE_SPACER))
-            .map(|cell| cell.ch)
+            .flat_map(|cell| std::iter::once(cell.ch).chain(cell.marks.iter()))
             .collect();
         let joined = to_end && wraps(cells);
         if joined {

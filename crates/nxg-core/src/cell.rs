@@ -42,10 +42,44 @@ impl Flags {
     }
 }
 
+/// The zero-width chars (combining marks, ZWJ, variation selectors) that
+/// follow a cell's char, in input order. It holds at most
+/// [`Marks::CAPACITY`]; further marks are dropped. Each mark is packed in
+/// three bytes (a char fits in 21 bits) so that a cell stays small.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Marks([[u8; 3]; Marks::CAPACITY]);
+
+impl Marks {
+    pub const CAPACITY: usize = 2;
+
+    /// Appends `mark`; returns `false` (dropping it) when full.
+    pub fn push(&mut self, mark: char) -> bool {
+        let Some(slot) = self.0.iter_mut().find(|slot| **slot == [0; 3]) else {
+            return false;
+        };
+        let [a, b, c, _] = u32::from(mark).to_le_bytes();
+        *slot = [a, b, c];
+        true
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = char> {
+        self.0
+            .into_iter()
+            .take_while(|slot| *slot != [0; 3])
+            .filter_map(|[a, b, c]| char::from_u32(u32::from_le_bytes([a, b, c, 0])))
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0[0] == [0; 3]
+    }
+}
+
 /// One character cell of the grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cell {
     pub ch: char,
+    /// Zero-width chars drawn over `ch` and copied after it.
+    pub marks: Marks,
     pub fg: Color,
     pub bg: Color,
     pub flags: Flags,
@@ -55,11 +89,19 @@ impl Default for Cell {
     fn default() -> Self {
         Self {
             ch: ' ',
+            marks: Marks::default(),
             fg: Color::Default,
             bg: Color::Default,
             flags: Flags::default(),
         }
     }
+}
+
+/// Whether `ch` takes no cell of its own (a combining mark, ZWJ, a
+/// variation selector): the terminal stores it in the previous cell's
+/// [`Marks`].
+pub fn is_zero_width(ch: char) -> bool {
+    unicode_width::UnicodeWidthChar::width(ch) == Some(0)
 }
 
 /// Whether `row` continues on the next row (see [`Flags::WRAPLINE`]).
@@ -86,6 +128,7 @@ impl Cell {
     /// Turns either half of a wide pair into a plain blank, keeping colors.
     pub fn unwide(&mut self) {
         self.ch = ' ';
+        self.marks = Marks::default();
         self.flags.remove(Flags::WIDE);
         self.flags.remove(Flags::WIDE_SPACER);
     }
@@ -132,11 +175,42 @@ mod tests {
     }
 
     #[test]
+    fn marks_keep_their_order_up_to_the_capacity() {
+        let mut marks = Marks::default();
+        assert!(marks.is_empty());
+        assert!(marks.push('\u{301}') && marks.push('\u{10ffff}'));
+        assert!(!marks.push('\u{302}'), "full");
+        assert_eq!(marks.iter().collect::<String>(), "\u{301}\u{10ffff}");
+        assert!(!marks.is_empty());
+    }
+
+    #[test]
+    fn marks_keep_a_cell_at_twenty_bytes() {
+        assert_eq!(std::mem::size_of::<Cell>(), 20);
+    }
+
+    #[test]
+    fn combining_marks_and_joiners_are_zero_width() {
+        assert!(is_zero_width('\u{301}') && is_zero_width('\u{200d}'));
+        assert!(!is_zero_width('e') && !is_zero_width('日'));
+        assert!(!is_zero_width('\n'), "controls have no width at all");
+    }
+
+    #[test]
+    fn unwide_drops_the_marks() {
+        let mut wide = cell('日', Flags::WIDE);
+        wide.marks.push('\u{301}');
+        wide.unwide();
+        assert_eq!(wide, cell(' ', Flags::default()));
+    }
+
+    #[test]
     fn default_cell_is_blank() {
         let cell = Cell::default();
         assert_eq!(
             (cell.ch, cell.fg, cell.bg),
             (' ', Color::Default, Color::Default)
         );
+        assert!(cell.marks.is_empty());
     }
 }

@@ -116,26 +116,28 @@ where
         let cells = term.display_row(row);
         for (col, c) in cells.iter().enumerate() {
             // Wide-char spacers are blank too: only their background.
-            if c.ch == ' ' {
+            if c.ch == ' ' && c.marks.is_empty() {
                 continue;
             }
             let wide = paint::is_wide(cells, col);
-            let Some(slot) = glyph(c.ch, c.flags.contains(Flags::BOLD), wide)? else {
-                continue;
-            };
             let selected = paint::is_selected(&selected, col);
             let (mut fg, bg) = paint::shown_colors(c, selected, palette);
             if cursor.visible && (usize::from(cursor.col), cursor.row) == (col, row) {
                 fg = bg;
             }
             let [x, y] = cell_pos(col, row);
-            instances.push(Instance {
-                pos: [x + slot.xmin, y + baseline - slot.ymin - slot.height as i32],
-                size: [slot.width, slot.height],
-                uv: slot.uv,
-                color: fg,
-                kind: KIND_GLYPH,
-            });
+            for ch in paint::glyph_chars(c) {
+                let Some(slot) = glyph(ch, c.flags.contains(Flags::BOLD), wide)? else {
+                    continue;
+                };
+                instances.push(Instance {
+                    pos: [x + slot.xmin, y + baseline - slot.ymin - slot.height as i32],
+                    size: [slot.width, slot.height],
+                    uv: slot.uv,
+                    color: fg,
+                    kind: KIND_GLYPH,
+                });
+            }
         }
     }
     Ok(Quads {
@@ -259,6 +261,24 @@ mod tests {
             kind: KIND_GLYPH,
         };
         assert_eq!(instances, [glyph(10, 'x'), glyph(20, 'y')]);
+    }
+
+    #[test]
+    fn combining_marks_are_drawn_in_their_base_cell() {
+        let palette = Palette::default();
+        let term = term(4, 1, "\x1b[?25lq\u{301} \u{302}".as_bytes());
+        let instances = build(&term, &palette, FLUSH, BASELINE, false, slot)
+            .unwrap()
+            .instances;
+        let glyph = |x: i32, ch: char| Instance {
+            pos: [x + 1, 7],
+            size: [4, 6],
+            uv: [ch as u32, 0],
+            color: palette.foreground,
+            kind: KIND_GLYPH,
+        };
+        let expected = [glyph(0, 'q'), glyph(0, '\u{301}'), glyph(10, '\u{302}')];
+        assert_eq!(instances, expected, "a blank base still gets its marks");
     }
 
     #[test]

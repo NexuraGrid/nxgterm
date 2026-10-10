@@ -26,17 +26,21 @@ Fallback glyphs are scaled down to fit one cell, so wide glyphs look tiny.
   but its background.
 
 Out of scope: color emoji (fontdue limitation), full grapheme-cluster
-rendering of combining marks on top of the base glyph.
+shaping (marks are centered over their base, not anchored by the font).
 
 ## Tasks
 
 - [x] T1 Wide characters in core (width, spacer flag, wrap, edits) + selection text + tests
 - [x] T2 Zero-width characters do not advance or occupy cells + tests
 - [x] T3 Renderer draws wide glyphs across two cells; spacer skipped + tests
+- [x] T4 Keep zero-width chars: compose with the previous cell when a
+  precomposed form exists (NFC), otherwise store them on the cell; copied
+  text includes them; renderer draws stored marks over the base glyph +
+  tests (review finding R3-zero-width-drop-loses-text)
 
 ## Route
 
-T1–T3: delegated direct (one writer; 2+ non-trivial files across nxg-core
+T1–T4: delegated direct (one writer; 2+ non-trivial files across nxg-core
 and nxg-render).
 
 ## Checks
@@ -75,5 +79,38 @@ and nxg-render).
   review-b6040dbfe0768d2b). Advisory follow-ups (non-blocking):
   R3-zero-width-drop-loses-text (WARNING: dropped combining marks are lost
   from copy, e.g. NFD text) and R3-early-wrap-stale-cell (SUGGESTION).
-- Next: user decides on follow-up for combining marks; push/PR is the
-  user's decision.
+- T4 (R3-zero-width-drop-loses-text) implemented (uncommitted, delegated
+  writer). Design: `print` hands width-0 chars to `State::attach_mark`: the
+  target is the cell before the cursor, or the cursor cell while a wrap is
+  pending, the wide cell for a spacer; dropped at column 0 without a
+  pending wrap. `unicode_normalization::char::compose` (new dep
+  `unicode-normalization` 0.1.25, MSRV 1.36) replaces the char when the
+  cell has no marks yet and the composed char has the same width (`e` +
+  U+0301 = `é`, Hangul L+V+T = a syllable); otherwise the mark goes to
+  `Cell::marks` (`cell::Marks`, 2 marks packed in 3 bytes each, further
+  marks dropped). ZWJ and variation selectors are stored like marks so
+  copied emoji sequences keep them; the renderer draws nothing for them.
+  `Cell` stays `Copy`; `size_of::<Cell>()` 16 -> 20 bytes (asserted by a
+  test). Overwrites write `Marks::default()`, `unwide` and every
+  blank/erase path clear marks; new invariant: spacers hold no marks.
+  Selection text emits each char followed by its marks. Render:
+  `Font::glyph` treats `cell::is_zero_width` chars as marks: the inked
+  glyph of the first face that has it, centered horizontally in the base's
+  one or two cells (font bearings ignored: they assume a proportional base
+  advance); invisible default-ignorables and missing marks draw nothing
+  instead of a `.notdef` box. CPU and GPU paths draw `paint::glyph_chars`
+  (char unless blank, then marks), so a space with marks draws them.
+  `test_font::ink_font` builds zero-advance mark glyphs for tests.
+- RED observed: 5 core tests (compose, last-column compose, stored marks,
+  capacity, selection text) failed with marks stubbed out; 4 render tests
+  (font centering, invisible chars, CPU mark ink, GPU mark instances)
+  failed before implementation.
+- Verification: `cargo test --workspace` 718 passed / 0 failed;
+  `cargo clippy --workspace --all-targets -- -D warnings` clean;
+  `cargo fmt --check` clean.
+- Limitations: without autowrap a char written in the last column is not
+  tracked, so a mark after it goes to the cell before; composition happens
+  only while the cell has no stored marks (no canonical reordering); marks
+  are centered in the cells, not placed by the font's anchor data, so two
+  stacked marks overlap.
+- Next: commit T4; push/PR is the user's decision.

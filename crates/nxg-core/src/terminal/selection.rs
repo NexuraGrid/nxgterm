@@ -305,4 +305,12 @@ mod tests {
         t.start_selection(SelectionKind::Word, t.point_at(1, 0));
         assert_eq!(selected(&t).as_deref(), Some("日本x"));
     }
+
+    #[test]
+    fn combining_marks_follow_their_base_char_in_the_text() {
+        let mut t = term(10, 1);
+        t.advance("q\u{301}e\u{301} 日\u{301}\u{200d}".as_bytes());
+        drag(&mut t, (0, 0), (5, 0));
+        assert_eq!(selected(&t).as_deref(), Some("q\u{301}é 日\u{301}\u{200d}"));
+    }
 }
