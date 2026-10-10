@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           nxgterm
-Version:        0.7.0
+Version:        0.8.0
 Release:        1%{?dist}
 Summary:        Fast, configurable, cross-platform terminal emulator
 
@@ -79,6 +79,10 @@ cargo test --release --locked --workspace
 %{_datadir}/%{name}/
 
 %changelog
+* Fri Oct 09 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.8.0-1
+- Wide characters (emoji, CJK) span two cells; combining marks are kept,
+  copied and drawn; built-in Windows and macOS symbol font fallbacks
+
 * Fri Oct 09 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.7.0-1
 - Split panes with keyboard and mouse focus, resize and zoom; font family
   lists; vector title bar buttons; theme files and config imports
