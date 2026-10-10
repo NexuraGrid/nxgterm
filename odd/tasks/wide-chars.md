@@ -69,4 +69,11 @@ and nxg-render).
   `cargo fmt --check` clean. Diff: 16 files, +508/-71.
 - Limitations: the last-column cell skipped when a wide char wraps early is
   left untouched and copies as part of the joined line (usually a space); combining marks are not rendered.
-- Next: commit T1–T3 work unit; RDD assess.
+- Commit 2c6f0ae feat(core): support wide and zero-width characters.
+- RDD: assessed medium (slice_budget_reached), consent granted, one
+  reliability lens, approved and acknowledged (lineage
+  review-b6040dbfe0768d2b). Advisory follow-ups (non-blocking):
+  R3-zero-width-drop-loses-text (WARNING: dropped combining marks are lost
+  from copy, e.g. NFD text) and R3-early-wrap-stale-cell (SUGGESTION).
+- Next: user decides on follow-up for combining marks; push/PR is the
+  user's decision.
