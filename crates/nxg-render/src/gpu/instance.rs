@@ -60,7 +60,7 @@ pub struct Quads {
 /// pixel; the default background comes from the clear color instead (see
 /// [`background_quad`]).
 ///
-/// `glyph` returns the atlas slot for `(char, bold)`, `None` for glyphs
+/// `glyph` returns the atlas slot for `(char, bold, wide)`, `None` for glyphs
 /// without ink, or [`AtlasFull`].
 pub fn build<F>(
     term: &Terminal,
@@ -71,7 +71,7 @@ pub fn build<F>(
     glyph: F,
 ) -> Result<Quads, AtlasFull>
 where
-    F: FnMut(char, bool) -> Result<Option<GlyphSlot>, AtlasFull>,
+    F: FnMut(char, bool, bool) -> Result<Option<GlyphSlot>, AtlasFull>,
 {
     build_look(term, palette, layout, baseline, opaque, Look::ACTIVE, glyph)
 }
@@ -89,7 +89,7 @@ pub fn build_look<F>(
     glyph: F,
 ) -> Result<Quads, AtlasFull>
 where
-    F: FnMut(char, bool) -> Result<Option<GlyphSlot>, AtlasFull>,
+    F: FnMut(char, bool, bool) -> Result<Option<GlyphSlot>, AtlasFull>,
 {
     let mut glyph = glyph;
     let rows = term.size().rows();
@@ -120,31 +120,38 @@ where
 
     let backgrounds = instances.len();
     let cursor = term.display_cursor();
-    if cursor.visible && look.focused {
-        instances.push(solid(
-            cell_pos(usize::from(cursor.col), cursor.row),
-            palette.cursor,
-        ));
-    } else if cursor.visible {
+    if cursor.visible {
+        // Over a wide char the cursor covers both of its cells.
+        let cursor_cell = paint::CellSize {
+            width: cell.width * paint::cursor_cells(term, cursor),
+            ..cell
+        };
         let [x, y] = cell_pos(usize::from(cursor.col), cursor.row);
-        for (dx, dy, w, h) in paint::cursor_outline(cell) {
+        if look.focused {
             instances.push(Instance {
-                pos: [x + dx as i32, y + dy as i32],
-                size: [w, h],
-                ..solid([0, 0], palette.cursor)
+                size: [cursor_cell.width, cursor_cell.height],
+                ..solid([x, y], palette.cursor)
             });
+        } else {
+            for (dx, dy, w, h) in paint::cursor_outline(cursor_cell) {
+                instances.push(Instance {
+                    pos: [x + dx as i32, y + dy as i32],
+                    size: [w, h],
+                    ..solid([0, 0], palette.cursor)
+                });
+            }
         }
     }
 
     for row in 0..rows {
         let selected = term.selected_cols(row);
-        for (col, c) in term.display_row(row).iter().enumerate() {
-            if c.ch == ' ' {
+        let cells = term.display_row(row);
+        for (col, c) in cells.iter().enumerate() {
+            // Wide-char spacers are blank too: only their background.
+            if c.ch == ' ' && c.marks.is_empty() {
                 continue;
             }
-            let Some(slot) = glyph(c.ch, c.flags.contains(Flags::BOLD))? else {
-                continue;
-            };
+            let wide = paint::is_wide(cells, col);
             let selected = paint::is_selected(&selected, col);
             let (mut fg, bg) = paint::look_colors(c, selected, palette, look);
             let on_block = look.focused && cursor.visible;
@@ -152,13 +159,18 @@ where
                 fg = bg;
             }
             let [x, y] = cell_pos(col, row);
-            instances.push(Instance {
-                pos: [x + slot.xmin, y + baseline - slot.ymin - slot.height as i32],
-                size: [slot.width, slot.height],
-                uv: slot.uv,
-                color: fg,
-                kind: KIND_GLYPH,
-            });
+            for ch in paint::glyph_chars(c) {
+                let Some(slot) = glyph(ch, c.flags.contains(Flags::BOLD), wide)? else {
+                    continue;
+                };
+                instances.push(Instance {
+                    pos: [x + slot.xmin, y + baseline - slot.ymin - slot.height as i32],
+                    size: [slot.width, slot.height],
+                    uv: slot.uv,
+                    color: fg,
+                    kind: KIND_GLYPH,
+                });
+            }
         }
     }
     Ok(Quads {
@@ -268,7 +280,7 @@ mod tests {
     }
 
     /// A 4x6 glyph sitting 1px right of the pen and 2px above the baseline.
-    fn slot(ch: char, bold: bool) -> Result<Option<GlyphSlot>, AtlasFull> {
+    fn slot(ch: char, bold: bool, _wide: bool) -> Result<Option<GlyphSlot>, AtlasFull> {
         Ok(Some(GlyphSlot {
             xmin: 1,
             ymin: 2,
@@ -326,6 +338,24 @@ mod tests {
             kind: KIND_GLYPH,
         };
         assert_eq!(instances, [glyph(10, 'x'), glyph(20, 'y')]);
+    }
+
+    #[test]
+    fn combining_marks_are_drawn_in_their_base_cell() {
+        let palette = Palette::default();
+        let term = term(4, 1, "\x1b[?25lq\u{301} \u{302}".as_bytes());
+        let instances = build(&term, &palette, FLUSH, BASELINE, false, slot)
+            .unwrap()
+            .instances;
+        let glyph = |x: i32, ch: char| Instance {
+            pos: [x + 1, 7],
+            size: [4, 6],
+            uv: [ch as u32, 0],
+            color: palette.foreground,
+            kind: KIND_GLYPH,
+        };
+        let expected = [glyph(0, 'q'), glyph(0, '\u{301}'), glyph(10, '\u{302}')];
+        assert_eq!(instances, expected, "a blank base still gets its marks");
     }
 
     #[test]
@@ -444,7 +474,7 @@ mod tests {
             FLUSH,
             BASELINE,
             false,
-            |ch, _| {
+            |ch, _, _| {
                 asked.push(ch);
                 Ok(None)
             },
@@ -456,6 +486,39 @@ mod tests {
     }
 
     #[test]
+    fn wide_cells_ask_for_wide_glyphs_and_spacers_for_nothing() {
+        let mut asked = Vec::new();
+        let term = term(4, 1, "\x1b[?25l日x".as_bytes());
+        build(
+            &term,
+            &Palette::default(),
+            FLUSH,
+            BASELINE,
+            false,
+            |ch, _, wide| {
+                asked.push((ch, wide));
+                Ok(None)
+            },
+        )
+        .unwrap();
+        assert_eq!(asked, [('日', true), ('x', false)]);
+    }
+
+    #[test]
+    fn the_cursor_covers_both_cells_of_a_wide_char() {
+        let palette = Palette::default();
+        let term = term(4, 1, "日\x1b[1G".as_bytes());
+        let instances = build(&term, &palette, FLUSH, BASELINE, false, slot)
+            .unwrap()
+            .instances;
+        let cursor = Instance {
+            size: [2 * CELL.width, CELL.height],
+            ..solid(0, 0, palette.cursor)
+        };
+        assert_eq!(instances[0], cursor);
+    }
+
+    #[test]
     fn propagates_atlas_full() {
         let term = term(2, 1, b"ab");
         let result = build(
@@ -464,7 +527,7 @@ mod tests {
             FLUSH,
             BASELINE,
             false,
-            |_, _| Err(AtlasFull),
+            |_, _, _| Err(AtlasFull),
         );
         assert_eq!(result, Err(AtlasFull));
     }
@@ -598,6 +661,26 @@ mod tests {
                 edge(0, 39, 10, 1),
                 edge(0, 21, 1, 18),
                 edge(9, 21, 1, 18)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unfocused_cursor_outlines_both_cells_of_a_wide_char() {
+        let palette = Palette::default();
+        let term = term(4, 1, "日\x1b[1G".as_bytes());
+        let quads = build_inactive(&term, &palette, INACTIVE);
+        let edge = |x: i32, y: i32, w: u32, h: u32| Instance {
+            size: [w, h],
+            ..solid(x, y, palette.cursor)
+        };
+        assert_eq!(
+            quads.instances[..4],
+            [
+                edge(0, 0, 20, 1),
+                edge(0, 19, 20, 1),
+                edge(0, 1, 1, 18),
+                edge(19, 1, 1, 18)
             ]
         );
     }

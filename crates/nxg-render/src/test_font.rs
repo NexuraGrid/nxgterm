@@ -11,16 +11,23 @@ const UNITS_PER_EM: u16 = 1000;
 /// units wide (at least 300) whose ink spans x 100..advance-100 and
 /// y 0..700.
 pub fn box_font(chars: &[char], advance: u16) -> Vec<u8> {
+    ink_font(chars, advance, 100, advance as i16 - 100)
+}
+
+/// Like [`box_font`], with the ink spanning x `left..right` (relative to
+/// the pen, may be negative) and y 0..700. A combining mark is drawn like
+/// in real fonts with `advance` 0 and the ink left of the pen.
+pub fn ink_font(chars: &[char], advance: u16, left: i16, right: i16) -> Vec<u8> {
     let mut chars = chars.to_vec();
     chars.sort_unstable();
     chars.dedup();
     let tables: [(&[u8; 4], Vec<u8>); 7] = [
         (b"cmap", cmap(&chars)),
-        (b"glyf", glyf(advance)),
-        (b"head", head(advance)),
-        (b"hhea", hhea(advance)),
-        (b"hmtx", hmtx(advance)),
-        (b"loca", loca(advance)),
+        (b"glyf", glyf(left, right)),
+        (b"head", head(left, right)),
+        (b"hhea", hhea(advance, left, right)),
+        (b"hmtx", hmtx(advance, left)),
+        (b"loca", loca(left, right)),
         (b"maxp", maxp()),
     ];
     let mut out = Vec::new();
@@ -73,16 +80,15 @@ fn cmap(chars: &[char]) -> Vec<u8> {
 }
 
 /// Glyph 0 is empty; glyph 1 is the box.
-fn glyf(advance: u16) -> Vec<u8> {
-    let right = advance as i16 - 100;
+fn glyf(left: i16, right: i16) -> Vec<u8> {
     let mut out = Vec::new();
-    for value in [1, 100, 0, right, 700] {
+    for value in [1, left, 0, right, 700] {
         push16(&mut out, value as u16); // contours, then the bounding box
     }
     push16(&mut out, 3); // last point of the contour
     push16(&mut out, 0); // no instructions
     out.extend_from_slice(&[1; 4]); // on-curve points, 16-bit coordinates
-    for dx in [100, 0, right - 100, 0] {
+    for dx in [left, 0, right - left, 0] {
         push16(&mut out, dx as u16);
     }
     for dy in [0_i16, 700, 0, -700] {
@@ -91,7 +97,7 @@ fn glyf(advance: u16) -> Vec<u8> {
     out
 }
 
-fn head(advance: u16) -> Vec<u8> {
+fn head(left: i16, right: i16) -> Vec<u8> {
     let mut out = Vec::new();
     push32(&mut out, 0x0001_0000); // version
     push32(&mut out, 0x0001_0000); // font revision
@@ -100,8 +106,8 @@ fn head(advance: u16) -> Vec<u8> {
     push16(&mut out, 0); // flags
     push16(&mut out, UNITS_PER_EM);
     out.extend_from_slice(&[0; 16]); // created, modified
-    for value in [0, 0, advance - 100, 700] {
-        push16(&mut out, value); // bounding box
+    for value in [left, 0, right, 700] {
+        push16(&mut out, value as u16); // bounding box
     }
     push16(&mut out, 0); // mac style
     push16(&mut out, 8); // lowest readable size
@@ -111,33 +117,34 @@ fn head(advance: u16) -> Vec<u8> {
     out
 }
 
-fn hhea(advance: u16) -> Vec<u8> {
+fn hhea(advance: u16, left: i16, right: i16) -> Vec<u8> {
     let mut out = Vec::new();
     push32(&mut out, 0x0001_0000);
     for value in [800_i16, -200, 0] {
         push16(&mut out, value as u16); // ascender, descender, line gap
     }
     push16(&mut out, advance);
-    for value in [0, 100, advance - 100, 1, 0, 0, 0, 0, 0, 0, 0] {
+    let rsb = advance as i16 - right;
+    for value in [left.min(0), rsb.min(0), right, 1, 0, 0, 0, 0, 0, 0, 0] {
         // min left/right bearing, max extent, caret, reserved, data format
-        push16(&mut out, value);
+        push16(&mut out, value as u16);
     }
     push16(&mut out, 2); // horizontal metrics
     out
 }
 
-fn hmtx(advance: u16) -> Vec<u8> {
+fn hmtx(advance: u16, left: i16) -> Vec<u8> {
     let mut out = Vec::new();
-    for lsb in [0, 100] {
+    for lsb in [0, left] {
         push16(&mut out, advance);
-        push16(&mut out, lsb);
+        push16(&mut out, lsb as u16);
     }
     out
 }
 
-fn loca(advance: u16) -> Vec<u8> {
+fn loca(left: i16, right: i16) -> Vec<u8> {
     let mut out = Vec::new();
-    for offset in [0, 0, glyf(advance).len() as u32] {
+    for offset in [0, 0, glyf(left, right).len() as u32] {
         push32(&mut out, offset);
     }
     out

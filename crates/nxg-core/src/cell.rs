@@ -24,6 +24,10 @@ impl Flags {
     /// row through scrolling and into the history, and disappears when that
     /// cell is rewritten or erased.
     pub const WRAPLINE: Self = Self(1 << 4);
+    /// A double-width character; the next cell is its [`Flags::WIDE_SPACER`].
+    pub const WIDE: Self = Self(1 << 5);
+    /// The blank right half of the [`Flags::WIDE`] cell before it.
+    pub const WIDE_SPACER: Self = Self(1 << 6);
 
     pub fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
@@ -38,10 +42,44 @@ impl Flags {
     }
 }
 
+/// The zero-width chars (combining marks, ZWJ, variation selectors) that
+/// follow a cell's char, in input order. It holds at most
+/// [`Marks::CAPACITY`]; further marks are dropped. Each mark is packed in
+/// three bytes (a char fits in 21 bits) so that a cell stays small.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Marks([[u8; 3]; Marks::CAPACITY]);
+
+impl Marks {
+    pub const CAPACITY: usize = 2;
+
+    /// Appends `mark`; returns `false` (dropping it) when full.
+    pub fn push(&mut self, mark: char) -> bool {
+        let Some(slot) = self.0.iter_mut().find(|slot| **slot == [0; 3]) else {
+            return false;
+        };
+        let [a, b, c, _] = u32::from(mark).to_le_bytes();
+        *slot = [a, b, c];
+        true
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = char> {
+        self.0
+            .into_iter()
+            .take_while(|slot| *slot != [0; 3])
+            .filter_map(|[a, b, c]| char::from_u32(u32::from_le_bytes([a, b, c, 0])))
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0[0] == [0; 3]
+    }
+}
+
 /// One character cell of the grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cell {
     pub ch: char,
+    /// Zero-width chars drawn over `ch` and copied after it.
+    pub marks: Marks,
     pub fg: Color,
     pub bg: Color,
     pub flags: Flags,
@@ -51,6 +89,7 @@ impl Default for Cell {
     fn default() -> Self {
         Self {
             ch: ' ',
+            marks: Marks::default(),
             fg: Color::Default,
             bg: Color::Default,
             flags: Flags::default(),
@@ -58,10 +97,41 @@ impl Default for Cell {
     }
 }
 
+/// Whether `ch` takes no cell of its own (a combining mark, ZWJ, a
+/// variation selector): the terminal stores it in the previous cell's
+/// [`Marks`].
+pub fn is_zero_width(ch: char) -> bool {
+    unicode_width::UnicodeWidthChar::width(ch) == Some(0)
+}
+
 /// Whether `row` continues on the next row (see [`Flags::WRAPLINE`]).
 pub fn wraps(row: &[Cell]) -> bool {
     row.last()
         .is_some_and(|cell| cell.flags.contains(Flags::WRAPLINE))
+}
+
+/// Blanks every half of a wide pair in `row` whose other half is gone, so
+/// that edits never leave a wide character without its spacer or a spacer
+/// without its character. The orphan keeps its colors.
+pub fn repair_wide(row: &mut [Cell]) {
+    let is = |cell: Option<&Cell>, flag| cell.is_some_and(|c| c.flags.contains(flag));
+    for i in 0..row.len() {
+        let orphan = (is(row.get(i), Flags::WIDE) && !is(row.get(i + 1), Flags::WIDE_SPACER))
+            || (is(row.get(i), Flags::WIDE_SPACER) && !(i > 0 && is(row.get(i - 1), Flags::WIDE)));
+        if orphan {
+            row[i].unwide();
+        }
+    }
+}
+
+impl Cell {
+    /// Turns either half of a wide pair into a plain blank, keeping colors.
+    pub fn unwide(&mut self) {
+        self.ch = ' ';
+        self.marks = Marks::default();
+        self.flags.remove(Flags::WIDE);
+        self.flags.remove(Flags::WIDE_SPACER);
+    }
 }
 
 #[cfg(test)]
@@ -78,6 +148,62 @@ mod tests {
         assert!(!flags.contains(Flags::BOLD) && flags.contains(Flags::INVERSE));
     }
 
+    fn cell(ch: char, flags: Flags) -> Cell {
+        Cell {
+            ch,
+            bg: Color::Indexed(1),
+            flags,
+            ..Cell::default()
+        }
+    }
+
+    #[test]
+    fn repair_wide_blanks_orphan_halves_and_keeps_whole_pairs() {
+        let (wide, spacer, none) = (Flags::WIDE, Flags::WIDE_SPACER, Flags::default());
+        let mut row = [
+            cell('日', wide),
+            cell(' ', spacer),
+            cell('本', wide),
+            cell('x', none),
+            cell(' ', spacer),
+            cell('語', wide),
+        ];
+        repair_wide(&mut row);
+        let blank = cell(' ', none);
+        assert_eq!(row[..2], [cell('日', wide), cell(' ', spacer)]);
+        assert_eq!(row[2..], [blank, cell('x', none), blank, blank]);
+    }
+
+    #[test]
+    fn marks_keep_their_order_up_to_the_capacity() {
+        let mut marks = Marks::default();
+        assert!(marks.is_empty());
+        assert!(marks.push('\u{301}') && marks.push('\u{10ffff}'));
+        assert!(!marks.push('\u{302}'), "full");
+        assert_eq!(marks.iter().collect::<String>(), "\u{301}\u{10ffff}");
+        assert!(!marks.is_empty());
+    }
+
+    #[test]
+    fn marks_keep_a_cell_at_twenty_bytes() {
+        assert_eq!(std::mem::size_of::<Cell>(), 20);
+    }
+
+    #[test]
+    fn combining_marks_and_joiners_are_zero_width() {
+        assert!(is_zero_width('\u{301}') && is_zero_width('\u{200d}'));
+        assert!(!is_zero_width('e') && !is_zero_width('日'));
+        assert!(!is_zero_width('\n'), "controls have no width at all");
+    }
+
+    #[test]
+    fn unwide_drops_the_marks() {
+        let mut wide = cell('日', Flags::WIDE);
+        wide.marks.push('\u{301}');
+        wide.unwide();
+        assert_eq!(wide, cell(' ', Flags::default()));
+    }
+
     #[test]
     fn default_cell_is_blank() {
         let cell = Cell::default();
@@ -85,5 +211,6 @@ mod tests {
             (cell.ch, cell.fg, cell.bg),
             (' ', Color::Default, Color::Default)
         );
+        assert!(cell.marks.is_empty());
     }
 }

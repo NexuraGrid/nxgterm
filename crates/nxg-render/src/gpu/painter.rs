@@ -419,7 +419,7 @@ fn frame_quads(
     slot: &mut dyn FnMut(Source<'_>) -> Result<Option<GlyphSlot>, AtlasFull>,
 ) -> Result<Frame, AtlasFull> {
     let grid = layout.below(header.map_or(0, |header| header.size().rows()));
-    let glyph = &mut |ch, bold| slot(Source::Glyph(ch, bold));
+    let glyph = &mut |ch, bold, wide| slot(Source::Glyph(ch, bold, wide));
     let mut frame = Frame::default();
     for pane in panes {
         let at = grid.at(pane.col, pane.row);
@@ -571,7 +571,7 @@ mod tests {
 
     fn slot(source: Source<'_>) -> Result<Option<GlyphSlot>, AtlasFull> {
         let uv = match source {
-            Source::Glyph(ch, _) => [ch as u32, 0],
+            Source::Glyph(ch, _, _) => [ch as u32, 0],
             Source::Mask(_) => [0, 0],
         };
         Ok(Some(GlyphSlot {

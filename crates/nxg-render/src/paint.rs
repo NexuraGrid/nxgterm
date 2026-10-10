@@ -1,6 +1,6 @@
 //! Font-independent drawing: cell geometry, colors, backgrounds and cursor.
 
-use nxg_core::{Cell, Color, Flags, TermSize, Terminal};
+use nxg_core::{Cell, Color, Cursor, Flags, TermSize, Terminal};
 
 use crate::frame::Frame;
 use crate::palette::{Palette, Rgb};
@@ -189,6 +189,26 @@ pub fn paint_backgrounds(
     }
 }
 
+/// Whether `cells[col]` is a wide char with room for both of its cells
+/// (a history line wider than the grid may cut it at the edge).
+pub fn is_wide(cells: &[Cell], col: usize) -> bool {
+    col + 1 < cells.len() && cells[col].flags.contains(Flags::WIDE)
+}
+
+/// The chars drawn in `cell`, in order: its char unless blank (spaces and
+/// wide-char spacers), then the combining marks drawn over it.
+pub fn glyph_chars(cell: &Cell) -> impl Iterator<Item = char> {
+    std::iter::once(cell.ch)
+        .filter(|&ch| ch != ' ')
+        .chain(cell.marks.iter())
+}
+
+/// How many cells the cursor covers: two over a wide char, else one.
+pub fn cursor_cells(term: &Terminal, cursor: Cursor) -> u32 {
+    let cells = term.display_row(cursor.row);
+    1 + u32::from(is_wide(cells, usize::from(cursor.col)))
+}
+
 /// The four edges of a cursor outline as `(x, y, width, height)` offsets
 /// inside the cell: 1 px thick, 2 px from cell height 24.
 pub fn cursor_outline(cell: CellSize) -> [(u32, u32, u32, u32); 4] {
@@ -206,7 +226,7 @@ pub fn cursor_outline(cell: CellSize) -> [(u32, u32, u32, u32); 4] {
 }
 
 /// Draws the cursor when it is visible: a block, or an outline when the
-/// pane is not focused.
+/// pane is not focused, over both cells of a wide char.
 pub fn paint_cursor(
     term: &Terminal,
     frame: &mut Frame<'_>,
@@ -219,7 +239,10 @@ pub fn paint_cursor(
         return;
     }
     let (x, y) = layout.origin(u32::from(cursor.col), u32::from(cursor.row));
-    let cell = layout.cell;
+    let cell = CellSize {
+        width: layout.cell.width * cursor_cells(term, cursor),
+        ..layout.cell
+    };
     if look.focused {
         frame.fill_rect(x, y, cell.width, cell.height, palette.cursor);
         return;
@@ -479,6 +502,16 @@ mod tests {
     }
 
     #[test]
+    fn the_cursor_covers_both_cells_of_a_wide_char() {
+        let palette = Palette::default();
+        let term = term(2, 1, "日\x1b[1G".as_bytes());
+        let mut pixels = vec![0; 4 * 2];
+        let mut frame = Frame::new(&mut pixels, 4, 2).unwrap();
+        paint_cursor(&term, &mut frame, FLUSH, &palette, Look::ACTIVE);
+        assert_eq!(pixels, [palette.cursor; 8]);
+    }
+
+    #[test]
     fn scrolled_back_viewport_paints_history_and_no_cursor() {
         let palette = Palette::default();
         let mut term = term(2, 1, b"\x1b[48;2;1;2;3m  \x1b[0m\r\n");
@@ -591,6 +624,22 @@ mod tests {
         assert_eq!([at(3, 0), at(3, 1), at(3, 2)], [c, c, 0]);
         assert_eq!([at(3, 21), at(3, 22), at(3, 23)], [0, c, c]);
         assert_eq!([at(5, 5), at(6, 5), at(7, 5)], [0, c, c]);
+    }
+
+    #[test]
+    fn an_unfocused_cursor_outlines_both_cells_of_a_wide_char() {
+        let palette = Palette::default();
+        let term = term(2, 1, "日\x1b[1G".as_bytes());
+        let mut pixels = vec![0; 12 * 6];
+        let mut frame = Frame::new(&mut pixels, 12, 6).unwrap();
+        paint_cursor(&term, &mut frame, BIG, &palette, UNFOCUSED);
+        let c = palette.cursor;
+        for y in 0..6 {
+            for x in 0..12 {
+                let edge = x == 0 || y == 0 || x == 11 || y == 5;
+                assert_eq!(pixels[y * 12 + x], if edge { c } else { 0 }, "({x}, {y})");
+            }
+        }
     }
 
     #[test]

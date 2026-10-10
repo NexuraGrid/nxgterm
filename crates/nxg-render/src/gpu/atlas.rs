@@ -11,17 +11,17 @@ use crate::shape::Mask;
 /// What an atlas slot holds.
 #[derive(Debug, Clone, Copy)]
 pub enum Source<'a> {
-    /// The glyph for `(char, bold)` from the font.
-    Glyph(char, bool),
+    /// The glyph for `(char, bold, wide)` from the font.
+    Glyph(char, bool, bool),
     /// A shape's coverage.
     Mask(&'a Mask),
 }
 
-/// Slots are keyed like the CPU glyph cache, `(char, bold)`, or by the
+/// Slots are keyed like the CPU glyph cache, `(char, bold, wide)`, or by the
 /// [`Mask::key`] of their contents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Key {
-    Glyph(char, bool),
+    Glyph(char, bool, bool),
     Mask(u64),
 }
 
@@ -76,15 +76,15 @@ impl Atlas {
         source: Source<'_>,
     ) -> Result<Option<GlyphSlot>, AtlasFull> {
         let key = match source {
-            Source::Glyph(ch, bold) => Key::Glyph(ch, bold),
+            Source::Glyph(ch, bold, wide) => Key::Glyph(ch, bold, wide),
             Source::Mask(mask) => Key::Mask(mask.key()),
         };
         if let Some(&slot) = self.slots.get(&key) {
             return Ok(slot);
         }
         let (xmin, ymin, width, height, coverage) = match source {
-            Source::Glyph(ch, bold) => {
-                let glyph = font.glyph(ch, bold);
+            Source::Glyph(ch, bold, wide) => {
+                let glyph = font.glyph(ch, bold, wide);
                 let (width, height) = (glyph.width as u32, glyph.height as u32);
                 (glyph.xmin, glyph.ymin, width, height, &glyph.coverage[..])
             }

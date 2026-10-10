@@ -56,7 +56,8 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# nxgterm configuration.
 # Families searched, in order, for characters the font above lacks, such as
 # the Nerd Font icons printed by eza or yazi. After this list, installed
 # "Symbols Nerd Font Mono", "Symbols Nerd Font", any other Nerd Font,
-# "Noto Sans Symbols 2", "Noto Sans Symbols" and "DejaVu Sans" are tried.
+# "Noto Sans Symbols 2", "Noto Sans Symbols", "DejaVu Sans",
+# "Segoe UI Symbol", "Apple Symbols" and "Segoe UI Emoji" are tried.
 # Only monochrome outline glyphs are drawn (no color emoji).
 # fallback = ["Symbols Nerd Font Mono"]
 # Size in points at 100% display scale (clamped to 6-72).

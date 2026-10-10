@@ -1,11 +1,13 @@
 //! Terminal state machine: feeds child output through a VT parser into a grid.
 
 use crate::apc::{ApcFilter, Event};
-use crate::cell::{Cell, Color, Flags};
+use crate::cell::{Cell, Color, Flags, Marks};
 use crate::image::{ImageStore, Placement, SrcRect};
 use crate::kitty::{self, Graphics};
 use crate::sixel::{self, SixelDecoder};
 use crate::{CellPixels, TermSize};
+use unicode_normalization::char::compose;
+use unicode_width::UnicodeWidthChar;
 
 mod edit;
 mod modes;
@@ -200,6 +202,56 @@ impl State {
         }
     }
 
+    /// Attaches the zero-width `mark` to the char just written: the cell
+    /// before the cursor, or the cursor cell while a wrap is pending (the
+    /// wide cell for a spacer). When Unicode has a precomposed form of the
+    /// same width (NFC, e.g. `e` + U+0301 is `é`, Hangul jamo make a
+    /// syllable) the char is replaced; otherwise the mark is stored on the
+    /// cell, or dropped once it holds [`Marks::CAPACITY`]. A mark with no
+    /// cell before it (column 0, no pending wrap) is dropped. Without
+    /// autowrap a char written in the last column is not tracked: the mark
+    /// goes to the cell before it.
+    fn attach_mark(&mut self, mark: char) {
+        let (col, row) = (self.screen.col, self.screen.row);
+        let col = match (self.screen.wrap_pending, col) {
+            (true, col) => col,
+            (false, 0) => return,
+            (false, col) => col - 1,
+        };
+        let cells = self.screen.grid.row_mut(row);
+        let mut col = usize::from(col);
+        if col > 0 && cells[col].flags.contains(Flags::WIDE_SPACER) {
+            col -= 1;
+        }
+        let cell = &mut cells[col];
+        let width = |ch| UnicodeWidthChar::width(ch);
+        let composed = compose(cell.ch, mark)
+            .filter(|&ch| cell.marks.is_empty() && width(ch) == width(cell.ch));
+        match composed {
+            Some(ch) => {
+                cell.ch = ch;
+                if self.last_char.is_some() {
+                    self.last_char = Some(ch);
+                }
+            }
+            None => {
+                cell.marks.push(mark);
+            }
+        }
+        self.damage(row, row);
+    }
+
+    /// Autowrap: marks the cursor row as soft-wrapped and moves to the
+    /// start of the next row, scrolling at the bottom.
+    fn wrap_line(&mut self) {
+        let row = self.screen.grid.row_mut(self.screen.row);
+        if let Some(last) = row.last_mut() {
+            last.flags.insert(Flags::WRAPLINE);
+        }
+        self.screen.col = 0;
+        self.index();
+    }
+
     /// Runs an APC string; only kitty graphics (`G…`) are understood.
     fn apc(&mut self, payload: &[u8]) {
         let Some(body) = payload.strip_prefix(b"G") else {
@@ -386,26 +438,62 @@ fn byte(value: u16) -> u8 {
 }
 
 impl vte::Perform for State {
+    /// Writes `ch` at the cursor. A wide char takes its cell plus a
+    /// [`Flags::WIDE_SPACER`] cell after it. Zero-width chars (combining
+    /// marks, ZWJ, variation selectors) go to the previous char (see
+    /// [`State::attach_mark`]). Controls (width `None`) never get here.
     fn print(&mut self, ch: char) {
-        // TODO: wide (CJK/emoji) chars occupy two cells; treated as width 1.
+        let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width == 0 {
+            self.attach_mark(ch);
+            return;
+        }
+        // A one-column grid cannot hold a wide char; it takes one cell.
+        let wide = width == 2 && self.last_col() > 0;
         if self.screen.wrap_pending {
-            let row = self.screen.grid.row_mut(self.screen.row);
-            if let Some(last) = row.last_mut() {
-                last.flags.insert(Flags::WRAPLINE);
+            self.wrap_line();
+        }
+        if wide && self.screen.col == self.last_col() {
+            // Like xterm: a wide char that does not fit wraps early, or
+            // without autowrap takes the last two columns.
+            if self.autowrap {
+                self.wrap_line();
+            } else {
+                self.screen.col -= 1;
             }
-            self.screen.col = 0;
-            self.index();
         }
         let (col, row) = (self.screen.col, self.screen.row);
+        let end = col + u16::from(wide);
         self.damage(row, row);
-        self.screen.grid.row_mut(row)[usize::from(col)] = Cell { ch, ..self.pen };
-        self.images.remove_sixels_over(row, col..col + 1, self.cell);
+        let pen = self.pen;
+        let cells = self.screen.grid.row_mut(row);
+        let (first, last) = (usize::from(col), usize::from(end));
+        // Overwriting one half of a wide char blanks the other half.
+        if first > 0 && cells[first].flags.contains(Flags::WIDE_SPACER) {
+            cells[first - 1].unwide();
+        }
+        if last + 1 < cells.len() && cells[last].flags.contains(Flags::WIDE) {
+            cells[last + 1].unwide();
+        }
+        cells[first] = Cell {
+            ch,
+            marks: Marks::default(),
+            ..pen
+        };
+        if wide {
+            cells[first].flags.insert(Flags::WIDE);
+            cells[last] = Cell {
+                ch: ' ',
+                marks: Marks::default(),
+                ..pen
+            };
+            cells[last].flags.insert(Flags::WIDE_SPACER);
+        }
+        self.images.remove_sixels_over(row, col..end + 1, self.cell);
         self.last_char = Some(ch);
         // Without autowrap the last column is overwritten in place.
-        self.screen.wrap_pending = col == self.last_col() && self.autowrap;
-        if col != self.last_col() {
-            self.screen.col += 1;
-        }
+        self.screen.wrap_pending = end == self.last_col() && self.autowrap;
+        self.screen.col = (end + 1).min(self.last_col());
     }
 
     fn execute(&mut self, byte: u8) {
@@ -1148,6 +1236,173 @@ mod tests {
         assert_eq!(text(&t, 0), "ok");
     }
 
+    /// Row `row` with `+` for each wide spacer, trailing blanks trimmed.
+    /// The combining marks stored on cell `col` of `row`.
+    fn marks(t: &Terminal, row: u16, col: usize) -> String {
+        t.row(row)[col].marks.iter().collect()
+    }
+
+    fn cells(t: &Terminal, row: u16) -> String {
+        let line: String = t
+            .row(row)
+            .iter()
+            .map(|c| match c.flags.contains(Flags::WIDE_SPACER) {
+                true => '+',
+                false => c.ch,
+            })
+            .collect();
+        line.trim_end().to_owned()
+    }
+
+    #[test]
+    fn wide_chars_take_two_cells_and_advance_the_cursor_by_two() {
+        let mut t = term(6, 2);
+        t.advance("a日b".as_bytes());
+        assert_eq!(cells(&t, 0), "a日+b");
+        assert_eq!(pos(&t), (4, 0));
+        assert!(t.row(0)[1].flags.contains(Flags::WIDE));
+        assert!(!t.row(0)[3].flags.contains(Flags::WIDE));
+    }
+
+    #[test]
+    fn a_wide_char_at_the_last_column_wraps_to_the_next_line() {
+        let mut t = term(4, 2);
+        t.advance("abc日".as_bytes());
+        assert_eq!(cells(&t, 0), "abc");
+        assert!(wrapped(&t, 0));
+        assert_eq!(cells(&t, 1), "日+");
+        assert_eq!(pos(&t), (2, 1));
+    }
+
+    #[test]
+    fn a_wide_char_ending_on_the_last_column_leaves_a_pending_wrap() {
+        let mut t = term(4, 2);
+        t.advance("ab日".as_bytes());
+        assert_eq!(cells(&t, 0), "ab日+");
+        assert_eq!(pos(&t), (3, 0));
+        t.advance(b"c");
+        assert_eq!(cells(&t, 1), "c");
+    }
+
+    #[test]
+    fn without_autowrap_a_wide_char_at_the_last_column_takes_the_last_two() {
+        let mut t = term(4, 2);
+        t.advance("\x1b[?7labc日".as_bytes());
+        assert_eq!(cells(&t, 0), "ab日+");
+        assert_eq!(cells(&t, 1), "");
+        assert_eq!(pos(&t), (3, 0));
+    }
+
+    #[test]
+    fn a_one_column_terminal_prints_wide_chars_in_one_cell() {
+        let mut t = term(1, 2);
+        t.advance("日".as_bytes());
+        assert_eq!(cells(&t, 0), "日");
+        assert!(!t.row(0)[0].flags.contains(Flags::WIDE));
+        t.state.assert_invariants();
+    }
+
+    #[test]
+    fn overwriting_either_half_of_a_wide_char_blanks_the_other() {
+        let mut t = term(6, 1);
+        t.advance("日本\x1b[1Gx".as_bytes());
+        assert_eq!(cells(&t, 0), "x 本+");
+        assert_eq!(t.row(0)[1].flags, Flags::default());
+        t.advance(b"\x1b[4Gy");
+        assert_eq!(cells(&t, 0), "x  y");
+        t.state.assert_invariants();
+    }
+
+    #[test]
+    fn a_wide_char_over_two_wide_chars_blanks_their_outer_halves() {
+        let mut t = term(6, 1);
+        t.advance("日本\x1b[2G語".as_bytes());
+        assert_eq!(cells(&t, 0), " 語+");
+        t.state.assert_invariants();
+    }
+
+    #[test]
+    fn rep_repeats_a_wide_char() {
+        let mut t = term(8, 1);
+        t.advance("日\x1b[2b".as_bytes());
+        assert_eq!(cells(&t, 0), "日+日+日+");
+    }
+
+    #[test]
+    fn a_combining_mark_composes_with_the_previous_char() {
+        let mut t = term(8, 1);
+        t.advance("e\u{301}x".as_bytes());
+        assert_eq!(cells(&t, 0), "éx");
+        assert_eq!(pos(&t), (2, 0));
+        // Hangul jamo: a wide leading consonant, then a vowel and a final.
+        t.advance("\u{1100}\u{1161}\u{11a8}".as_bytes());
+        assert_eq!(cells(&t, 0), "éx각+");
+        t.state.assert_invariants();
+    }
+
+    #[test]
+    fn a_combining_mark_after_the_last_column_composes_with_it() {
+        let mut t = term(2, 2);
+        t.advance("ae\u{301}".as_bytes());
+        assert_eq!(cells(&t, 0), "aé");
+        assert_eq!(pos(&t), (1, 0));
+    }
+
+    #[test]
+    fn zero_width_chars_without_a_precomposed_form_are_kept_on_the_cell() {
+        let mut t = term(8, 1);
+        // Combining acute on q, zero width joiner, then a mark on a wide char.
+        t.advance("q\u{301}\u{200d}日\u{301}b".as_bytes());
+        assert_eq!(cells(&t, 0), "q日+b");
+        assert_eq!(pos(&t), (4, 0));
+        assert_eq!(marks(&t, 0, 0), "\u{301}\u{200d}");
+        assert_eq!(marks(&t, 0, 1), "\u{301}", "the wide cell, not its spacer");
+        assert_eq!(marks(&t, 0, 2), "");
+        t.state.assert_invariants();
+    }
+
+    #[test]
+    fn marks_beyond_the_cell_capacity_are_dropped() {
+        let mut t = term(4, 1);
+        t.advance("q\u{301}\u{302}\u{303}".as_bytes());
+        assert_eq!(marks(&t, 0, 0), "\u{301}\u{302}");
+    }
+
+    #[test]
+    fn a_zero_width_char_with_no_previous_cell_is_dropped() {
+        let mut t = term(4, 2);
+        t.advance("\u{301}a".as_bytes());
+        assert_eq!(cells(&t, 0), "a");
+        assert_eq!(marks(&t, 0, 0), "");
+        assert_eq!(pos(&t), (1, 0));
+    }
+
+    #[test]
+    fn overwriting_or_erasing_a_cell_clears_its_marks() {
+        let mut t = term(6, 1);
+        t.advance("q\u{301}r\u{301}s\u{301}\r".as_bytes());
+        t.advance(b"x\x1b[K");
+        assert_eq!(cells(&t, 0), "x");
+        assert_eq!(
+            (marks(&t, 0, 0), marks(&t, 0, 1)),
+            (String::new(), String::new())
+        );
+        // Overwriting half of a wide char drops the marks of the other half.
+        t.advance("\r日\u{301}\x1b[2Gz".as_bytes());
+        assert_eq!(cells(&t, 0), " z");
+        assert_eq!(marks(&t, 0, 0), "");
+        t.state.assert_invariants();
+    }
+
+    #[test]
+    fn resizing_through_a_wide_char_blanks_its_left_half() {
+        let mut t = term(4, 1);
+        t.advance("ab日".as_bytes());
+        t.resize(TermSize::new(3, 1).unwrap());
+        assert_eq!(cells(&t, 0), "ab");
+        t.state.assert_invariants();
+    }
+
     /// Deterministic xorshift so failures reproduce.
     fn noise(seed: &mut u64) -> u64 {
         *seed ^= *seed << 13;
@@ -1225,13 +1480,20 @@ mod tests {
             "\x1b[m",
             "\x1b[44m",
             "\x1b[2J",
+            "日本",
+            "a\u{301}\u{200d}",
+            "\u{301}\u{302}\u{303}",
+            "\u{1100}\u{1161}\u{11a8}",
+            "日\u{301}",
         ]
         .iter()
         .map(|s| s.as_bytes().to_vec())
         .collect();
         tokens.push(kitty_rgba(1, 10, 20, ""));
         tokens.push(kitty_rgba(2, 20, 40, ""));
-        let counted = ["L", "M", "@", "P", "X", "b", "S", "T", "A", "B", "E", "F"];
+        let counted = [
+            "L", "M", "@", "P", "X", "b", "S", "T", "A", "B", "E", "F", "G", "K", "J",
+        ];
         let mut seed = 0x2545_f491_4f6c_dd1d;
         for _ in 0..400 {
             let mut t = sized(8, 5);
