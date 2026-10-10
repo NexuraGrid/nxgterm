@@ -184,8 +184,11 @@ defaults.
 Every key is optional:
 
 ```toml
+import = ["fonts.toml"]     # other files merged first; see Imports below
+
 [font]
-family = "JetBrains Mono"   # falls back to the system monospace font
+family = "JetBrains Mono"   # or a list, e.g. ["JetBrainsMono Nerd Font", "Fira Code"]:
+                            # the first installed one wins, else the system monospace font
 fallback = ["Symbols Nerd Font Mono"]  # for glyphs the family lacks, e.g. icons
 size = 14.0                 # points at 100% scale, clamped to 6-72
 
@@ -199,7 +202,7 @@ opacity = 1.0               # default background opacity, 0.0-1.0
 blur = false                # blur behind a translucent background
 
 [colors]
-theme = "catppuccin-mocha"
+theme = "catppuccin-mocha"  # a built-in theme, or themes/<name>.toml (see below)
 # Optional overrides on top of the theme:
 # foreground = "#c0caf5"
 # background = "#1a1b26"
@@ -229,6 +232,45 @@ copy_on_select = true       # selected text goes to PRIMARY (Linux only)
 Built-in themes: `catppuccin-mocha` (default), `nxg-dark` (xterm colors),
 `nxg-light`, `tokyo-night`, `gruvbox-dark`, `dracula`, `nord`, `one-dark`.
 
+Theme files: `theme = "my-theme"` reads `themes/my-theme.toml` in the
+directory of `nxgterm.toml` (e.g. `~/.config/nxgterm/themes/my-theme.toml`)
+before looking for a built-in theme of that name. A theme file holds the same
+keys as the `[colors]` overrides, at its top level or under `[colors]`; the
+ones it leaves out come from `catppuccin-mocha`, and `[colors]` overrides in
+the config still apply on top:
+
+```toml
+# ~/.config/nxgterm/themes/my-theme.toml
+foreground = "#d8dee9"
+background = "#1d2128"
+cursor = "#88c0d0"
+ansi = [
+  "#3b4252", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#88c0d0", "#e5e9f0",
+  "#4c566a", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#8fbcbb", "#eceff4",
+]
+selection_background = "#434c5e"
+```
+
+An unknown name is an error listing the built-in themes and the theme files
+found.
+
+Imports: `import = ["fonts.toml", "colors.toml"]` at the top of a config file
+merges those files first, in order, then the file's own values override
+theirs, as with Alacritty's `general.import`. Tables merge key by key (so an
+imported `[keybindings]` adds to the main file's); any other value, lists
+included, is replaced by the later one. Paths are relative to the importing
+file's directory, `~` is the home directory, and absolute paths work too.
+Imported files can import others (up to 8 levels); a cycle or a missing file
+is an error naming the file, like any other config error.
+
+```toml
+# ~/.config/nxgterm/nxgterm.toml
+import = ["fonts.toml", "~/dotfiles/nxgterm/colors.toml"]
+
+[font]
+size = 13.0   # wins over fonts.toml
+```
+
 `opacity` below 1.0 makes the default background translucent, like
 Alacritty and WezTerm: the padding and cells with the theme background let
 the desktop show through, while text, the cursor, colored cells, the
@@ -240,7 +282,9 @@ OpenGL backend, usually with Vulkan on Windows, and with the CPU renderer the
 background stays opaque and a line on stderr says so. `blur = true` blurs what is behind the window on
 macOS, KDE Plasma (Wayland) and Windows 11 (Acrylic).
 
-The file is reloaded when saved. Font, colors, padding, the tab bar, opacity,
+The file is reloaded when saved, and so are its imports and its theme file
+(a directory that does not exist yet, such as a new `themes` directory, is
+watched from the next reload). Font, colors, padding, the tab bar, opacity,
 blur, the scrollback limit and key bindings apply at once; `[shell]`, `[renderer]`, the initial
 `columns`/`rows`, `decorations` and lowering `opacity` from 1.0 (the window is created
 transparent only then) apply on the next start. An invalid file is reported on stderr (with the line and the reason,
@@ -259,10 +303,14 @@ the defaults are used instead.
 | `Ctrl+Shift+T` / `Ctrl+Shift+W` | `new_tab` / `close_tab` |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | `next_tab` / `previous_tab` |
 | `Alt+1` ... `Alt+9` | `goto_tab_1` ... `goto_tab_9` |
+| `Ctrl+Shift+O` / `Ctrl+Shift+E` | `split_right` / `split_down` |
+| `Ctrl+Alt+Arrows` (`Cmd+Alt` on macOS) | `focus_pane_left` ... `focus_pane_down` |
+| `Ctrl+Shift+Alt+Arrows` (`Cmd+Shift+Alt` on macOS) | `resize_pane_left` ... `resize_pane_down` |
+| `Ctrl+Shift+X` / `Ctrl+Shift+Enter` | `close_pane` / `zoom_pane` |
 | `Ctrl+Shift+P` | `command_palette`: list and run every action |
 | `Ctrl+Shift+C` (`Cmd+C` on macOS) | `copy`: the selection to the clipboard |
 | `Ctrl+Shift+V` (`Cmd+V` on macOS), `Shift+Insert` | `paste`: the clipboard into the shell |
-| (unbound) | `select_all`, `reload_config` |
+| (unbound) | `select_all`, `reload_config`, `equalize_panes` |
 
 Bound keys are handled by the terminal and never reach the shell (the
 scrolling keys still do in full-screen programs, which have no history).
@@ -329,7 +377,9 @@ the system title bar, as in Windows Terminal or a browser. It always shows, even
 one tab, and has a `+` button after the last tab that opens a new one. Drag
 its empty part to move the window and double-click it to maximize or
 restore. On Windows and Linux it draws minimize, maximize/restore and close
-buttons on the right (close turns red under the pointer), the window keeps a
+buttons in the top-right corner, as tall as the bar and at least 46 pixels
+wide (at 100% scale) with vector glyphs that grow with the display scale
+and the bar (close turns red under the pointer), the window keeps a
 drop shadow on Windows, and the outer 5 pixels (at 100% scale) of the window
 resize it, except while maximized; right-clicking the empty bar opens the
 window menu on Windows. On macOS the native window buttons stay at the left
@@ -337,6 +387,27 @@ of the bar and the system resizes the window. Without the system title bar
 some desktop features are gone: the Windows 11 snap layouts shown when
 hovering the maximize button (dragging to a screen edge still snaps, and
 Win+arrow keys work) and, on Linux, the window manager's title bar menu.
+
+### Split panes
+
+A tab can be split into panes, each running its own shell on its own pty.
+`Ctrl+Shift+O` splits the focused pane to the right and `Ctrl+Shift+E`
+splits it down; splits nest freely. The new pane starts in the directory
+nxgterm was started in, like a new tab. Panes are separated by a one-cell
+divider drawn as a thin line.
+
+Click a pane or use `Ctrl+Alt+Arrows` to focus it; keys, paste, copy and the
+command palette go to the focused pane. Panes without focus show a hollow
+cursor and fade toward the background (`panes.inactive_dim`). Drag a divider
+or use `Ctrl+Shift+Alt+Arrows` to resize; `equalize_panes` resets every split
+to equal halves. `Ctrl+Shift+Enter` zooms the focused pane to fill the tab
+and back, while the others keep running. A pane closes when its program
+exits or with `Ctrl+Shift+X`, and its space goes to its neighbour; closing
+the last pane closes the tab.
+
+On KDE and GNOME `Ctrl+Alt+Arrows` may switch workspaces; rebind the
+`focus_pane_*` actions in `[keybindings]` if they do. The `[panes]` section
+sets the divider color and width and the dim amount, and reloads live.
 
 ### Scrolling and the mouse
 
@@ -401,6 +472,8 @@ winpty (Windows Server 2016) does not pass images through either.
     window icon ✅
 12. 0.6.0: integrated title bar with tabs (default), window opacity and
     blur, Catppuccin Mocha flavor for Yazi ✅
+13. 0.7.0: split panes, font family lists, vector title bar buttons, theme
+    files and config imports ✅
 
 Planned work is tracked in
 [`openspec/RECOMMENDATIONS.md`](openspec/RECOMMENDATIONS.md).

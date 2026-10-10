@@ -11,7 +11,8 @@ use super::GpuError;
 use super::device::Gpu;
 use super::format;
 use super::painter::Painter;
-use crate::style::{Overlay, Style, WindowRenderer};
+use crate::shape::Shape;
+use crate::style::{Overlay, PaneView, Style, WindowRenderer};
 
 /// GPU renderer presenting to a window surface.
 #[derive(Debug)]
@@ -111,7 +112,7 @@ impl Renderer for GpuRenderer {
     }
 
     fn draw(&mut self, terminal: &Terminal) -> Result<(), RenderError> {
-        self.draw_layers(None, terminal, None)
+        self.draw_layers(None, &[PaneView::single(terminal)], None, &[])
     }
 }
 
@@ -127,8 +128,9 @@ impl WindowRenderer for GpuRenderer {
     fn draw_layers(
         &mut self,
         header: Option<&Terminal>,
-        terminal: &Terminal,
+        panes: &[PaneView<'_>],
         overlay: Option<Overlay<'_>>,
+        shapes: &[Shape],
     ) -> Result<(), RenderError> {
         if let Some(failure) = self.gpu.failure() {
             return Err(RenderError::Fatal(failure));
@@ -164,8 +166,9 @@ impl WindowRenderer for GpuRenderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let (width, height) = (self.config.width, self.config.height);
-        self.painter
-            .render(&self.gpu, &view, width, height, header, terminal, overlay);
+        self.painter.render(
+            &self.gpu, &view, width, height, header, panes, overlay, shapes,
+        );
         self.gpu.queue.present(frame);
         if suboptimal {
             self.configure();

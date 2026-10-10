@@ -62,16 +62,6 @@ impl<T> Tabs<T> {
         Some(tab)
     }
 
-    /// Position of the tab `id`, if it is still open.
-    pub fn index_of(&self, id: TabId) -> Option<usize> {
-        self.tabs.iter().position(|(tab, _)| *tab == id)
-    }
-
-    pub fn get_mut(&mut self, id: TabId) -> Option<&mut T> {
-        let index = self.index_of(id)?;
-        Some(&mut self.tabs[index].1)
-    }
-
     /// Position of the active tab (0 while empty).
     pub fn active_index(&self) -> usize {
         self.active
@@ -192,11 +182,8 @@ mod tests {
         tabs.close(1);
         let c = add(&mut tabs, "c");
         assert_ne!(b, c);
-        assert_eq!(tabs.index_of(b), None, "closed tabs are gone");
-        assert_eq!(tabs.index_of(c), Some(1));
-        *tabs.get_mut(a).unwrap() = "A";
-        assert_eq!(order(&tabs), ["A", "c"]);
-        assert!(tabs.get_mut(b).is_none());
+        assert_ne!(a, c);
+        assert_eq!(order(&tabs), ["a", "c"]);
     }
 
     #[test]

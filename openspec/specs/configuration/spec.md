@@ -6,7 +6,7 @@ The optional TOML configuration (`nxg-config`, pure and OS-free), where it
 is found, how it is validated, the built-in themes, the command-line
 interface, live reload, and the key bindings (`nxgterm`).
 
-Sources: `crates/nxg-config/src/{lib,path,theme,color,keybindings}.rs`,
+Sources: `crates/nxg-config/src/{lib,load,path,theme,color,keybindings}.rs`,
 `crates/nxgterm/src/{main,cli,reload,watch,bindings,appearance}.rs`.
 
 ## Requirements
@@ -54,7 +54,8 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 
 | Key | Type | Default |
 |---|---|---|
-| `font.family` | string; blank = unset | system monospace |
+| `import` | list of config files merged first, in order (see Imports) | `[]` |
+| `font.family` | string or list of strings, first installed one wins; blank names dropped | system monospace |
 | `font.fallback` | list of family names searched per missing glyph; blank names dropped | `[]` (built-in defaults still apply) |
 | `font.size` | integer or float points, clamped to 6-72; non-finite = 14 | `14.0` |
 | `window.padding` | u16 logical pixels | `8` |
@@ -63,7 +64,7 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | `window.decorations` | `integrated` (the tab bar is the title bar) or `native` (system title bar) | `integrated` |
 | `window.opacity` | integer or float opacity of the default background, clamped to 0.0-1.0; `nan`/`inf` are errors | `1.0` |
 | `window.blur` | bool; ask the system to blur behind a translucent background | `false` |
-| `colors.theme` | built-in theme name, case-insensitive | `catppuccin-mocha` |
+| `colors.theme` | theme file name in `themes/`, else built-in theme name (case-insensitive) | `catppuccin-mocha` |
 | `colors.foreground`/`background`/`cursor` | `#rrggbb` or `#rgb` | from theme |
 | `colors.ansi` | exactly 16 colors (normal 0-7, bright 8-15) | from theme |
 | `colors.selection_foreground`/`selection_background` | `#rrggbb` or `#rgb`; unset swaps the colors of selected cells | from theme (unset for most) |
@@ -104,6 +105,41 @@ xterm cube and grayscale ramp regardless of theme.
 - WHEN colors are resolved
 - THEN the foreground is `#010203` and the background is nord's
 
+### Requirement: Theme files
+
+`theme = "<name>"` MUST first read `<config dir>/themes/<name>.toml`, where
+the config dir is the directory of the main config file, and only then fall
+back to the built-in theme of that name; names that are not plain file
+names (with a path separator, `.` or `..`) MUST skip the file lookup. A
+theme file MUST accept the `[colors]` override keys at its top level or
+under `[colors]`, reject other keys, and take the keys it leaves out from
+the default theme. The config's own `[colors]` overrides MUST apply on top.
+An unknown name MUST be an error at the `theme` line of the file that set
+it, listing the built-in themes and the theme files found.
+
+#### Scenario: Custom theme
+- GIVEN `themes/custom-theme.toml` with only `foreground = "#010203"`
+- WHEN the config sets `theme = "custom-theme"`
+- THEN the foreground is `#010203` and the other colors are catppuccin-mocha's
+
+### Requirement: Imports
+
+A top-level `import` list MUST merge the named files first, in order, with
+the importing file's own values overriding them; tables MUST merge key by
+key and any other value (lists included) MUST be replaced by the later one.
+Paths MUST be relative to the importing file's directory, with a leading `~`
+expanded to the home directory; absolute paths MUST work. Imported files MAY
+import others; cycles and nesting deeper than 8 levels MUST be errors, and so
+MUST a missing or unreadable import, naming the importing file and the
+import. Every file MUST be checked alone first, so errors name the file and
+line they are in.
+
+#### Scenario: Main file wins
+- GIVEN `import = ["a.toml", "b.toml"]`, both setting `font.size`, and the
+  main file setting `window.padding` like `a.toml`
+- WHEN the config is loaded
+- THEN the size is `b.toml`'s and the padding the main file's
+
 ### Requirement: Invalid config handling
 
 Parse errors MUST name the file path, the line and the reason (unknown key,
@@ -126,9 +162,10 @@ running settings MUST stay unchanged.
 
 ### Requirement: Live reload
 
-The parent directory of the config file MUST be watched (so editors that
-save by rename are handled), events for other files, reads and access-time
-updates MUST be ignored, and bursts MUST be debounced to one reload after
+The parent directories of the config file, its imports and its theme file
+MUST be watched (so editors that save by rename are handled; directories
+that do not exist yet are tried again after each reload), events for other
+files, reads and access-time updates MUST be ignored, and bursts MUST be debounced to one reload after
 200 ms of quiet. Font family, fallback families, font size, colors, padding,
 `window.tab_bar` and `window.opacity` (on a window created transparent) MUST
 apply immediately (restyle and refit the grid); `window.blur` MUST be asked of
@@ -206,7 +243,12 @@ bar and borders and the tab bar MUST behave as `window.tab_bar` says. With
   Windows with the undecorated drop shadow) and the bar MUST end with
   minimize, maximize/restore and close buttons that act when the left button
   is released over the one it was pressed on; the button under the pointer
-  MUST be highlighted, close in red.
+  MUST be highlighted, close in red. The buttons MUST sit flush with the
+  window's top-right corner, span the bar's height and be at least 46
+  logical pixels wide (46:32 on a taller bar), with anti-aliased vector
+  glyphs (a line, a square, two overlapping squares while maximized, an X)
+  that scale with the display scale and the bar height, never with the
+  font's glyphs.
 - On macOS the window MUST keep its frame with a transparent, hidden title
   and full-size content; the bar MUST leave room on its left for the native
   window buttons and MUST NOT draw its own.
@@ -315,3 +357,57 @@ usage and exit with status 2. Non-UTF-8 paths MUST be preserved on Unix.
 - GIVEN `nxgterm --colour`
 - WHEN it runs
 - THEN stderr shows ``unknown argument `--colour``` plus usage and the exit code is 2
+
+### Requirement: Panes section
+
+An optional `[panes]` section MUST accept `divider_color` (`#rrggbb` or
+`#rgb`), `divider_width` (non-zero integer pixels, clamped to the cell) and
+`inactive_dim` (0.0-1.0, `nan`/`inf` are errors). Every key is optional and
+unknown keys MUST be errors. `--print-config` MUST document the keys and
+still parse to exactly the defaults.
+
+#### Scenario: Invalid dim
+- GIVEN `[panes] inactive_dim = 2`
+- WHEN parsed
+- THEN the value is clamped to 1.0
+
+#### Scenario: Unknown key
+- GIVEN `[panes] gap = 1`
+- WHEN parsed
+- THEN the error names `gap` and the file line
+
+### Requirement: Pane key bindings
+
+New actions MUST have stable names and a `Panes` category: `split_right`,
+`split_down`, `focus_pane_left`, `focus_pane_right`, `focus_pane_up`, `focus_pane_down`,
+`resize_pane_left`, `resize_pane_right`, `resize_pane_up`, `resize_pane_down`, `close_pane`,
+`zoom_pane`, `equalize_panes`. Defaults on Linux and Windows MUST be
+Ctrl+Shift+O (`split_right`), Ctrl+Shift+E (`split_down`), Ctrl+Alt+arrows
+(`focus_*`), Ctrl+Shift+Alt+arrows (`resize_*`), Ctrl+Shift+X (`close_pane`)
+and Ctrl+Shift+Enter (`zoom_pane`); `equalize_panes` MUST be unbound. macOS
+MUST follow the existing Cmd/Ctrl convention. All MUST be rebindable or
+removable with `"none"` and listed in the command palette.
+
+#### Scenario: Default split
+- GIVEN default bindings on Linux
+- WHEN Ctrl+Shift+O is pressed
+- THEN `split_right` runs and nothing reaches the shell
+
+#### Scenario: Rebinding
+- GIVEN `"ctrl+shift+o" = "none"`
+- WHEN Ctrl+Shift+O is pressed
+- THEN the key goes to the shell
+
+#### Scenario: Palette entry
+- GIVEN the command palette is open
+- WHEN `equalize` is typed
+- THEN `equalize_panes` is listed
+
+### Requirement: Panes live reload
+
+Changes to `[panes]` MUST apply on the next frame without restart.
+
+#### Scenario: Dim changed live
+- GIVEN a running split tab
+- WHEN `inactive_dim` is saved as 0.5
+- THEN the next frame dims inactive panes by 0.5 and stderr shows `nxgterm: config reloaded`

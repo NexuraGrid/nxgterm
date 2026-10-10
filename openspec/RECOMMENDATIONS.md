@@ -34,7 +34,7 @@ Each item is meant to become its own OpenSpec change
 | 20 | P2 | terminfo entry | pty, packaging |
 | 21 | P2 | ~~wgpu upgrade path once the MSRV can move~~ Done: wgpu 30, MSRV 1.87 | rendering |
 | 22 | P2 | Dedupe `miniz_oxide` and drop the unused workspace dependency | (build) |
-| 23 | P2 | ~~Tabs~~ native in 0.2.0; splits vs ngmux still open | (product) |
+| 23 | P2 | ~~Tabs~~ native in 0.2.0; ~~splits~~ native via `split-panes` (2026-10-09) | (product) |
 | 24 | P2 | Configuration documentation and small CLI gaps | configuration |
 | 25 | P2 | Character sets, tab stops, DECCOLM, DECALN, DECSCNM and double-size lines | terminal-core |
 | 26 | P2 | Numeric keypad mode (DECKPAM/DECKPNM) | terminal-core |
@@ -285,7 +285,7 @@ Add `cargo deny check bans` (duplicates as warnings) to CI.
 
 ### 23. Tabs and splits: decide
 
-**Status: Partial.** Native tabs shipped in 0.2.0 (PR #11); splits vs relying on ngmux is still undecided.
+**Status: Done.** Native tabs shipped in 0.2.0 (PR #11). Native splits shipped with change `split-panes` (archived at `openspec/changes/archive/2026-10-09-split-panes/`), superseding the earlier "ngmux is the answer" direction below.
 
 nxgterm has one window and one shell; ngmux provides multiplexing. Record
 the decision (ADR in a change's `design.md`): either "no tabs/splits,

@@ -9,7 +9,8 @@
 //!
 //! The application picks one at runtime through `nxg_core::fallback`.
 //! Both also implement [`WindowRenderer`], so a new [`Style`] (font,
-//! colors, padding) applies without recreating the surface.
+//! colors, padding) applies without recreating the surface, and draw
+//! [`Shape`]s (such as the window buttons) in window pixels over the rest.
 
 pub mod cpu_window;
 pub mod font;
@@ -19,6 +20,7 @@ pub mod images;
 pub mod paint;
 pub mod palette;
 pub mod renderer;
+pub mod shape;
 pub mod style;
 #[cfg(test)]
 mod test_font;
@@ -30,4 +32,5 @@ pub use gpu::{GpuError, GpuRenderer};
 pub use paint::{CellSize, Layout};
 pub use palette::Palette;
 pub use renderer::CpuRenderer;
-pub use style::{Overlay, Style, WindowRenderer};
+pub use shape::{Mask, Segment, Shape};
+pub use style::{Overlay, PaneView, Style, WindowRenderer};

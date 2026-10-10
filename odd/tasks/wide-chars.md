@@ -119,3 +119,14 @@ and nxg-render).
   RDD: assessed medium (slice_budget_reached), consent declined by user for
   this candidate; writer self-verification (test/clippy/fmt) is the record.
 - Next: push + PR (user decision).
+- Merged origin/main (0.7.0 split panes) into the branch. Conflicts in
+  gpu/atlas.rs (`Source::Glyph`/`Key::Glyph` now carry `wide`), gpu/instance.rs
+  (`build_look` takes the 3-arg glyph closure; block and unfocused outline
+  cursor both span `cursor_cells`), gpu/painter.rs (main's `frame_quads`,
+  glyph closure forwards `wide`) and paint.rs (`is_wide`/`glyph_chars`/
+  `cursor_cells` kept beside `cursor_outline`; `paint_cursor` takes `look`
+  and widens block and outline over a wide char). CPU renderer auto-merged
+  with wide/marks intact. Added CPU and GPU tests for the outline cursor over
+  a wide char. Verification: `cargo fmt --check` ok; `cargo test --workspace`
+  891 passed / 0 failed; `cargo clippy --workspace --all-targets -- -D
+  warnings` clean.

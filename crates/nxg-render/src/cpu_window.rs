@@ -13,7 +13,8 @@ use softbuffer::{Context, SoftBufferError, Surface};
 
 use crate::frame::Frame;
 use crate::renderer::CpuRenderer;
-use crate::style::{Overlay, Style, WindowRenderer};
+use crate::shape::Shape;
+use crate::style::{Overlay, PaneView, Style, WindowRenderer};
 
 /// [`CpuRenderer`] plus a softbuffer surface; works everywhere.
 pub struct CpuWindowRenderer<W: HasDisplayHandle + HasWindowHandle> {
@@ -68,7 +69,7 @@ impl<W: HasDisplayHandle + HasWindowHandle> Renderer for CpuWindowRenderer<W> {
     }
 
     fn draw(&mut self, terminal: &Terminal) -> Result<(), RenderError> {
-        self.draw_layers(None, terminal, None)
+        self.draw_layers(None, &[PaneView::single(terminal)], None, &[])
     }
 }
 
@@ -84,8 +85,9 @@ impl<W: HasDisplayHandle + HasWindowHandle> WindowRenderer for CpuWindowRenderer
     fn draw_layers(
         &mut self,
         header: Option<&Terminal>,
-        terminal: &Terminal,
+        panes: &[PaneView<'_>],
         overlay: Option<Overlay<'_>>,
+        shapes: &[Shape],
     ) -> Result<(), RenderError> {
         let (Some(width), Some(height)) =
             (NonZeroU32::new(self.width), NonZeroU32::new(self.height))
@@ -98,7 +100,7 @@ impl<W: HasDisplayHandle + HasWindowHandle> WindowRenderer for CpuWindowRenderer
         let mut frame = Frame::new(&mut buffer, width.get(), height.get())
             .ok_or_else(|| RenderError::Fatal("surface buffer smaller than the window".into()))?;
         self.renderer
-            .render_layers(header, terminal, overlay, &mut frame);
+            .render_layers(header, panes, overlay, shapes, &mut frame);
         if self.transparent_window {
             set_opaque_alpha(&mut buffer);
         }

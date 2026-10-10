@@ -1,5 +1,5 @@
-//! Configuration: the TOML file, its defaults, the built-in themes and the
-//! key bindings.
+//! Configuration: the TOML file, its imports, its defaults, the built-in
+//! themes and theme files, and the key bindings.
 //!
 //! Pure: no window, GPU or OS APIs. Every key is optional; a missing file
 //! or section means the defaults, and unknown keys are errors so typos do
@@ -7,6 +7,7 @@
 
 pub mod color;
 pub mod keybindings;
+pub mod load;
 pub mod path;
 pub mod theme;
 
@@ -19,6 +20,7 @@ use serde::{Deserialize, Deserializer};
 
 pub use color::Rgb;
 pub use keybindings::{Bindings, KeybindingsConfig};
+pub use load::Loaded;
 pub use path::{Platform, config_path, has_env_override};
 pub use theme::{Colors, THEMES, Theme, ThemeName};
 
@@ -41,9 +43,16 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# nxgterm configuration.
 # [shell], [renderer], the window size, the window decorations and lowering
 # the opacity from 1.0, which apply on the next start.
 
+# Other config files merged first, in order; this file's own values win over
+# theirs. Paths are relative to this file's directory; "~" is the home
+# directory. Imported files can import others. A missing file is an error.
+# import = ["fonts.toml", "~/dotfiles/nxgterm-colors.toml"]
+
 [font]
-# Font family. When unset or not installed, the system monospace font is used.
+# Font family, or a list of families tried in order: the first installed one
+# is used. When unset or none is installed, the system monospace font is used.
 # family = "JetBrains Mono"
+# family = ["JetBrainsMono Nerd Font", "Fira Code"]
 # Families searched, in order, for characters the font above lacks, such as
 # the Nerd Font icons printed by eza or yazi. After this list, installed
 # "Symbols Nerd Font Mono", "Symbols Nerd Font", any other Nerd Font,
@@ -80,7 +89,10 @@ blur = false
 
 [colors]
 # Built-in theme: catppuccin-mocha, nxg-dark, nxg-light, tokyo-night,
-# gruvbox-dark, dracula, nord, one-dark.
+# gruvbox-dark, dracula, nord, one-dark. Or a theme file: theme = "my-theme"
+# reads themes/my-theme.toml next to this file (it wins over a built-in theme
+# of the same name). A theme file holds the overrides below, at its top level
+# or under [colors]; the colors it leaves out come from catppuccin-mocha.
 theme = "catppuccin-mocha"
 # Optional overrides on top of the theme, as "#rrggbb" (or "#rgb"):
 # foreground = "#c0caf5"
@@ -119,6 +131,17 @@ lines = 10000
 # Wayland; ignored on other systems).
 copy_on_select = true
 
+[panes]
+# Split panes (see the split_* and focus_pane_* actions below). Color of the
+# lines between panes, as "#rrggbb" (or "#rgb"). Unset, the foreground faded
+# into the background.
+# divider_color = "#414868"
+# Thickness of those lines in pixels (at most one cell).
+divider_width = 1
+# How far panes without focus fade toward the background, from 0.0 (not at
+# all) to 1.0 (hidden). Images are not dimmed.
+inactive_dim = 0.25
+
 [keybindings]
 # Shortcuts handled by the terminal instead of being sent to the shell, as
 # "chord" = "action". Entries are added to the defaults below; map a default
@@ -131,13 +154,19 @@ copy_on_select = true
 #
 # Actions: zoom_in, zoom_out, reset_zoom, scroll_page_up, scroll_page_down,
 # scroll_to_top, scroll_to_bottom, new_tab, close_tab, next_tab, previous_tab,
-# goto_tab_1 to goto_tab_9, command_palette, copy, paste, select_all (unbound
-# by default), reload_config (unbound by default), none. Scrolling keys reach
+# goto_tab_1 to goto_tab_9, split_right, split_down, focus_pane_left,
+# focus_pane_right, focus_pane_up, focus_pane_down, resize_pane_left,
+# resize_pane_right, resize_pane_up, resize_pane_down, close_pane, zoom_pane,
+# equalize_panes (unbound by default), command_palette, copy, paste,
+# select_all (unbound by default), reload_config (unbound by default), none. Scrolling keys reach
 # the application on the alternate screen (full-screen programs). Copy does
 # nothing without a selection; ctrl+c stays an interrupt for the shell.
 #
-# The defaults (on macOS the zoom chords use cmd instead of ctrl, and copy
-# and paste are cmd+c and cmd+v):
+# The defaults (on macOS the zoom chords use cmd instead of ctrl, copy and
+# paste are cmd+c and cmd+v, and the pane focus and resize chords use cmd
+# instead of ctrl, because ctrl+arrows belong to Mission Control). On Linux
+# desktops (KDE, GNOME) ctrl+alt+arrows may switch workspaces: rebind the
+# focus_pane_* chords or free them with "none":
 # "ctrl+equal" = "zoom_in"
 # "ctrl+plus" = "zoom_in"
 # "ctrl+minus" = "zoom_out"
@@ -159,6 +188,18 @@ copy_on_select = true
 # "alt+7" = "goto_tab_7"
 # "alt+8" = "goto_tab_8"
 # "alt+9" = "goto_tab_9"
+# "ctrl+shift+o" = "split_right"
+# "ctrl+shift+e" = "split_down"
+# "ctrl+alt+left" = "focus_pane_left"
+# "ctrl+alt+right" = "focus_pane_right"
+# "ctrl+alt+up" = "focus_pane_up"
+# "ctrl+alt+down" = "focus_pane_down"
+# "ctrl+alt+shift+left" = "resize_pane_left"
+# "ctrl+alt+shift+right" = "resize_pane_right"
+# "ctrl+alt+shift+up" = "resize_pane_up"
+# "ctrl+alt+shift+down" = "resize_pane_down"
+# "ctrl+shift+x" = "close_pane"
+# "ctrl+shift+enter" = "zoom_pane"
 # "ctrl+shift+p" = "command_palette"
 # "ctrl+shift+c" = "copy"
 # "ctrl+shift+v" = "paste"
@@ -173,6 +214,9 @@ copy_on_select = true
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    /// Files merged under this one, as written; [`Config::load`] applies
+    /// them and leaves this empty.
+    pub import: Vec<String>,
     pub font: FontConfig,
     pub window: WindowConfig,
     pub colors: ColorsConfig,
@@ -180,6 +224,7 @@ pub struct Config {
     pub renderer: RendererConfig,
     pub scrollback: ScrollbackConfig,
     pub selection: SelectionConfig,
+    pub panes: PanesConfig,
     pub keybindings: KeybindingsConfig,
 }
 
@@ -187,9 +232,11 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FontConfig {
-    /// Preferred family; `None` means the system monospace font.
-    #[serde(deserialize_with = "non_empty")]
-    pub family: Option<String>,
+    /// Preferred families, in order: the first installed one is used.
+    /// Empty (or none installed) means the system monospace font. A
+    /// single name or a list; blank names are dropped.
+    #[serde(deserialize_with = "one_or_more_names")]
+    pub family: Vec<String>,
     /// Families searched, in order, for glyphs the primary font lacks
     /// (e.g. Nerd Font icons); blank names are dropped.
     #[serde(deserialize_with = "names")]
@@ -202,7 +249,7 @@ pub struct FontConfig {
 impl Default for FontConfig {
     fn default() -> Self {
         Self {
-            family: None,
+            family: Vec::new(),
             fallback: Vec::new(),
             size: DEFAULT_FONT_SIZE,
         }
@@ -251,7 +298,7 @@ impl Default for WindowConfig {
     }
 }
 
-/// `[colors]`: a built-in theme plus optional overrides.
+/// `[colors]`: a built-in theme or theme file plus optional overrides.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ColorsConfig {
@@ -267,7 +314,7 @@ pub struct ColorsConfig {
 impl ColorsConfig {
     /// The theme's colors with the overrides applied.
     pub fn resolve(&self) -> Colors {
-        let theme = self.theme.theme().colors;
+        let theme = self.theme.colors();
         Colors {
             foreground: self.foreground.unwrap_or(theme.foreground),
             background: self.background.unwrap_or(theme.background),
@@ -308,6 +355,32 @@ pub struct ScrollbackConfig {
 impl Default for ScrollbackConfig {
     fn default() -> Self {
         Self { lines: 10_000 }
+    }
+}
+
+/// `[panes]`
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PanesConfig {
+    /// Color of the lines between panes; `None` fades the foreground into
+    /// the background.
+    pub divider_color: Option<Rgb>,
+    /// Thickness of those lines in pixels (the renderer clamps it to the
+    /// cell).
+    pub divider_width: NonZeroU16,
+    /// How far panes without focus fade toward the background, 0.0 to 1.0,
+    /// already clamped with [`clamp_dim`].
+    #[serde(deserialize_with = "inactive_dim")]
+    pub inactive_dim: f32,
+}
+
+impl Default for PanesConfig {
+    fn default() -> Self {
+        Self {
+            divider_color: None,
+            divider_width: NonZeroU16::MIN,
+            inactive_dim: 0.25,
+        }
     }
 }
 
@@ -404,6 +477,13 @@ pub enum ConfigError {
     /// The file is not valid TOML or does not match the schema. `message`
     /// carries the line, column and offending snippet.
     Parse { path: PathBuf, message: String },
+    /// An `import` of the file at `path` cannot be used: unreadable, a
+    /// cycle or nested too deep.
+    Import {
+        path: PathBuf,
+        import: PathBuf,
+        reason: String,
+    },
 }
 
 impl fmt::Display for ConfigError {
@@ -418,6 +498,16 @@ impl fmt::Display for ConfigError {
                     message.trim_end()
                 )
             }
+            Self::Import {
+                path,
+                import,
+                reason,
+            } => write!(
+                f,
+                "invalid config {}: cannot import {}: {reason}",
+                path.display(),
+                import.display()
+            ),
         }
     }
 }
@@ -426,25 +516,35 @@ impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
-            Self::Parse { .. } => None,
+            Self::Parse { .. } | Self::Import { .. } => None,
         }
     }
 }
 
 impl Config {
-    /// Parses `text`; `path` only labels errors.
+    /// Parses `text`, the contents of the main config file at `path`: its
+    /// imports are read relative to it and its theme files from the
+    /// `themes` directory next to it (see [`load::load`]).
     pub fn parse(text: &str, path: &Path) -> Result<Self, ConfigError> {
-        toml::from_str(text).map_err(|error| ConfigError::Parse {
-            path: path.to_owned(),
-            message: error.to_string(),
-        })
+        Self::parse_with_files(text, path).map(|loaded| loaded.config)
+    }
+
+    /// [`Config::parse`], with the files the config was built from.
+    pub fn parse_with_files(text: &str, path: &Path) -> Result<Loaded, ConfigError> {
+        let home = path::home_dir(Platform::current(), |name| std::env::var_os(name));
+        load::load(text, path, home.as_deref())
     }
 
     /// Reads and parses the file at `path`. A missing file yields
     /// `Ok(None)` so callers can fall back to the defaults.
     pub fn load(path: &Path) -> Result<Option<Self>, ConfigError> {
+        Ok(Self::load_with_files(path)?.map(|loaded| loaded.config))
+    }
+
+    /// [`Config::load`], with the files the config was built from.
+    pub fn load_with_files(path: &Path) -> Result<Option<Loaded>, ConfigError> {
         match std::fs::read_to_string(path) {
-            Ok(text) => Self::parse(&text, path).map(Some),
+            Ok(text) => Self::parse_with_files(&text, path).map(Some),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(source) => Err(ConfigError::Io {
                 path: path.to_owned(),
@@ -486,14 +586,32 @@ fn non_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String
     Ok(value.filter(|s| !s.trim().is_empty()))
 }
 
+/// A name or a list of names; trims each one and drops the blank ones.
+fn one_or_more_names<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged, expecting = "a string or an array of strings")]
+    enum OneOrMore {
+        One(String),
+        More(Vec<String>),
+    }
+    let names = match OneOrMore::deserialize(deserializer)? {
+        OneOrMore::One(name) => vec![name],
+        OneOrMore::More(names) => names,
+    };
+    Ok(trimmed(names))
+}
+
 /// Trims each name and drops the blank ones.
 fn names<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
-    let names = Vec::<String>::deserialize(deserializer)?;
-    Ok(names
+    Ok(trimmed(Vec::<String>::deserialize(deserializer)?))
+}
+
+fn trimmed(names: Vec<String>) -> Vec<String> {
+    names
         .into_iter()
         .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty())
-        .collect())
+        .collect()
 }
 
 /// An integer or a float, as TOML has both.
@@ -519,6 +637,22 @@ fn opacity<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> 
     clamp_opacity(value).ok_or_else(|| {
         serde::de::Error::custom(format!(
             "invalid opacity `{value}`, expected a number from 0.0 to 1.0"
+        ))
+    })
+}
+
+/// Clamps the dimming of inactive panes to 0.0..=1.0; `None` when it is
+/// not a finite number.
+pub fn clamp_dim(dim: f64) -> Option<f32> {
+    dim.is_finite().then(|| dim.clamp(0.0, 1.0) as f32)
+}
+
+/// Accepts integers or floats, clamps them and rejects `nan` and `inf`.
+fn inactive_dim<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
+    let value = Number::deserialize(deserializer)?.get();
+    clamp_dim(value).ok_or_else(|| {
+        serde::de::Error::custom(format!(
+            "invalid inactive_dim `{value}`, expected a number from 0.0 to 1.0"
         ))
     })
 }
@@ -595,7 +729,7 @@ mod tests {
     #[test]
     fn defaults_match_the_documentation() {
         let config = Config::default();
-        assert_eq!(config.font.family, None);
+        assert!(config.font.family.is_empty());
         assert!(config.font.fallback.is_empty());
         assert_eq!(config.font.size, 14.0);
         assert_eq!(config.window.padding, 8);
@@ -603,7 +737,7 @@ mod tests {
             (config.window.columns.get(), config.window.rows.get()),
             (100, 30)
         );
-        assert_eq!(config.colors.theme.theme().name, "catppuccin-mocha");
+        assert_eq!(config.colors.theme.name(), "catppuccin-mocha");
         assert_eq!(config.shell, ShellConfig::default());
         assert_eq!(config.renderer.backend, Backend::Auto);
         assert_eq!(config.scrollback.lines, 10_000);
@@ -719,14 +853,14 @@ mod tests {
             "##,
         )
         .unwrap();
-        assert_eq!(config.font.family.as_deref(), Some("JetBrains Mono"));
+        assert_eq!(config.font.family, ["JetBrains Mono"]);
         assert_eq!(config.font.size, 12.0);
         assert_eq!(config.window.padding, 0);
         assert_eq!(
             (config.window.columns.get(), config.window.rows.get()),
             (80, 24)
         );
-        assert_eq!(config.colors.theme.theme().name, "dracula");
+        assert_eq!(config.colors.theme.name(), "dracula");
         assert_eq!(config.colors.background, Some(Rgb::hex(0)));
         assert_eq!(config.shell.program.as_deref(), Some("pwsh.exe"));
         assert_eq!(config.shell.args, ["-NoLogo"]);
@@ -746,8 +880,23 @@ mod tests {
     #[test]
     fn blank_strings_mean_unset() {
         let config = parse("[font]\nfamily = \"  \"\n[shell]\nprogram = \"\"\n").unwrap();
-        assert_eq!(config.font.family, None);
+        assert!(config.font.family.is_empty());
         assert_eq!(config.shell.program, None);
+    }
+
+    #[test]
+    fn font_family_takes_a_name_or_a_list() {
+        let family =
+            |value: &str| parse(&format!("[font]\nfamily = {value}\n")).map(|c| c.font.family);
+        assert_eq!(family("\" Iosevka \"").unwrap(), ["Iosevka"]);
+        assert_eq!(
+            family(r#"["JetBrainsMono Nerd Font", "Fira Code"]"#).unwrap(),
+            ["JetBrainsMono Nerd Font", "Fira Code"]
+        );
+        assert!(family("[]").unwrap().is_empty());
+        assert_eq!(family(r#"["", "  ", " Hack "]"#).unwrap(), ["Hack"]);
+        let error = family("12").unwrap_err().to_string();
+        assert!(error.contains("a string or an array of strings"), "{error}");
     }
 
     #[test]
@@ -814,6 +963,52 @@ mod tests {
         assert!(error.contains("line 2"), "{error}");
         assert!(error.contains("unknown theme `solarized`"), "{error}");
         assert!(error.contains("available: catppuccin-mocha"), "{error}");
+    }
+
+    #[test]
+    fn panes_section_defaults_and_keys() {
+        let defaults = Config::default().panes;
+        assert_eq!(defaults.divider_color, None);
+        assert_eq!(defaults.divider_width.get(), 1);
+        assert_eq!(defaults.inactive_dim, 0.25);
+        let panes =
+            parse("[panes]\ndivider_color = \"#f80\"\ndivider_width = 3\ninactive_dim = 0.5\n")
+                .unwrap()
+                .panes;
+        assert_eq!(panes.divider_color, Some(Rgb::hex(0xff8800)));
+        assert_eq!(panes.divider_width.get(), 3);
+        assert_eq!(panes.inactive_dim, 0.5);
+        // Every key is optional.
+        assert_eq!(parse("[panes]\n").unwrap().panes, defaults);
+    }
+
+    #[test]
+    fn inactive_dim_is_clamped_and_must_be_finite() {
+        let dim = |value: &str| parse(&format!("[panes]\ninactive_dim = {value}\n"));
+        assert_eq!(dim("2").unwrap().panes.inactive_dim, 1.0);
+        assert_eq!(dim("-0.5").unwrap().panes.inactive_dim, 0.0);
+        assert_eq!(dim("0").unwrap().panes.inactive_dim, 0.0);
+        for value in ["nan", "inf", "-inf"] {
+            let error = dim(value).unwrap_err().to_string();
+            assert!(error.contains("invalid inactive_dim"), "{error}");
+        }
+    }
+
+    #[test]
+    fn panes_section_rejects_bad_values_and_unknown_keys() {
+        let error = parse_error("[panes]\ngap = 1\n");
+        assert!(error.contains("gap") && error.contains("line 2"), "{error}");
+        assert!(parse("[panes]\ndivider_width = 0\n").is_err(), "non-zero");
+        assert!(parse("[panes]\ndivider_width = -1\n").is_err());
+        let error = parse_error("[panes]\ndivider_color = \"red\"\n");
+        assert!(error.contains("invalid color `red`"), "{error}");
+    }
+
+    #[test]
+    fn documented_sample_lists_the_panes_keys() {
+        for key in ["[panes]", "divider_color", "divider_width", "inactive_dim"] {
+            assert!(DEFAULT_CONFIG_TOML.contains(key), "{key} is not documented");
+        }
     }
 
     #[test]

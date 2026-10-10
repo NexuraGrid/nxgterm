@@ -98,6 +98,14 @@ pub fn instance(draw: &ImageDraw, image: (u32, u32), tex: (u32, u32)) -> ImageIn
     }
 }
 
+/// Whether the texture `(pane, image key)` is still needed by one of the
+/// visible `panes` (id and terminal).
+fn keep((pane, key): TextureKey, panes: &[(u64, &Terminal)]) -> bool {
+    panes
+        .iter()
+        .any(|&(id, term)| id == pane && term.images().image(key).is_some())
+}
+
 /// A cached image texture and the bind group that samples it.
 #[derive(Debug)]
 pub struct ImageTexture {
@@ -106,23 +114,28 @@ pub struct ImageTexture {
     _texture: wgpu::Texture,
 }
 
-/// Textures by image key; entries die with their images.
+/// A texture is cached by the pane that shows it and the image key: every
+/// terminal numbers its own images from 1, so the key alone is ambiguous.
+pub type TextureKey = (u64, u64);
+
+/// Textures by pane and image key; entries die with their images or panes.
 #[derive(Debug, Default)]
 pub struct ImageTextures {
-    entries: HashMap<u64, ImageTexture>,
+    entries: HashMap<TextureKey, ImageTexture>,
 }
 
 impl ImageTextures {
-    /// The texture for `image`, uploading it on first use.
+    /// The texture for `image` shown by `pane`, uploading it on first use.
     pub fn get_or_upload(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
         globals: &wgpu::Buffer,
+        pane: u64,
         image: &Image,
     ) -> &ImageTexture {
-        self.entries.entry(image.key).or_insert_with(|| {
+        self.entries.entry((pane, image.key)).or_insert_with(|| {
             let max = device.limits().max_texture_dimension_2d;
             let (width, height) = fit(image.width, image.height, max);
             let scaled;
@@ -180,15 +193,14 @@ impl ImageTextures {
         })
     }
 
-    pub fn get(&self, key: u64) -> Option<&ImageTexture> {
+    pub fn get(&self, key: TextureKey) -> Option<&ImageTexture> {
         self.entries.get(&key)
     }
 
-    /// Frees textures whose images the terminal no longer stores
-    /// (deleted, replaced or evicted).
-    pub fn prune(&mut self, term: &Terminal) {
-        self.entries
-            .retain(|&key, _| term.images().image(key).is_some());
+    /// Frees textures whose pane is no longer shown or whose images the
+    /// pane's terminal no longer stores (deleted, replaced or evicted).
+    pub fn prune(&mut self, panes: &[(u64, &Terminal)]) {
+        self.entries.retain(|&key, _| keep(key, panes));
     }
 
     /// Drops every texture (e.g. after the terminal was replaced).
@@ -268,5 +280,26 @@ mod tests {
         assert_eq!(bytes.len(), IMAGE_INSTANCE_SIZE);
         assert_eq!(IMAGE_INSTANCE_SIZE, 32);
         assert_eq!(&bytes[..4], &(-5i32).to_ne_bytes());
+    }
+
+    fn term_with_image() -> Terminal {
+        let data = crate::images::tests::encode_base64(&[255, 0, 0, 255]);
+        let mut term = Terminal::new(nxg_core::TermSize::new(2, 1).unwrap());
+        term.advance(format!("\x1b_Ga=T,s=1,v=1;{data}\x1b\\").as_bytes());
+        term
+    }
+
+    #[test]
+    fn textures_are_kept_per_pane_and_image_key() {
+        let (a, b) = (term_with_image(), term_with_image());
+        let key = |t: &Terminal| t.images().placements()[0].image;
+        assert_eq!((key(&a), key(&b)), (1, 1), "every store starts at key 1");
+        let empty = Terminal::new(nxg_core::TermSize::new(2, 1).unwrap());
+        let visible: [(u64, &Terminal); 3] = [(7, &a), (8, &b), (9, &empty)];
+        assert!(keep((7, 1), &visible));
+        assert!(keep((8, 1), &visible), "same image key, other pane");
+        assert!(!keep((9, 1), &visible), "that pane has no such image");
+        assert!(!keep((7, 2), &visible), "image deleted");
+        assert!(!keep((6, 1), &visible), "pane no longer visible");
     }
 }

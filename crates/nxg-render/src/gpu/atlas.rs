@@ -1,23 +1,41 @@
-//! Glyph atlas: an R8 coverage texture filled on demand from [`Font`].
+//! Glyph atlas: an R8 coverage texture filled on demand from [`Font`]
+//! glyphs and [`Mask`]s.
 
 use std::collections::HashMap;
 
 use super::instance::{AtlasFull, GlyphSlot};
 use super::packer::ShelfPacker;
 use crate::font::Font;
+use crate::shape::Mask;
+
+/// What an atlas slot holds.
+#[derive(Debug, Clone, Copy)]
+pub enum Source<'a> {
+    /// The glyph for `(char, bold, wide)` from the font.
+    Glyph(char, bool, bool),
+    /// A shape's coverage.
+    Mask(&'a Mask),
+}
+
+/// Slots are keyed like the CPU glyph cache, `(char, bold, wide)`, or by the
+/// [`Mask::key`] of their contents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Key {
+    Glyph(char, bool, bool),
+    Mask(u64),
+}
 
 /// Atlas edge in texels; fits thousands of glyphs at usual sizes and is
 /// within the 2048 minimum every adapter supports.
 const SIZE: u32 = 1024;
 
-/// Glyph coverage texture plus the slot of every glyph uploaded so far,
-/// keyed like the CPU glyph cache: `(char, bold, wide)`.
+/// Coverage texture plus the slot of every glyph and mask uploaded so far.
 #[derive(Debug)]
 pub struct Atlas {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     packer: ShelfPacker,
-    slots: HashMap<(char, bool, bool), Option<GlyphSlot>>,
+    slots: HashMap<Key, Option<GlyphSlot>>,
 }
 
 impl Atlas {
@@ -49,23 +67,29 @@ impl Atlas {
         &self.view
     }
 
-    /// The slot for `(ch, bold, wide)`, rasterizing and uploading it on first
-    /// use.
-    /// `None` means the glyph has no ink (or can never fit the atlas).
+    /// The slot for `source`, rasterizing and uploading it on first use.
+    /// `None` means it has no ink (or can never fit the atlas).
     pub fn slot(
         &mut self,
         queue: &wgpu::Queue,
         font: &mut Font,
-        ch: char,
-        bold: bool,
-        wide: bool,
+        source: Source<'_>,
     ) -> Result<Option<GlyphSlot>, AtlasFull> {
-        let key = (ch, bold, wide);
+        let key = match source {
+            Source::Glyph(ch, bold, wide) => Key::Glyph(ch, bold, wide),
+            Source::Mask(mask) => Key::Mask(mask.key()),
+        };
         if let Some(&slot) = self.slots.get(&key) {
             return Ok(slot);
         }
-        let glyph = font.glyph(ch, bold, wide);
-        let (width, height) = (glyph.width as u32, glyph.height as u32);
+        let (xmin, ymin, width, height, coverage) = match source {
+            Source::Glyph(ch, bold, wide) => {
+                let glyph = font.glyph(ch, bold, wide);
+                let (width, height) = (glyph.width as u32, glyph.height as u32);
+                (glyph.xmin, glyph.ymin, width, height, &glyph.coverage[..])
+            }
+            Source::Mask(mask) => (0, 0, mask.width(), mask.height(), mask.coverage()),
+        };
         let slot = if width == 0 || height == 0 || width > SIZE || height > SIZE {
             None
         } else {
@@ -81,7 +105,7 @@ impl Atlas {
                     },
                     aspect: wgpu::TextureAspect::All,
                 },
-                &glyph.coverage,
+                coverage,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(width),
@@ -94,8 +118,8 @@ impl Atlas {
                 },
             );
             Some(GlyphSlot {
-                xmin: glyph.xmin,
-                ymin: glyph.ymin,
+                xmin,
+                ymin,
                 width,
                 height,
                 uv,
@@ -105,7 +129,7 @@ impl Atlas {
         Ok(slot)
     }
 
-    /// Drops every glyph; they are re-uploaded on next use.
+    /// Drops every glyph and mask; they are re-uploaded on next use.
     pub fn clear(&mut self) {
         self.packer.clear();
         self.slots.clear();

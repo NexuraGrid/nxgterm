@@ -128,18 +128,61 @@ pub fn is_selected(selected: &Option<std::ops::Range<u16>>, col: usize) -> bool 
         .is_some_and(|cols| cols.contains(&(col as u16)))
 }
 
+/// How a pane is drawn: whether it has the focus (an unfocused one shows a
+/// hollow cursor) and how far its colors are mixed toward the background.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Look {
+    pub focused: bool,
+    /// 0.0 leaves the colors alone, 1.0 turns them into the background.
+    pub dim: f32,
+}
+
+impl Look {
+    /// Focused and not dimmed: how single terminals, headers and overlays
+    /// are drawn.
+    pub const ACTIVE: Self = Self {
+        focused: true,
+        dim: 0.0,
+    };
+}
+
+/// `color` mixed toward `background` by `amount` (clamped to 0.0..=1.0;
+/// NaN leaves it alone), channel by channel.
+pub fn dim(color: Rgb, background: Rgb, amount: f32) -> Rgb {
+    if amount.is_nan() || amount <= 0.0 {
+        return color;
+    }
+    let amount = amount.min(1.0);
+    let mix = |shift: u32| {
+        let (c, b) = ((color >> shift) & 0xff, (background >> shift) & 0xff);
+        let mixed = (c as f32 + (b as f32 - c as f32) * amount).round() as u32;
+        mixed.min(255) << shift
+    };
+    mix(16) | mix(8) | mix(0)
+}
+
+/// [`shown_colors`] mixed toward the palette background by the look's dim.
+pub fn look_colors(cell: &Cell, selected: bool, palette: &Palette, look: Look) -> (Rgb, Rgb) {
+    let (fg, bg) = shown_colors(cell, selected, palette);
+    (
+        dim(fg, palette.background, look.dim),
+        dim(bg, palette.background, look.dim),
+    )
+}
+
 /// Fills every cell with its background color.
 pub fn paint_backgrounds(
     term: &Terminal,
     frame: &mut Frame<'_>,
     layout: Layout,
     palette: &Palette,
+    look: Look,
 ) {
     let cell = layout.cell;
     for row in 0..term.size().rows() {
         let selected = term.selected_cols(row);
         for (col, c) in term.display_row(row).iter().enumerate() {
-            let (_, bg) = shown_colors(c, is_selected(&selected, col), palette);
+            let (_, bg) = look_colors(c, is_selected(&selected, col), palette, look);
             let (x, y) = layout.origin(col as u32, u32::from(row));
             frame.fill_rect(x, y, cell.width, cell.height, bg);
         }
@@ -166,14 +209,46 @@ pub fn cursor_cells(term: &Terminal, cursor: Cursor) -> u32 {
     1 + u32::from(is_wide(cells, usize::from(cursor.col)))
 }
 
-/// Draws a block cursor when it is visible, over both cells of a wide char.
-pub fn paint_cursor(term: &Terminal, frame: &mut Frame<'_>, layout: Layout, palette: &Palette) {
+/// The four edges of a cursor outline as `(x, y, width, height)` offsets
+/// inside the cell: 1 px thick, 2 px from cell height 24.
+pub fn cursor_outline(cell: CellSize) -> [(u32, u32, u32, u32); 4] {
+    let t = if cell.height >= 24 { 2 } else { 1 }
+        .min(cell.width)
+        .min(cell.height);
+    let (w, h) = (cell.width, cell.height);
+    let side = h.saturating_sub(2 * t);
+    [
+        (0, 0, w, t),
+        (0, h - t, w, t),
+        (0, t, t, side),
+        (w - t, t, t, side),
+    ]
+}
+
+/// Draws the cursor when it is visible: a block, or an outline when the
+/// pane is not focused, over both cells of a wide char.
+pub fn paint_cursor(
+    term: &Terminal,
+    frame: &mut Frame<'_>,
+    layout: Layout,
+    palette: &Palette,
+    look: Look,
+) {
     let cursor = term.display_cursor();
-    if cursor.visible {
-        let (x, y) = layout.origin(u32::from(cursor.col), u32::from(cursor.row));
-        let cell = layout.cell;
-        let width = cell.width * cursor_cells(term, cursor);
-        frame.fill_rect(x, y, width, cell.height, palette.cursor);
+    if !cursor.visible {
+        return;
+    }
+    let (x, y) = layout.origin(u32::from(cursor.col), u32::from(cursor.row));
+    let cell = CellSize {
+        width: layout.cell.width * cursor_cells(term, cursor),
+        ..layout.cell
+    };
+    if look.focused {
+        frame.fill_rect(x, y, cell.width, cell.height, palette.cursor);
+        return;
+    }
+    for (dx, dy, w, h) in cursor_outline(cell) {
+        frame.fill_rect(x + dx, y + dy, w, h, palette.cursor);
     }
 }
 
@@ -351,7 +426,7 @@ mod tests {
         );
         let mut pixels = vec![0; 6 * 2];
         let mut frame = Frame::new(&mut pixels, 6, 2).unwrap();
-        paint_backgrounds(&term, &mut frame, FLUSH, &palette);
+        paint_backgrounds(&term, &mut frame, FLUSH, &palette, Look::ACTIVE);
         let (b, f) = (palette.background, palette.foreground);
         assert_eq!(pixels[..6], [b, b, f, f, b, b]);
     }
@@ -373,7 +448,7 @@ mod tests {
         let term = term(2, 1, b"\x1b[48;2;1;2;3m \x1b[0m");
         let mut pixels = vec![0; 4 * 2];
         let mut frame = Frame::new(&mut pixels, 4, 2).unwrap();
-        paint_backgrounds(&term, &mut frame, FLUSH, &palette);
+        paint_backgrounds(&term, &mut frame, FLUSH, &palette, Look::ACTIVE);
         let (a, b) = (rgb(1, 2, 3), palette.background);
         assert_eq!(pixels, [a, a, b, b, a, a, b, b]);
     }
@@ -390,7 +465,7 @@ mod tests {
         };
         let mut pixels = vec![0; 4 * 4];
         let mut frame = Frame::new(&mut pixels, 4, 4).unwrap();
-        paint_backgrounds(&term, &mut frame, layout, &palette);
+        paint_backgrounds(&term, &mut frame, layout, &palette, Look::ACTIVE);
         let a = rgb(1, 2, 3);
         #[rustfmt::skip]
         assert_eq!(pixels, [
@@ -403,7 +478,7 @@ mod tests {
         let term = self::term(1, 1, b"");
         let mut pixels = vec![0; 4 * 4];
         let mut frame = Frame::new(&mut pixels, 4, 4).unwrap();
-        paint_cursor(&term, &mut frame, layout, &palette);
+        paint_cursor(&term, &mut frame, layout, &palette, Look::ACTIVE);
         let c = palette.cursor;
         assert_eq!(pixels[5..7], [c, c]);
         assert_eq!(pixels[0], 0);
@@ -415,14 +490,14 @@ mod tests {
         let mut term = term(2, 1, b" ");
         let mut pixels = vec![0; 4 * 2];
         let mut frame = Frame::new(&mut pixels, 4, 2).unwrap();
-        paint_cursor(&term, &mut frame, FLUSH, &palette);
+        paint_cursor(&term, &mut frame, FLUSH, &palette, Look::ACTIVE);
         let c = palette.cursor;
         assert_eq!(pixels, [0, 0, c, c, 0, 0, c, c]);
 
         term.advance(b"\x1b[?25l");
         let mut pixels = vec![0; 4 * 2];
         let mut frame = Frame::new(&mut pixels, 4, 2).unwrap();
-        paint_cursor(&term, &mut frame, FLUSH, &palette);
+        paint_cursor(&term, &mut frame, FLUSH, &palette, Look::ACTIVE);
         assert!(pixels.iter().all(|&p| p == 0));
     }
 
@@ -432,7 +507,7 @@ mod tests {
         let term = term(2, 1, "日\x1b[1G".as_bytes());
         let mut pixels = vec![0; 4 * 2];
         let mut frame = Frame::new(&mut pixels, 4, 2).unwrap();
-        paint_cursor(&term, &mut frame, FLUSH, &palette);
+        paint_cursor(&term, &mut frame, FLUSH, &palette, Look::ACTIVE);
         assert_eq!(pixels, [palette.cursor; 8]);
     }
 
@@ -443,8 +518,136 @@ mod tests {
         term.scroll_display(1);
         let mut pixels = vec![0; 4 * 2];
         let mut frame = Frame::new(&mut pixels, 4, 2).unwrap();
-        paint_backgrounds(&term, &mut frame, FLUSH, &palette);
-        paint_cursor(&term, &mut frame, FLUSH, &palette);
+        paint_backgrounds(&term, &mut frame, FLUSH, &palette, Look::ACTIVE);
+        paint_cursor(&term, &mut frame, FLUSH, &palette, Look::ACTIVE);
         assert_eq!(pixels, [rgb(1, 2, 3); 8]);
+    }
+
+    #[test]
+    fn dim_mixes_toward_the_background() {
+        let (fg, bg) = (rgb(200, 100, 0), rgb(0, 100, 200));
+        assert_eq!(dim(fg, bg, 0.0), fg, "zero is the identity");
+        assert_eq!(dim(fg, bg, 1.0), bg, "one reaches the background");
+        assert_eq!(dim(fg, bg, 0.5), rgb(100, 100, 100));
+        assert_eq!(dim(fg, bg, 0.25), rgb(150, 100, 50));
+        assert_eq!(dim(fg, bg, 7.0), bg, "above one clamps");
+        assert_eq!(dim(fg, bg, -1.0), fg, "below zero clamps");
+        assert_eq!(dim(fg, bg, f32::NAN), fg, "nan leaves the color alone");
+    }
+
+    #[test]
+    fn look_colors_dim_both_colors_and_active_leaves_them() {
+        let palette = Palette::default();
+        let cell = Cell::default();
+        let shown = shown_colors(&cell, false, &palette);
+        assert_eq!(look_colors(&cell, false, &palette, Look::ACTIVE), shown);
+        let look = Look {
+            focused: false,
+            dim: 0.5,
+        };
+        let bg = palette.background;
+        assert_eq!(
+            look_colors(&cell, false, &palette, look),
+            (dim(palette.foreground, bg, 0.5), bg)
+        );
+        let red = Cell {
+            bg: Color::Indexed(1),
+            ..Cell::default()
+        };
+        assert_eq!(
+            look_colors(&red, false, &palette, look).1,
+            dim(palette.ansi[1], bg, 0.5)
+        );
+    }
+
+    #[test]
+    fn dimmed_backgrounds_are_painted_dimmed() {
+        let palette = Palette::default();
+        let term = term(1, 1, b"\x1b[48;2;200;0;0m \x1b[0m");
+        let look = Look {
+            focused: false,
+            dim: 1.0,
+        };
+        let mut pixels = vec![0; 2 * 2];
+        let mut frame = Frame::new(&mut pixels, 2, 2).unwrap();
+        paint_backgrounds(&term, &mut frame, FLUSH, &palette, look);
+        assert_eq!(pixels, [palette.background; 4]);
+    }
+
+    const BIG: Layout = Layout {
+        cell: CellSize {
+            width: 6,
+            height: 6,
+        },
+        padding: 0,
+        left: 0,
+        top: 0,
+    };
+    const UNFOCUSED: Look = Look {
+        focused: false,
+        dim: 0.0,
+    };
+
+    #[test]
+    fn an_unfocused_cursor_is_a_one_pixel_outline() {
+        let palette = Palette::default();
+        let term = term(1, 1, b"");
+        let mut pixels = vec![0; 36];
+        let mut frame = Frame::new(&mut pixels, 6, 6).unwrap();
+        paint_cursor(&term, &mut frame, BIG, &palette, UNFOCUSED);
+        let c = palette.cursor;
+        for y in 0..6 {
+            for x in 0..6 {
+                let edge = x == 0 || y == 0 || x == 5 || y == 5;
+                assert_eq!(pixels[y * 6 + x], if edge { c } else { 0 }, "({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn the_outline_is_two_pixels_on_tall_cells() {
+        let palette = Palette::default();
+        let layout = Layout {
+            cell: CellSize {
+                width: 8,
+                height: 24,
+            },
+            ..BIG
+        };
+        let term = term(1, 1, b"");
+        let mut pixels = vec![0; 8 * 24];
+        let mut frame = Frame::new(&mut pixels, 8, 24).unwrap();
+        paint_cursor(&term, &mut frame, layout, &palette, UNFOCUSED);
+        let at = |x: usize, y: usize| pixels[y * 8 + x];
+        let c = palette.cursor;
+        assert_eq!([at(0, 5), at(1, 5), at(2, 5)], [c, c, 0]);
+        assert_eq!([at(3, 0), at(3, 1), at(3, 2)], [c, c, 0]);
+        assert_eq!([at(3, 21), at(3, 22), at(3, 23)], [0, c, c]);
+        assert_eq!([at(5, 5), at(6, 5), at(7, 5)], [0, c, c]);
+    }
+
+    #[test]
+    fn an_unfocused_cursor_outlines_both_cells_of_a_wide_char() {
+        let palette = Palette::default();
+        let term = term(2, 1, "日\x1b[1G".as_bytes());
+        let mut pixels = vec![0; 12 * 6];
+        let mut frame = Frame::new(&mut pixels, 12, 6).unwrap();
+        paint_cursor(&term, &mut frame, BIG, &palette, UNFOCUSED);
+        let c = palette.cursor;
+        for y in 0..6 {
+            for x in 0..12 {
+                let edge = x == 0 || y == 0 || x == 11 || y == 5;
+                assert_eq!(pixels[y * 12 + x], if edge { c } else { 0 }, "({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn an_unfocused_hidden_cursor_draws_nothing() {
+        let term = term(1, 1, b"\x1b[?25l");
+        let mut pixels = vec![0; 36];
+        let mut frame = Frame::new(&mut pixels, 6, 6).unwrap();
+        paint_cursor(&term, &mut frame, BIG, &Palette::default(), UNFOCUSED);
+        assert!(pixels.iter().all(|&p| p == 0));
     }
 }

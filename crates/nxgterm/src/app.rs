@@ -13,46 +13,53 @@ use nxg_config::{Backend, Bindings, Config, Decorations, FontConfig, TabBar};
 use nxg_core::fallback::{self, Init};
 use nxg_core::mouse::{MouseAction, MouseButton, MouseEvent};
 use nxg_core::ports::{ChildProcess, Clipboard, ClipboardKind, PtyControl, RenderError, Renderer};
-use nxg_core::selection::{Point, SelectionKind};
 use nxg_core::{CellPixels, TermSize, Terminal, WinSize};
 use nxg_pty::ShellCommand;
 use nxg_render::{
-    CellSize, CpuWindowRenderer, FontError, FontFaces, GpuRenderer, Layout, Overlay, Style,
-    WindowRenderer,
+    CellSize, CpuWindowRenderer, FontError, FontFaces, GpuRenderer, Layout, Overlay, PaneView,
+    Shape, Style, WindowRenderer,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::ModifiersState;
 use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 
 use crate::bindings::Action;
 use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
-use crate::mouse::{Clicks, ViewportScroll, Wheel, WheelAction};
+use crate::mouse::{Capture, Clicks, Drag, Pointer, ViewportScroll, Wheel, WheelAction};
+use crate::panes::{Axis, DividerPath, PaneId, SplitError};
+use crate::tab::{self, Exit, PaneCommand, PaneIds, Tab, Under};
 use crate::tabs::{TabId, Tabs};
-use crate::title_bar::{self, Button, Chrome, Region};
-use crate::{appearance, bindings, choice, clipboard, icon, keys, mouse, reload, tab_bar};
+use crate::throttle::Throttle;
+use crate::title_bar::{self, Button, ButtonColors, Chrome, Rect, Region};
+use crate::watch::ConfigWatcher;
+use crate::{
+    appearance, bindings, choice, clipboard, dividers, icon, keys, mouse, reload, tab_bar,
+};
 
 /// Events posted to the event loop from background threads.
 #[derive(Debug)]
 pub enum UserEvent {
-    /// A chunk of output from the child of a tab.
-    Output(TabId, Vec<u8>),
-    /// The child of a tab exited or its output stream closed.
-    Exited(TabId),
+    /// A chunk of output from the child of a pane.
+    Output(PaneId, Vec<u8>),
+    /// The child of a pane exited or its output stream closed.
+    Exited(PaneId),
     /// The config file changed on disk.
     ConfigChanged,
 }
 
-/// One tab: a child process on its own pty and the terminal it draws.
-struct Tab {
+/// One pane: a child process on its own pty and the terminal it draws.
+struct Pane {
     terminal: Terminal,
     pty: Box<dyn PtyControl>,
-    /// Label on the tab bar: the program name (OSC 0/2 titles are not
-    /// supported yet).
+    /// Label on the tab bar while the pane has focus: the program name
+    /// (OSC 0/2 titles are not supported yet).
     title: String,
+    /// Sizes the pty has not been told yet while a divider is dragged.
+    resize: Throttle<WinSize>,
 }
 
 /// Everything that exists once the window is up.
@@ -70,9 +77,12 @@ struct Session {
     transparent: bool,
     /// Padding of the current style, in physical pixels.
     padding: u32,
-    /// Every tab has its own shell; only the active one is drawn and gets
-    /// input, the others keep reading their output.
-    tabs: Tabs<Tab>,
+    /// Every tab has its own panes, each with its own shell; only the
+    /// active tab is drawn and its focused pane gets input, the others
+    /// keep reading their output.
+    tabs: Tabs<Tab<Pane>>,
+    /// Pane ids, unique across every tab.
+    pane_ids: PaneIds,
     /// When the tab bar shows; the grid is one row shorter while it does.
     tab_bar: TabBar,
     /// The tab bar is the window's title bar (`window.decorations =
@@ -95,29 +105,19 @@ struct Session {
     skipped_frames: u8,
     /// Wheel movement not yet worth a whole line.
     wheel: Wheel,
-    /// The cell under the pointer.
-    pointer: (u16, u16),
+    /// What the pressed button holds the pointer for, and the cell last
+    /// reported.
+    pointer: Pointer,
+    /// The way of the divider under the pointer, shown with a resize
+    /// cursor.
+    divider_hover: Option<Axis>,
     /// The tab bar column under the pointer, while it is over the bar.
     bar_pointer: Option<u16>,
-    /// The button held down, for drag reports.
-    held: Option<MouseButton>,
     /// The command palette, while it is open: it takes the keys and the
     /// clicks, and is drawn over the grid.
     palette: Option<CommandPalette>,
     /// Left-button presses, for double and triple clicks.
     clicks: Clicks,
-    /// The selection being dragged with the left button.
-    drag: Option<Drag>,
-}
-
-/// A selection in the making: started by a left press, extended while the
-/// pointer moves, finished on release. A single click selects nothing
-/// until the pointer leaves the cell it pressed.
-#[derive(Debug, Clone, Copy)]
-struct Drag {
-    kind: SelectionKind,
-    anchor: Point,
-    started: bool,
 }
 
 pub struct App {
@@ -125,6 +125,9 @@ pub struct App {
     config: Config,
     /// Config file to reload on change; `None` when no location is known.
     config_path: Option<PathBuf>,
+    /// Watches the config files; told about new imports and theme files on
+    /// reload.
+    watcher: Option<ConfigWatcher>,
     session: Option<Session>,
     /// Key bindings from the config, resolved for this platform;
     /// [`Bindings::shortcuts`] lists every action with its shortcut.
@@ -145,12 +148,14 @@ impl App {
         proxy: EventLoopProxy<UserEvent>,
         config: Config,
         config_path: Option<PathBuf>,
+        watcher: Option<ConfigWatcher>,
     ) -> Self {
         let bindings = config.keybindings.resolve(MACOS);
         Self {
             proxy,
             config,
             config_path,
+            watcher,
             session: None,
             bindings,
             modifiers: ModifiersState::empty(),
@@ -225,6 +230,7 @@ impl App {
             transparent,
             padding,
             tabs: Tabs::new(),
+            pane_ids: PaneIds::default(),
             tab_bar: config.window.tab_bar,
             integrated,
             cursor: (0.0, 0.0),
@@ -234,12 +240,11 @@ impl App {
             bar_drag_press: None,
             skipped_frames: 0,
             wheel: Wheel::default(),
-            pointer: (0, 0),
+            pointer: Pointer::default(),
+            divider_hover: None,
             bar_pointer: None,
-            held: None,
             palette: None,
             clicks: Clicks::default(),
-            drag: None,
         };
         session.open_tab(config, &self.proxy)?;
         if show_after_first_frame {
@@ -277,8 +282,7 @@ impl App {
             None => Some(CommandPalette::new(self.bindings.shortcuts())),
         };
         // A drag in progress ends here: the palette takes the mouse.
-        session.held = None;
-        session.drag = None;
+        session.pointer.reset();
         session.window.request_redraw();
     }
 
@@ -351,7 +355,7 @@ impl App {
                 button: winit::event::MouseButton::Left,
                 ..
             } => {
-                let (col, row) = session.pointer;
+                let (col, row) = session.grid_cell();
                 let palette = session.palette.as_mut()?;
                 if session.bar_pointer.is_some() {
                     Outcome::Close
@@ -457,10 +461,10 @@ impl App {
         let Some(session) = &mut self.session else {
             return;
         };
-        let Some(tab) = session.tabs.active_mut() else {
+        let Some(pane) = tab::focused_mut(&mut session.tabs) else {
             return;
         };
-        let modes = tab.terminal.modes();
+        let modes = pane.terminal.modes();
         let bytes = keys::encode(
             &event.logical_key,
             event.text.as_deref(),
@@ -505,6 +509,10 @@ impl App {
             }
             _ => {}
         }
+        if let Some(command) = tab::command(action) {
+            self.pane_command(command);
+            return true;
+        }
         let config = &self.config;
         let Some(session) = &mut self.session else {
             return true;
@@ -533,11 +541,11 @@ impl App {
             session.tab_switched();
             return true;
         }
-        let Some(tab) = session.tabs.active() else {
+        let Some(pane) = tab::focused(&session.tabs) else {
             return true;
         };
-        let modes = tab.terminal.modes();
-        let rows = tab.terminal.size().rows();
+        let modes = pane.terminal.modes();
+        let rows = pane.terminal.size().rows();
         if let Some(scroll) = mouse::viewport_scroll(action, modes, rows) {
             session.scroll_viewport(scroll);
             return true;
@@ -560,18 +568,64 @@ impl App {
             | Action::CloseTab
             | Action::NextTab
             | Action::PreviousTab
-            | Action::GotoTab(_) => true,
+            | Action::GotoTab(_)
+            // Handled above (`tab::command`).
+            | Action::SplitRight
+            | Action::SplitDown
+            | Action::FocusPaneLeft
+            | Action::FocusPaneRight
+            | Action::FocusPaneUp
+            | Action::FocusPaneDown
+            | Action::ResizePaneLeft
+            | Action::ResizePaneRight
+            | Action::ResizePaneUp
+            | Action::ResizePaneDown
+            | Action::ClosePane
+            | Action::ZoomPane
+            | Action::EqualizePanes => true,
         }
     }
 
-    /// The selected text of the active tab.
+    /// Runs a pane action on the active tab.
+    fn pane_command(&mut self, command: PaneCommand) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        let area = session.content_size();
+        match command {
+            PaneCommand::Split(axis) => session.split(axis, &self.config, &self.proxy),
+            PaneCommand::Focus(dir) => {
+                if tab::focus_active(&mut session.tabs, dir, area) {
+                    session.panes_changed();
+                }
+            }
+            PaneCommand::Resize(dir) => {
+                if tab::resize_active(&mut session.tabs, dir, area) {
+                    session.panes_changed();
+                }
+            }
+            PaneCommand::Close => {
+                if tab::close_focused(&mut session.tabs) != Exit::Stale {
+                    session.tab_switched();
+                }
+            }
+            PaneCommand::Zoom => {
+                if tab::zoom_active(&mut session.tabs) {
+                    session.panes_changed();
+                }
+            }
+            PaneCommand::Equalize => {
+                if tab::equalize_active(&mut session.tabs, area) {
+                    session.panes_changed();
+                }
+            }
+        }
+    }
+
+    /// The selected text of the focused pane.
     fn selected_text(&self) -> Option<String> {
-        self.session
-            .as_ref()?
-            .tabs
-            .active()?
-            .terminal
-            .selection_text()
+        let session = self.session.as_ref()?;
+        tab::focused(&session.tabs)?.terminal.selection_text()
     }
 
     /// Copies the selection to the clipboard; nothing without one.
@@ -583,7 +637,7 @@ impl App {
         }
     }
 
-    /// Pastes the text of the clipboard `kind` into the active tab.
+    /// Pastes the text of the clipboard `kind` into the focused pane.
     fn paste(&mut self, kind: ClipboardKind) {
         let text = match self.clipboard.get_text(kind) {
             Ok(text) => text,
@@ -597,27 +651,33 @@ impl App {
         }
     }
 
-    /// Selects everything in the active tab, history included.
+    /// Selects everything in the focused pane, history included.
     fn select_all(&mut self) {
         let Some(session) = &mut self.session else {
             return;
         };
-        let Some(tab) = session.tabs.active_mut() else {
+        let Some(pane) = tab::focused_mut(&mut session.tabs) else {
             return;
         };
-        tab.terminal.select_all();
+        pane.terminal.select_all();
+        copy_on_select(self.clipboard.as_mut(), &self.config, &pane.terminal);
         session.window.request_redraw();
-        copy_on_select(self.clipboard.as_mut(), &self.config, &tab.terminal);
     }
 
-    /// Reloads the config file, applying what can change live. An invalid
-    /// file keeps the previous config.
+    /// Reloads the config file, applying what can change live, and
+    /// watches the imports and theme file it now names. An invalid file
+    /// keeps the previous config.
     fn reload_config(&mut self) {
         let Some(path) = &self.config_path else {
             return;
         };
-        let new = match Config::load(path) {
-            Ok(Some(config)) => config,
+        let new = match Config::load_with_files(path) {
+            Ok(Some(loaded)) => {
+                if let Some(watcher) = &mut self.watcher {
+                    watcher.add(&loaded.files);
+                }
+                loaded.config
+            }
             Ok(None) => Config::default(),
             Err(error) => {
                 eprintln!("nxgterm: {error}; keeping the previous config");
@@ -659,9 +719,12 @@ impl App {
                 let blur = appearance::blur(session.transparent, new.window.blur);
                 appearance::apply_blur(&session.window, blur);
             }
+            if changes.panes {
+                session.window.request_redraw();
+            }
             if changes.scrollback {
                 for tab in session.tabs.iter_mut() {
-                    tab.terminal.set_scrollback_limit(new.scrollback.lines);
+                    tab.each_mut(|pane| pane.terminal.set_scrollback_limit(new.scrollback.lines));
                 }
                 session.window.request_redraw();
             }
@@ -694,6 +757,19 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
+    /// Sends the pty sizes that waited out their interval and sleeps until
+    /// the next one is due.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        session.poll_resizes(Instant::now());
+        event_loop.set_control_flow(match session.next_resize() {
+            Some(due) => ControlFlow::WaitUntil(due),
+            None => ControlFlow::Wait,
+        });
+    }
+
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::Output(id, bytes) => {
@@ -703,9 +779,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::Exited(id) => {
                 if let Some(session) = &mut self.session {
-                    if let Some(index) = session.tabs.index_of(id) {
-                        session.close_tab(index);
-                    }
+                    session.exited(id);
                     if session.tabs.is_empty() {
                         event_loop.exit();
                     }
@@ -731,6 +805,10 @@ impl ApplicationHandler<UserEvent> for App {
         }
         if let Some(outcome) = self.palette_mouse(&event) {
             self.palette_done(outcome);
+            // The palette may have closed the last tab.
+            if self.session.as_ref().is_some_and(|s| s.tabs.is_empty()) {
+                event_loop.exit();
+            }
             return;
         }
         let config = &self.config;
@@ -754,13 +832,17 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::MouseWheel { delta, .. } => {
                 let cell = layout(session.renderer.as_ref(), session.padding).cell;
                 let lines = session.wheel.lines(delta, cell.height);
-                let Some(tab) = session.tabs.active_mut() else {
+                // The pane under the pointer scrolls, focused or not.
+                let Under::Pane(id) = session.under() else {
                     return;
                 };
-                let modes = tab.terminal.modes();
+                let (col, row) = session.cell_in(id).unwrap_or_default();
+                let Some(pane) = tab::pane_mut(&mut session.tabs, id) else {
+                    return;
+                };
+                let modes = pane.terminal.modes();
                 match mouse::wheel_action(modes, self.modifiers.shift_key(), lines) {
                     Some(WheelAction::Report { button, count }) => {
-                        let (col, row) = session.pointer;
                         let event = MouseEvent {
                             button,
                             action: MouseAction::Press,
@@ -769,66 +851,81 @@ impl ApplicationHandler<UserEvent> for App {
                             mods: mouse::mouse_mods(self.modifiers),
                         };
                         if let Some(bytes) = nxg_core::mouse::encode(event, modes.mouse_encoding) {
-                            tab.send(&bytes.repeat(count as usize));
+                            pane.send(&bytes.repeat(count as usize));
                         }
                     }
-                    Some(WheelAction::Keys(bytes)) => tab.send(&bytes),
+                    Some(WheelAction::Keys(bytes)) => pane.send(&bytes),
                     Some(WheelAction::Scroll(lines)) => {
-                        session.scroll_viewport(ViewportScroll::Lines(lines));
+                        session.scroll_pane(id, ViewportScroll::Lines(lines));
                     }
                     None => {}
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let moved = session.track_pointer(position.x, position.y);
-                if session.drag.is_some() {
-                    session.drag_to(position.y);
-                    return;
+                session.track_pointer(position.x, position.y);
+                if session.pointer.capture.is_some() {
+                    session.move_captured(self.modifiers, Instant::now());
+                } else {
+                    session.hover_grid(self.modifiers);
                 }
-                if !moved {
-                    return;
-                }
-                let cell = session.pointer;
-                let Some(tab) = session.tabs.active_mut() else {
-                    return;
-                };
-                let event = MouseEvent {
-                    button: session.held.unwrap_or(MouseButton::None),
-                    action: MouseAction::Motion,
-                    col: cell.0,
-                    row: cell.1,
-                    mods: mouse::mouse_mods(self.modifiers),
-                };
-                let modes = tab.terminal.modes();
-                let shift = self.modifiers.shift_key();
-                let held = session.held.is_some();
-                if let Some(bytes) = mouse::button_report(modes, shift, event, held) {
-                    tab.send(&bytes);
-                }
+            }
+            WindowEvent::Focused(false) => {
+                session.flush_resizes();
+                session.pointer.reset();
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let Some(button) = mouse::button(button) else {
                     return;
                 };
                 let action = mouse::action(state);
-                if button == MouseButton::Left && action == MouseAction::Release {
-                    if let Some(drag) = session.drag.take() {
-                        if let (true, Some(tab)) = (drag.started, session.tabs.active()) {
-                            copy_on_select(self.clipboard.as_mut(), config, &tab.terminal);
+                let mods = self.modifiers;
+                if action == MouseAction::Release {
+                    // A release with nothing captured follows a press the
+                    // terminal never saw, such as the click that closed the
+                    // command palette.
+                    let ended = session.pointer.capture.take_if(|c| c.ends_with(button));
+                    match ended {
+                        Some(Capture::Selection { pane, drag }) => {
+                            let pane = tab::pane_mut(&mut session.tabs, pane);
+                            if let (true, Some(pane)) = (drag.started, pane) {
+                                copy_on_select(self.clipboard.as_mut(), config, &pane.terminal);
+                            }
+                        }
+                        Some(Capture::Divider(_)) => session.flush_resizes(),
+                        Some(Capture::Report { pane, .. }) => {
+                            session.report_button(pane, button, action, mods);
+                        }
+                        None => {}
+                    }
+                    return;
+                }
+                if let Some(col) = session.bar_pointer {
+                    if button == MouseButton::Left {
+                        session.click_bar(col);
+                    }
+                    return;
+                }
+                let id = match session.under() {
+                    Under::Divider(path, _) => {
+                        if button == MouseButton::Left {
+                            session.pointer.capture = Some(Capture::Divider(path));
                         }
                         return;
                     }
+                    Under::Pane(id) => id,
+                    Under::Nothing => return,
+                };
+                // Any press focuses the pane it lands on and is delivered to it.
+                if tab::focus_pane(&mut session.tabs, id) {
+                    session.window.request_redraw();
                 }
-                let shift = self.modifiers.shift_key();
-                let selects = session
-                    .tabs
-                    .active()
-                    .is_some_and(|tab| mouse::selects(tab.terminal.modes(), shift));
-                if selects && session.bar_pointer.is_none() && action == MouseAction::Press {
+                let shift = mods.shift_key();
+                let selects = tab::pane_mut(&mut session.tabs, id)
+                    .is_some_and(|pane| mouse::selects(pane.terminal.modes(), shift));
+                if selects {
                     match button {
                         MouseButton::Left => {
-                            let alt = self.modifiers.alt_key();
-                            session.start_drag(Instant::now(), alt);
+                            session.start_drag(id, Instant::now(), mods.alt_key());
                             return;
                         }
                         MouseButton::Middle if HAS_PRIMARY => {
@@ -842,41 +939,8 @@ impl ApplicationHandler<UserEvent> for App {
                         _ => {}
                     }
                 }
-                if let Some(col) = session.bar_pointer {
-                    if action == MouseAction::Press {
-                        if button == MouseButton::Left {
-                            session.click_bar(col);
-                        }
-                        return;
-                    }
-                    if session.held.is_none() {
-                        return; // Released after a press on the bar.
-                    }
-                    // A drag from the grid ends over the bar: report the
-                    // release at the last grid cell.
-                }
-                if action == MouseAction::Release && session.held.is_none() {
-                    // Released after a press the terminal never saw, such
-                    // as the click that closed the command palette.
-                    return;
-                }
-                session.held = (action == MouseAction::Press).then_some(button);
-                let (col, row) = session.pointer;
-                let event = MouseEvent {
-                    button,
-                    action,
-                    col,
-                    row,
-                    mods: mouse::mouse_mods(self.modifiers),
-                };
-                let Some(tab) = session.tabs.active_mut() else {
-                    return;
-                };
-                let modes = tab.terminal.modes();
-                let shift = self.modifiers.shift_key();
-                if let Some(bytes) = mouse::button_report(modes, shift, event, false) {
-                    tab.send(&bytes);
-                }
+                session.pointer.capture = Some(Capture::Report { pane: id, button });
+                session.report_button(id, button, action, mods);
             }
             WindowEvent::RedrawRequested => {
                 if let Err(error) = session.redraw(config) {
@@ -890,7 +954,7 @@ impl ApplicationHandler<UserEvent> for App {
 
 const MAX_FRAME_RETRIES: u8 = 3;
 
-impl Tab {
+impl Pane {
     /// Writes input for the child.
     fn send(&mut self, bytes: &[u8]) {
         if let Err(error) = self.pty.write_all(bytes) {
@@ -900,10 +964,10 @@ impl Tab {
 }
 
 impl Session {
-    /// Writes input for the child of the active tab.
+    /// Writes input for the child of the focused pane.
     fn send(&mut self, bytes: &[u8]) {
-        if let Some(tab) = self.tabs.active_mut() {
-            tab.send(bytes);
+        if let Some(pane) = tab::focused_mut(&mut self.tabs) {
+            pane.send(bytes);
         }
     }
 
@@ -921,9 +985,10 @@ impl Session {
             cells: layout.grid_size(pixels.width, pixels.height),
             cell: Some(CellPixels::new(layout.cell.width, layout.cell.height)),
         };
-        let id = self
-            .tabs
-            .add_with(|id| spawn_tab(id, config, win_size, proxy))?;
+        let pane = self.pane_ids.next();
+        let id = self.tabs.add_with(|_| {
+            spawn_pane(pane, config, win_size, proxy).map(|spawned| Tab::new(pane, spawned))
+        })?;
         self.tab_switched();
         Ok(id)
     }
@@ -936,74 +1001,91 @@ impl Session {
         }
     }
 
-    /// Feeds output to the tab `id` (ignored once it is closed), answering
-    /// the queries in it; only the active tab is redrawn.
-    fn output(&mut self, id: TabId, bytes: &[u8]) {
-        let active = self.tabs.index_of(id) == Some(self.tabs.active_index());
-        let Some(tab) = self.tabs.get_mut(id) else {
+    /// Feeds output to the pane `id` (ignored once it is closed), answering
+    /// the queries in it; the window redraws only if the pane is on screen.
+    fn output(&mut self, id: PaneId, bytes: &[u8]) {
+        let visible = tab::shows(&self.tabs, id);
+        let Some(pane) = tab::pane_mut(&mut self.tabs, id) else {
             return;
         };
-        tab.terminal.advance(bytes);
-        let responses = tab.terminal.take_responses();
+        pane.terminal.advance(bytes);
+        let responses = pane.terminal.take_responses();
         if !responses.is_empty() {
-            tab.send(&responses);
+            pane.send(&responses);
         }
-        if active {
+        if visible {
             self.window.request_redraw();
         }
     }
 
-    /// Sends pasted `text` to the active tab, bracketed when the
+    /// The child of pane `id` ended: the pane leaves its tab, which closes
+    /// with its last pane. With no tab left the caller exits.
+    fn exited(&mut self, id: PaneId) {
+        if tab::exit(&mut self.tabs, id) != Exit::Stale {
+            self.tab_switched();
+        }
+    }
+
+    /// Sends pasted `text` to the focused pane, bracketed when the
     /// application asked for it, and shows the live screen.
     fn paste(&mut self, text: &str) {
-        let Some(tab) = self.tabs.active() else {
+        let Some(pane) = tab::focused(&self.tabs) else {
             return;
         };
         if text.is_empty() {
             return;
         }
-        let bytes = nxg_core::paste::encode(text, tab.terminal.modes().bracketed_paste);
+        let bytes = nxg_core::paste::encode(text, pane.terminal.modes().bracketed_paste);
         self.scroll_viewport(ViewportScroll::Bottom);
         // Written on the UI thread: the reader thread keeps draining the
         // child's output meanwhile, so a large paste cannot deadlock.
         self.send(&bytes);
     }
 
-    /// A left press on the grid: a single click clears the selection and
+    /// A left press in pane `id`: a single click clears the selection and
     /// may start a new one, a double or triple click selects the word or
-    /// line under the pointer.
-    fn start_drag(&mut self, now: Instant, alt: bool) {
-        let (col, row) = self.pointer;
-        let Some(tab) = self.tabs.active_mut() else {
+    /// line under the pointer. The pane keeps the pointer until release.
+    fn start_drag(&mut self, id: PaneId, now: Instant, alt: bool) {
+        let Some((col, row)) = self.cell_in(id) else {
             return;
         };
-        let anchor = tab.terminal.point_at(col, row);
+        let Some(pane) = tab::pane_mut(&mut self.tabs, id) else {
+            return;
+        };
+        let anchor = pane.terminal.point_at(col, row);
         let clicks = self.clicks.press(now, anchor);
         let kind = mouse::selection_kind(clicks, alt);
         let started = clicks > 1;
         if started {
-            tab.terminal.start_selection(kind, anchor);
+            pane.terminal.start_selection(kind, anchor);
         } else {
-            tab.terminal.clear_selection();
+            pane.terminal.clear_selection();
         }
-        self.drag = Some(Drag {
+        let drag = Drag {
             kind,
             anchor,
             started,
-        });
+        };
+        self.pointer.capture = Some(Capture::Selection { pane: id, drag });
         self.window.request_redraw();
     }
 
-    /// The pointer moved to window height `y` while selecting: extends the
-    /// selection to the cell under it, scrolling the history a line when
-    /// it is above or below the grid.
-    fn drag_to(&mut self, y: f64) {
-        let layout = self.grid_layout();
-        let (col, row) = self.pointer;
-        let (Some(drag), Some(tab)) = (&mut self.drag, self.tabs.active_mut()) else {
+    /// The pointer moved while pane `id` holds a selection: extends it to
+    /// the cell under the pointer (clamped to the pane), scrolling the
+    /// history a line when the pointer is above or below the pane.
+    fn drag_to(&mut self, id: PaneId) {
+        let Some((layout, size)) = self.pane_frame(id) else {
             return;
         };
-        let terminal = &mut tab.terminal;
+        let (x, y) = self.cursor;
+        let (col, row) = mouse::cell_at(layout, size, x, y);
+        let Some(Capture::Selection { drag, .. }) = &mut self.pointer.capture else {
+            return;
+        };
+        let Some(pane) = tab::pane_mut(&mut self.tabs, id) else {
+            return;
+        };
+        let terminal = &mut pane.terminal;
         let scroll = mouse::drag_scroll(layout, terminal.size(), y);
         let before = terminal.display_offset();
         if scroll != 0 {
@@ -1025,12 +1107,176 @@ impl Session {
         }
     }
 
+    /// The pointer moved with a button captured: the captured pane or
+    /// divider follows it, whatever lies under it.
+    fn move_captured(&mut self, mods: ModifiersState, now: Instant) {
+        match self.pointer.capture.clone() {
+            Some(Capture::Divider(path)) => self.drag_divider(&path, now),
+            Some(Capture::Selection { pane, .. }) => self.drag_to(pane),
+            Some(Capture::Report { pane, button }) => self.report_motion(pane, Some(button), mods),
+            None => {}
+        }
+    }
+
+    /// The pointer moved with no button down: a resize cursor over a
+    /// divider, motion reports for the pane under it (not on the tab bar,
+    /// which is no part of a terminal).
+    fn hover_grid(&mut self, mods: ModifiersState) {
+        let under = if self.bar_pointer.is_some() {
+            Under::Nothing
+        } else {
+            self.under()
+        };
+        match under {
+            Under::Divider(_, axis) => self.set_divider_hover(Some(axis)),
+            Under::Pane(id) => {
+                self.set_divider_hover(None);
+                self.report_motion(id, None, mods);
+            }
+            Under::Nothing => self.set_divider_hover(None),
+        }
+    }
+
+    /// Shows the resize cursor of a divider along `axis`, or the default.
+    fn set_divider_hover(&mut self, axis: Option<Axis>) {
+        if axis != self.divider_hover {
+            self.divider_hover = axis;
+            self.window
+                .set_cursor(axis.map_or(CursorIcon::Default, mouse::divider_icon));
+        }
+    }
+
+    /// Tells pane `id`, if its application asked for it, that the pointer
+    /// moved to another cell (with `held` down).
+    fn report_motion(&mut self, id: PaneId, held: Option<MouseButton>, mods: ModifiersState) {
+        let Some((col, row)) = self.cell_in(id) else {
+            return;
+        };
+        if self.pointer.over == Some((id, (col, row))) {
+            return;
+        }
+        self.pointer.over = Some((id, (col, row)));
+        let Some(pane) = tab::pane_mut(&mut self.tabs, id) else {
+            return;
+        };
+        let event = MouseEvent {
+            button: held.unwrap_or(MouseButton::None),
+            action: MouseAction::Motion,
+            col,
+            row,
+            mods: mouse::mouse_mods(mods),
+        };
+        let reported = mouse::button_report(
+            pane.terminal.modes(),
+            mods.shift_key(),
+            event,
+            held.is_some(),
+        );
+        if let Some(bytes) = reported {
+            pane.send(&bytes);
+        }
+    }
+
+    /// Tells pane `id`, if its application asked for it, about a button
+    /// press or release at the pointer.
+    fn report_button(
+        &mut self,
+        id: PaneId,
+        button: MouseButton,
+        action: MouseAction,
+        mods: ModifiersState,
+    ) {
+        let Some((col, row)) = self.cell_in(id) else {
+            return;
+        };
+        let Some(pane) = tab::pane_mut(&mut self.tabs, id) else {
+            return;
+        };
+        let event = MouseEvent {
+            button,
+            action,
+            col,
+            row,
+            mods: mouse::mouse_mods(mods),
+        };
+        let reported = mouse::button_report(pane.terminal.modes(), mods.shift_key(), event, false);
+        if let Some(bytes) = reported {
+            pane.send(&bytes);
+        }
+    }
+
+    /// The divider under the captured pointer follows it; the terminals
+    /// resize at once, the ptys at most every 30 ms.
+    fn drag_divider(&mut self, divider: &DividerPath, now: Instant) {
+        let (x, y) = self.cursor;
+        let (layout, area) = (self.grid_layout(), self.content_size());
+        if tab::drag_divider(&mut self.tabs, layout, area, divider, x, y) {
+            self.sync_grid_size_at(Some(now));
+            self.window.request_redraw();
+        }
+    }
+
+    /// Tells every pty the size it is still waiting for.
+    fn flush_resizes(&mut self) {
+        for tab in self.tabs.iter_mut() {
+            tab.each_mut(Pane::flush_resize);
+        }
+    }
+
+    /// Tells the ptys whose waiting size is due at `now`.
+    fn poll_resizes(&mut self, now: Instant) {
+        for tab in self.tabs.iter_mut() {
+            tab.each_mut(|pane| pane.poll_resize(now));
+        }
+    }
+
+    /// When the next waiting pty size is due.
+    fn next_resize(&self) -> Option<Instant> {
+        let panes = self.tabs.iter().flat_map(|tab| tab.panes.iter());
+        panes.filter_map(|(_, pane)| pane.resize.deadline()).min()
+    }
+
+    /// Splits the focused pane of the active tab along `axis`, running the
+    /// configured shell in the new pane at its final size. A pane that is
+    /// too small, or a shell that does not start, leaves the layout as it
+    /// was.
+    fn split(&mut self, axis: Axis, config: &Config, proxy: &EventLoopProxy<UserEvent>) {
+        let area = self.content_size();
+        let layout = self.grid_layout();
+        let cell = CellPixels::new(layout.cell.width, layout.cell.height);
+        let id = self.pane_ids.next();
+        let split = tab::split_active(&mut self.tabs, axis, id, area, |rect| {
+            let cells = TermSize::new(rect.cols, rect.rows)?;
+            let win_size = WinSize {
+                cells,
+                cell: Some(cell),
+            };
+            spawn_pane(id, config, win_size, proxy)
+        });
+        match split {
+            Some(Ok(())) => self.panes_changed(),
+            Some(Err(SplitError::TooSmall)) => eprintln!("nxgterm: pane too small to split"),
+            Some(Err(SplitError::Make(error))) => eprintln!("nxgterm: cannot split: {error}"),
+            None => {}
+        }
+    }
+
+    /// After the layout of the active tab changed (split, focus, resize,
+    /// zoom, equalize): forgets what the pointer held, which belonged to the
+    /// old layout, refits the panes and redraws.
+    fn panes_changed(&mut self) {
+        self.pointer.reset();
+        self.set_divider_hover(None);
+        self.sync_grid_size();
+        self.window.request_redraw();
+    }
+
     /// After the active tab or the number of tabs changed: forgets the
     /// held button (and the pointer on a bar that went away), refits the
     /// grid and redraws.
     fn tab_switched(&mut self) {
-        self.held = None;
-        self.drag = None;
+        self.pointer.reset();
+        self.set_divider_hover(None);
         if !self.bar_visible(self.tabs.len()) {
             self.bar_pointer = None;
         }
@@ -1038,12 +1284,20 @@ impl Session {
         self.window.request_redraw();
     }
 
-    /// Moves the scrollback viewport, redrawing when it changed.
+    /// Moves the scrollback viewport of the focused pane, redrawing when it
+    /// changed.
     fn scroll_viewport(&mut self, scroll: ViewportScroll) {
-        let Some(tab) = self.tabs.active_mut() else {
+        if let Some(id) = self.tabs.active().map(|tab| tab.panes.focused().0) {
+            self.scroll_pane(id, scroll);
+        }
+    }
+
+    /// [`Session::scroll_viewport`] for pane `id`.
+    fn scroll_pane(&mut self, id: PaneId, scroll: ViewportScroll) {
+        let Some(pane) = tab::pane_mut(&mut self.tabs, id) else {
             return;
         };
-        let terminal = &mut tab.terminal;
+        let terminal = &mut pane.terminal;
         let before = terminal.display_offset();
         match scroll {
             ViewportScroll::Lines(lines) => terminal.scroll_display(lines),
@@ -1072,31 +1326,51 @@ impl Session {
         layout(self.renderer.as_ref(), self.padding).below(bar)
     }
 
-    /// Follows the pointer at window pixel `x`, `y` over the tab bar and
-    /// the grid. Returns whether it moved to another grid cell (motion to
-    /// report).
-    fn track_pointer(&mut self, x: f64, y: f64) -> bool {
+    /// Follows the pointer at window pixel `x`, `y`: remembers it and
+    /// whether it is over the tab bar.
+    fn track_pointer(&mut self, x: f64, y: f64) {
+        self.cursor = (x, y);
         self.bar_pointer = self.bar_column_at(x, y);
-        if self.bar_pointer.is_some() {
-            // The bar is not part of the terminal: no reports.
-            return false;
-        }
-        let layout = self.grid_layout();
-        let Some(tab) = self.tabs.active() else {
-            return false;
-        };
-        let cell = mouse::cell_at(layout, tab.terminal.size(), x, y);
-        if cell == self.pointer {
-            return false;
-        }
-        self.pointer = cell;
-        true
     }
 
-    /// Where the open palette sits on the active tab's grid.
+    /// The cell of the content area under the pointer, clamped to it.
+    fn grid_cell(&self) -> (u16, u16) {
+        let (x, y) = self.cursor;
+        mouse::cell_at(self.grid_layout(), self.content_size(), x, y)
+    }
+
+    /// What the active tab shows under the pointer.
+    fn under(&self) -> Under {
+        let (x, y) = self.cursor;
+        let (layout, area) = (self.grid_layout(), self.content_size());
+        self.tabs
+            .active()
+            .map_or(Under::Nothing, |tab| tab::under(tab, layout, area, x, y))
+    }
+
+    /// Where pane `id` of the active tab sits and how big it is.
+    fn pane_frame(&self, id: PaneId) -> Option<(Layout, TermSize)> {
+        let tab = self.tabs.active()?;
+        tab::frame(tab, self.grid_layout(), self.content_size(), id)
+    }
+
+    /// The cell of pane `id` under the pointer, clamped to the pane.
+    fn cell_in(&self, id: PaneId) -> Option<(u16, u16)> {
+        let (layout, size) = self.pane_frame(id)?;
+        let (x, y) = self.cursor;
+        Some(mouse::cell_at(layout, size, x, y))
+    }
+
+    /// Where the open palette sits on the content area.
     fn palette_rect(&self) -> Option<command_palette::Rect> {
-        let size = self.tabs.active()?.terminal.size();
-        Some(self.palette.as_ref()?.rect(size))
+        Some(self.palette.as_ref()?.rect(self.content_size()))
+    }
+
+    /// The area the panes of a tab share: what the window leaves below the
+    /// tab bar. The title bar and the palette are sized from it.
+    fn content_size(&self) -> TermSize {
+        let pixels = self.window.inner_size();
+        self.grid_layout().grid_size(pixels.width, pixels.height)
     }
 
     /// What the tab bar holds besides the labels.
@@ -1104,30 +1378,55 @@ impl Session {
         if !self.integrated {
             return Chrome::NATIVE;
         }
+        let cell = layout(self.renderer.as_ref(), self.padding).cell;
         let inset = if MACOS {
-            let cell = layout(self.renderer.as_ref(), self.padding).cell;
             title_bar::macos_inset(self.scale, self.padding, cell.width)
         } else {
             0
         };
+        let buttons = self
+            .window_buttons()
+            .map(|buttons| title_bar::first_button_col(&buttons, self.padding, cell.width));
         Chrome {
             inset,
             new_tab: true,
-            buttons: !MACOS,
+            buttons,
         }
+    }
+
+    /// The minimize, maximize and close buttons of the integrated title
+    /// bar in window pixels, except on macOS (which keeps its own): as
+    /// tall as the bar, from the window top to below its row.
+    fn window_buttons(&self) -> Option<[(Button, Rect); 3]> {
+        if !self.integrated || MACOS || !self.bar_visible(self.tabs.len()) {
+            return None;
+        }
+        let layout = layout(self.renderer.as_ref(), self.padding);
+        let bar_height = layout.padding + layout.cell.height;
+        let width = self.window.inner_size().width;
+        Some(title_bar::button_rects(width, bar_height, self.scale))
     }
 
     /// The tab bar laid out `cols` columns wide.
     fn bar(&self, cols: u16) -> title_bar::Bar {
-        let titles: Vec<&str> = self.tabs.iter().map(|tab| tab.title.as_str()).collect();
+        let titles: Vec<&str> = self
+            .tabs
+            .iter()
+            .map(|tab| tab.focused().title.as_str())
+            .collect();
         title_bar::layout(&titles, self.tabs.active_index(), cols, self.chrome())
     }
 
     /// What is on the tab bar at window pixel `x`, `y`, if it shows there.
     fn bar_region_at(&self, x: f64, y: f64) -> Option<Region> {
+        let button = self
+            .window_buttons()
+            .and_then(|buttons| title_bar::button_at(&buttons, x, y));
+        if let Some(button) = button {
+            return Some(Region::Button(button));
+        }
         let col = self.bar_column_at(x, y)?;
-        let cols = self.tabs.active()?.terminal.size().cols();
-        Some(self.bar(cols).region_at(col))
+        Some(self.bar(self.content_size().cols()).region_at(col))
     }
 
     /// The window edge a press at pixel `x`, `y` resizes: only for the
@@ -1171,6 +1470,7 @@ impl Session {
 
     /// The pointer left the window: no edge or button is hovered.
     fn unhover(&mut self) {
+        self.set_divider_hover(None);
         if self.resize_hover.take().is_some() {
             self.window.set_cursor(CursorIcon::Default);
         }
@@ -1197,17 +1497,14 @@ impl Session {
         if !self.bar_visible(self.tabs.len()) {
             return None;
         }
-        let cols = self.tabs.active()?.terminal.size().cols();
+        let cols = self.content_size().cols();
         let layout = layout(self.renderer.as_ref(), self.padding);
         tab_bar::column_at(layout, cols, x, y)
     }
 
     /// Activates the tab whose label is at bar column `col`.
     fn click_bar(&mut self, col: u16) {
-        let Some(tab) = self.tabs.active() else {
-            return;
-        };
-        let bar = self.bar(tab.terminal.size().cols());
+        let bar = self.bar(self.content_size().cols());
         if let Region::Tab(index) = bar.region_at(col) {
             if index != self.tabs.active_index() && self.tabs.select(index) {
                 self.tab_switched();
@@ -1219,17 +1516,54 @@ impl Session {
         let Some(tab) = self.tabs.active() else {
             return Ok(());
         };
-        let bar = self.bar_visible(self.tabs.len()).then(|| {
-            let cols = tab.terminal.size().cols();
-            let maximized = self.integrated && self.window.is_maximized();
-            title_bar::render(&self.bar(cols), self.bar_hover, maximized)
+        let content = self.content_size();
+        let bar = self
+            .bar_visible(self.tabs.len())
+            .then(|| title_bar::render(&self.bar(content.cols()), self.bar_hover));
+        let buttons = self.window_buttons().map(|buttons| {
+            let theme = appearance::palette(&config.colors.resolve());
+            let colors = ButtonColors {
+                glyph: theme.foreground,
+                // The new-tab button's hover background.
+                hover: theme.ansi[8],
+            };
+            let hover = match self.bar_hover {
+                Some(Region::Button(button)) => Some(button),
+                _ => None,
+            };
+            let maximized = self.window.is_maximized();
+            title_bar::button_shapes(&buttons, hover, maximized, self.scale, colors)
         });
         let palette = self.palette.as_ref().map(|palette| {
-            let rect = palette.rect(tab.terminal.size());
+            let rect = palette.rect(content);
             let theme = appearance::palette(&config.colors.resolve());
             let surface = command_palette::surface(theme.background, theme.foreground);
             (palette.render(rect, surface), rect)
         });
+        let views: Vec<PaneView<'_>> = tab::placements(tab, content)
+            .into_iter()
+            .filter_map(|placed| {
+                let pane = tab.panes.get(placed.id)?;
+                Some(PaneView {
+                    id: placed.id.raw(),
+                    terminal: &pane.terminal,
+                    col: placed.rect.col,
+                    row: placed.rect.row,
+                    focused: placed.focused,
+                    dim: tab::dim_of(placed.focused, config.panes.inactive_dim),
+                })
+            })
+            .collect();
+        // Dividers first, so the window buttons stay on top.
+        let theme = appearance::palette(&config.colors.resolve());
+        let (width, color) = dividers::style(&config.panes, theme.foreground, theme.background);
+        let mut shapes = dividers::shapes(
+            &tab.panes.dividers((content.cols(), content.rows())),
+            self.grid_layout(),
+            width,
+            color,
+        );
+        shapes.extend(buttons.into_iter().flatten());
         let overlay = palette.as_ref().map(|(terminal, rect)| Overlay {
             terminal,
             col: rect.col,
@@ -1237,7 +1571,7 @@ impl Session {
         });
         match self
             .renderer
-            .draw_layers(bar.as_ref(), &tab.terminal, overlay)
+            .draw_layers(bar.as_ref(), &views, overlay, &shapes)
         {
             Ok(()) => {
                 self.skipped_frames = 0;
@@ -1298,24 +1632,37 @@ impl Session {
         }
     }
 
-    /// Resizes the terminals and ptys of every tab to what fits the
-    /// window with the active renderer's cell size and the padding, and
-    /// tells them the cell size in pixels (images and size reports depend
-    /// on it).
+    /// Resizes the terminals and ptys of every pane to the rect its tab
+    /// gives it in what fits the window with the active renderer's cell
+    /// size and the padding, and tells them the cell size in pixels
+    /// (images and size reports depend on it).
     fn sync_grid_size(&mut self) {
-        let pixels = self.window.inner_size();
+        self.sync_grid_size_at(None);
+    }
+
+    /// [`Session::sync_grid_size`]; with `dragging` the ptys hear of the
+    /// new sizes at most every 30 ms (see [`Pane::fit_at`]).
+    fn sync_grid_size_at(&mut self, dragging: Option<Instant>) {
+        let content = self.content_size();
         let layout = self.grid_layout();
-        let size = layout.grid_size(pixels.width, pixels.height);
         let cell = CellPixels::new(layout.cell.width, layout.cell.height);
         for tab in self.tabs.iter_mut() {
-            tab.fit(size, cell);
+            for placed in tab::placements(tab, content) {
+                let size = TermSize::new(placed.rect.cols, placed.rect.rows);
+                if let (Ok(size), Some(pane)) = (size, tab.panes.get_mut(placed.id)) {
+                    pane.fit_at(size, cell, dragging);
+                }
+            }
         }
     }
 }
 
-impl Tab {
+impl Pane {
     /// Resizes the terminal and the pty to `size` cells of `cell` pixels.
-    fn fit(&mut self, size: TermSize, cell: CellPixels) {
+    /// With `dragging` the terminal still follows at once but the pty hears
+    /// of it at most every 30 ms (see [`Pane::poll_resize`] and
+    /// [`Pane::flush_resize`]).
+    fn fit_at(&mut self, size: TermSize, cell: CellPixels, dragging: Option<Instant>) {
         if size == self.terminal.size() && cell == self.terminal.cell_pixels() {
             return;
         }
@@ -1327,6 +1674,33 @@ impl Tab {
             cells: size,
             cell: Some(cell),
         };
+        let now = match dragging {
+            Some(now) => self.resize.push(win_size, now),
+            None => {
+                self.resize.clear();
+                Some(win_size)
+            }
+        };
+        if let Some(win_size) = now {
+            self.tell_pty(win_size);
+        }
+    }
+
+    /// Sends the size that waited out its interval.
+    fn poll_resize(&mut self, now: Instant) {
+        if let Some(win_size) = self.resize.poll(now) {
+            self.tell_pty(win_size);
+        }
+    }
+
+    /// Sends the size that is still waiting (the drag ended).
+    fn flush_resize(&mut self) {
+        if let Some(win_size) = self.resize.flush() {
+            self.tell_pty(win_size);
+        }
+    }
+
+    fn tell_pty(&mut self, win_size: WinSize) {
         if let Err(error) = self.pty.resize(win_size) {
             eprintln!("nxgterm: pty resize failed: {error}");
         }
@@ -1334,14 +1708,14 @@ impl Tab {
 }
 
 /// Starts the configured shell (or the platform default) on a new pty of
-/// `win_size` for tab `id`, with threads that post its output and exit.
-/// Every tab starts in the working directory nxgterm was started in.
-fn spawn_tab(
-    id: TabId,
+/// `win_size` for pane `id`, with threads that post its output and exit.
+/// Every pane starts in the working directory nxgterm was started in.
+fn spawn_pane(
+    id: PaneId,
     config: &Config,
     win_size: WinSize,
     proxy: &EventLoopProxy<UserEvent>,
-) -> Result<Tab, Box<dyn Error>> {
+) -> Result<Pane, Box<dyn Error>> {
     let shell = config.shell.program.clone().map(|program| ShellCommand {
         program,
         args: config.shell.args.clone(),
@@ -1368,7 +1742,7 @@ fn spawn_tab(
     }
     terminal.set_scrollback_limit(config.scrollback.lines);
     let shell_env = env::var("SHELL").ok();
-    Ok(Tab {
+    Ok(Pane {
         terminal,
         pty: pty.control,
         title: tab_bar::title(
@@ -1376,6 +1750,7 @@ fn spawn_tab(
             shell_env.as_deref(),
             cfg!(windows),
         ),
+        resize: Throttle::default(),
     })
 }
 
@@ -1406,14 +1781,20 @@ fn layout(renderer: &dyn WindowRenderer, padding: u32) -> Layout {
 /// Font files for the configured family and fallbacks, reporting the
 /// ones that are not installed and the fallback faces in use.
 fn load_faces(font: &FontConfig) -> Result<FontFaces, FontError> {
-    let faces = FontFaces::system(font.family.as_deref(), &font.fallback)?;
-    if let Some(family) = &font.family {
-        if !faces.is_family(family) {
-            eprintln!(
-                "nxgterm: font family `{family}` not found; using `{}`",
-                faces.family()
-            );
-        }
+    let faces = FontFaces::system(&font.family, &font.fallback)?;
+    let requested = faces.requested_family();
+    let skipped: Vec<&str> = font
+        .family
+        .iter()
+        .map(String::as_str)
+        .take_while(|&family| Some(family) != requested)
+        .collect();
+    if !skipped.is_empty() {
+        eprintln!(
+            "nxgterm: font family `{}` not found; using `{}`",
+            skipped.join("`, `"),
+            faces.family()
+        );
     }
     let found = faces.fallback_families();
     for family in &font.fallback {
@@ -1552,16 +1933,17 @@ impl WindowRenderer for Detached {
     fn draw_layers(
         &mut self,
         _header: Option<&Terminal>,
-        terminal: &Terminal,
+        _panes: &[PaneView<'_>],
         _overlay: Option<Overlay<'_>>,
+        _shapes: &[Shape],
     ) -> Result<(), RenderError> {
-        self.draw(terminal)
+        Err(RenderError::Fatal("no renderer attached".into()))
     }
 }
 
-/// Drains the output of tab `id` on a background thread until EOF or
+/// Drains the output of pane `id` on a background thread until EOF or
 /// error.
-fn spawn_reader(id: TabId, mut reader: Box<dyn Read + Send>, proxy: EventLoopProxy<UserEvent>) {
+fn spawn_reader(id: PaneId, mut reader: Box<dyn Read + Send>, proxy: EventLoopProxy<UserEvent>) {
     thread::spawn(move || {
         let mut buf = vec![0u8; 64 * 1024];
         loop {
@@ -1581,11 +1963,142 @@ fn spawn_reader(id: TabId, mut reader: Box<dyn Read + Send>, proxy: EventLoopPro
     });
 }
 
-/// Reports the exit of the child of tab `id`; needed where the reader
+/// Reports the exit of the child of pane `id`; needed where the reader
 /// never sees EOF (ConPTY).
-fn spawn_waiter(id: TabId, mut child: Box<dyn ChildProcess>, proxy: EventLoopProxy<UserEvent>) {
+fn spawn_waiter(id: PaneId, mut child: Box<dyn ChildProcess>, proxy: EventLoopProxy<UserEvent>) {
     thread::spawn(move || {
         let _ = child.wait();
         let _ = proxy.send_event(UserEvent::Exited(id));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    /// A pty that records the sizes it was resized to and the bytes written.
+    struct FakePty {
+        resizes: Arc<Mutex<Vec<WinSize>>>,
+        written: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for FakePty {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.written.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl PtyControl for FakePty {
+        fn resize(&mut self, size: WinSize) -> io::Result<()> {
+            self.resizes.lock().unwrap().push(size);
+            Ok(())
+        }
+    }
+
+    type Resizes = Arc<Mutex<Vec<WinSize>>>;
+    type Written = Arc<Mutex<Vec<u8>>>;
+
+    fn size(cols: u16, rows: u16) -> TermSize {
+        TermSize::new(cols, rows).unwrap()
+    }
+
+    fn pane(cols: u16, rows: u16) -> (Pane, Resizes, Written) {
+        let resizes = Resizes::default();
+        let written = Written::default();
+        let pane = Pane {
+            terminal: Terminal::new(size(cols, rows)),
+            pty: Box::new(FakePty {
+                resizes: resizes.clone(),
+                written: written.clone(),
+            }),
+            title: "sh".into(),
+            resize: Throttle::default(),
+        };
+        (pane, resizes, written)
+    }
+
+    #[test]
+    fn fit_resizes_the_terminal_and_the_pty() {
+        let (mut pane, resizes, _) = pane(80, 24);
+        let cell = CellPixels::new(9, 18);
+        pane.fit_at(size(100, 30), cell, None);
+        assert_eq!(pane.terminal.size(), size(100, 30));
+        assert_eq!(pane.terminal.cell_pixels(), cell);
+        let expected = WinSize {
+            cells: size(100, 30),
+            cell: Some(cell),
+        };
+        assert_eq!(*resizes.lock().unwrap(), vec![expected]);
+    }
+
+    #[test]
+    fn fit_to_the_same_size_and_cell_is_a_no_op() {
+        let (mut pane, resizes, _) = pane(80, 24);
+        let cell = CellPixels::new(9, 18);
+        pane.fit_at(size(100, 30), cell, None);
+        pane.fit_at(size(100, 30), cell, None);
+        assert_eq!(resizes.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fit_tells_the_pty_when_only_the_cell_size_changed() {
+        let (mut pane, resizes, _) = pane(80, 24);
+        pane.fit_at(size(80, 24), CellPixels::new(7, 14), None);
+        pane.fit_at(size(80, 24), CellPixels::new(9, 18), None);
+        let resizes = resizes.lock().unwrap();
+        assert_eq!(resizes.len(), 2);
+        assert_eq!(resizes[1].cells, size(80, 24));
+        assert_eq!(resizes[1].cell, Some(CellPixels::new(9, 18)));
+    }
+
+    #[test]
+    fn a_drag_resizes_the_terminal_at_once_and_the_pty_every_30_ms() {
+        let (mut pane, resizes, _) = pane(80, 24);
+        let cell = CellPixels::new(9, 18);
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + std::time::Duration::from_millis(ms);
+        pane.fit_at(size(81, 24), cell, Some(t0));
+        pane.fit_at(size(82, 24), cell, Some(at(5)));
+        pane.fit_at(size(83, 24), cell, Some(at(10)));
+        assert_eq!(pane.terminal.size(), size(83, 24), "the grid follows");
+        assert_eq!(resizes.lock().unwrap().len(), 1, "the shell hears once");
+        pane.poll_resize(at(20));
+        assert_eq!(resizes.lock().unwrap().len(), 1, "too early");
+        pane.poll_resize(at(30));
+        let sent = resizes.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[1].cells, size(83, 24), "only the last size");
+    }
+
+    #[test]
+    fn flush_delivers_the_last_size_on_release_and_a_direct_fit_supersedes() {
+        let (mut pane, resizes, _) = pane(80, 24);
+        let cell = CellPixels::new(9, 18);
+        let t0 = Instant::now();
+        pane.fit_at(size(81, 24), cell, Some(t0));
+        pane.fit_at(size(82, 24), cell, Some(t0));
+        pane.flush_resize();
+        assert_eq!(resizes.lock().unwrap().last().unwrap().cells, size(82, 24));
+        pane.fit_at(size(83, 24), cell, Some(t0));
+        pane.fit_at(size(90, 24), cell, None);
+        pane.flush_resize();
+        let sent = resizes.lock().unwrap().clone();
+        assert_eq!(sent.last().unwrap().cells, size(90, 24));
+        assert_eq!(sent.len(), 3, "the superseded size is never sent");
+    }
+
+    #[test]
+    fn send_writes_to_the_pty() {
+        let (mut pane, _, written) = pane(80, 24);
+        pane.send(b"ls\r");
+        assert_eq!(*written.lock().unwrap(), b"ls\r");
+    }
 }

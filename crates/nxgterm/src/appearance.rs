@@ -107,7 +107,7 @@ pub fn zoom(action: Action, current: f32, configured: f32) -> Option<f32> {
     Some(clamp_font_size(size))
 }
 
-fn pixel(color: Rgb) -> u32 {
+pub(crate) fn pixel(color: Rgb) -> u32 {
     rgb(color.r, color.g, color.b)
 }
 

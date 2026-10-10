@@ -11,12 +11,16 @@ mod choice;
 mod cli;
 mod clipboard;
 mod command_palette;
+mod dividers;
 mod icon;
 mod keys;
 mod mouse;
+mod panes;
 mod reload;
+mod tab;
 mod tab_bar;
 mod tabs;
+mod throttle;
 mod title_bar;
 mod watch;
 
@@ -63,15 +67,15 @@ fn run(config_arg: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
             generate_config(path);
         }
     }
-    let config = path.as_deref().map(load_config).unwrap_or_default();
+    let (config, files) = path.as_deref().map(load_config).unwrap_or_default();
 
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
-    // Kept alive for the whole run; dropping it stops watching.
-    let _watcher = path
+    // Kept by the app for the whole run; dropping it stops watching.
+    let watcher = path
         .as_deref()
-        .and_then(|path| start_watcher(path, proxy.clone()));
-    let mut app = App::new(proxy, config, path);
+        .and_then(|path| start_watcher(path, &files, proxy.clone()));
+    let mut app = App::new(proxy, config, path, watcher);
     event_loop.run_app(&mut app)?;
     match app.take_error() {
         Some(error) => Err(error),
@@ -79,14 +83,16 @@ fn run(config_arg: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     }
 }
 
-/// The config at `path`; defaults when it is missing or invalid, so a
-/// typo never stops the terminal from opening.
-fn load_config(path: &Path) -> Config {
-    match Config::load(path) {
-        Ok(config) => config.unwrap_or_default(),
+/// The config at `path` and the files it was built from (its imports and
+/// theme file); defaults when it is missing or invalid, so a typo never
+/// stops the terminal from opening.
+fn load_config(path: &Path) -> (Config, Vec<PathBuf>) {
+    match Config::load_with_files(path) {
+        Ok(Some(loaded)) => (loaded.config, loaded.files),
+        Ok(None) => Default::default(),
         Err(error) => {
             eprintln!("nxgterm: {error}; using the defaults");
-            Config::default()
+            Default::default()
         }
     }
 }
@@ -105,12 +111,14 @@ fn generate_config(path: &Path) {
     }
 }
 
-/// Watches `path` for live reload; failing to watch is not fatal.
+/// Watches `path` and the other config `files` for live reload; failing
+/// to watch is not fatal.
 fn start_watcher(
     path: &Path,
+    files: &[PathBuf],
     proxy: EventLoopProxy<UserEvent>,
-) -> Option<notify::RecommendedWatcher> {
-    let watcher = watch::watch(path, move || {
+) -> Option<watch::ConfigWatcher> {
+    let watcher = watch::ConfigWatcher::new(path, files, move || {
         let _ = proxy.send_event(UserEvent::ConfigChanged);
     });
     watcher
