@@ -114,3 +114,8 @@ and nxg-render).
   are centered in the cells, not placed by the font's anchor data, so two
   stacked marks overlap.
 - Next: commit T4; push/PR is the user's decision.
+- T4 committed 1b69326 feat(core): keep combining marks on cells. Parent
+  spot check: cargo test --workspace 718 passed / 0 failed; fmt clean.
+  RDD: assessed medium (slice_budget_reached), consent declined by user for
+  this candidate; writer self-verification (test/clippy/fmt) is the record.
+- Next: push + PR (user decision).
