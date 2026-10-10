@@ -25,13 +25,18 @@ const FALLBACK_FAMILIES: &[&str] = &[
 ];
 
 /// Fallback families tried after the configured ones, in order, when
-/// installed. Any other Nerd Font goes after the `Symbols` ones.
+/// installed. Any other Nerd Font goes after the `Symbols` ones. The
+/// Linux symbol fonts come first, then the ones bundled with Windows and
+/// macOS, so each platform finds symbols like `⏵` without configuration.
 const DEFAULT_FALLBACKS: &[&str] = &[
     "Symbols Nerd Font Mono",
     "Symbols Nerd Font",
     "Noto Sans Symbols 2",
     "Noto Sans Symbols",
     "DejaVu Sans",
+    "Segoe UI Symbol",
+    "Apple Symbols",
+    "Segoe UI Emoji",
 ];
 
 /// Where any installed Nerd Font goes in [`DEFAULT_FALLBACKS`].
@@ -553,9 +558,12 @@ mod tests {
     #[test]
     fn fallback_families_follow_the_documented_default_order() {
         let installed = names(&[
+            "Apple Symbols",
             "DejaVu Sans",
             "Noto Sans Symbols",
             "Noto Sans Symbols 2",
+            "Segoe UI Emoji",
+            "Segoe UI Symbol",
             "Symbols Nerd Font",
             "Symbols Nerd Font Mono",
         ]);
@@ -568,6 +576,9 @@ mod tests {
                 "Noto Sans Symbols 2",
                 "Noto Sans Symbols",
                 "DejaVu Sans",
+                "Segoe UI Symbol",
+                "Apple Symbols",
+                "Segoe UI Emoji",
             ]
         );
     }
