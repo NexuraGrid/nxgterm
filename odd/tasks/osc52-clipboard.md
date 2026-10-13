@@ -35,7 +35,7 @@ reads may be presented half drawn (hypothesis, to be confirmed in T2).
 ## Tasks
 
 - [x] T1 OSC 52 clipboard write in nxg-core + app wiring + tests + docs
-- [ ] T2 Flicker during ngmux drag: confirm cause, fix, tests
+- [ ] T2 Flicker during ngmux drag: moved to ngmux (not an nxgterm defect; see Progress)
 
 ## Route
 
@@ -69,4 +69,29 @@ T1 done (route: delegated direct, one bounded writer).
   clippy `-D warnings` ok (linux and x86_64-pc-windows-gnu);
   `cargo fmt --all --check` ok.
 
-Next: T2.
+T2 moved to ngmux (route: delegated direct, read-only investigation; no
+nxgterm change kept).
+- The user reproduced the flicker in other terminals on other machines, so
+  it is not nxgterm-specific. A speculative output pacer (coalescing PTY
+  reads before redraw) was written test-first (RED 5/6, GREEN 6/6) and then
+  reverted: no nxgterm-specific defect was confirmed.
+- Cause (confirmed by reading ngmux at 443c8f5): every mouse event that
+  returns `repaint` calls `cl.reset()` (internal/server/server.go:368-371;
+  same for keys at :348-351), which sets `hasShown = false`
+  (internal/server/client.go:318-321). The next `offerFrame` then paints
+  with `prev = nil` (client.go:160-163), and `render.Paint` does a full
+  repaint starting with `ESC [2J` (internal/render/render.go:562-568). A
+  drag selection returns `repaint = true` on every motion
+  (internal/server/mouse.go:253,257), so each motion clears the whole
+  screen and redraws every cell. The frame exceeds 4 KiB and the PTY splits
+  it (measured: one 6000-byte write read as 4095 + 1902 bytes), so
+  terminals present the cleared/partial screen: the flash.
+- Proposed ngmux fix (not applied): drop `cl.reset()` after `markDirty` for
+  mouse (and key) repaints; the diff painter against `c.shown` already
+  draws the change. Keep resets for real divergence (session switch,
+  resize, `TypeRefresh` that the client sends when its which-key/help
+  overlay closes). Optionally wrap `Paint` output in DEC 2026
+  (`ESC[?2026h` ... `ESC[?2026l`).
+- Unverified: visual check after the ngmux fix.
+
+Next: report T2 to ngmux.
