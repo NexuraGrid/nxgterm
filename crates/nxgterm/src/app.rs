@@ -827,7 +827,7 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::Output(id, bytes) => {
                 if let Some(session) = &mut self.session {
-                    session.output(id, &bytes);
+                    session.output(id, &bytes, self.clipboard.as_mut());
                 }
             }
             UserEvent::Exited(id) => {
@@ -1072,8 +1072,9 @@ impl Session {
     }
 
     /// Feeds output to the pane `id` (ignored once it is closed), answering
-    /// the queries in it; the window redraws only if the pane is on screen.
-    fn output(&mut self, id: PaneId, bytes: &[u8]) {
+    /// the queries in it and setting the clipboard it asks for (OSC 52, on
+    /// screen or not); the window redraws only if the pane is on screen.
+    fn output(&mut self, id: PaneId, bytes: &[u8], clipboard: &mut dyn Clipboard) {
         let visible = tab::shows(&self.tabs, id);
         let Some(pane) = tab::pane_mut(&mut self.tabs, id) else {
             return;
@@ -1083,6 +1084,11 @@ impl Session {
         if !responses.is_empty() {
             pane.send(&responses);
         }
+        set_clipboard(
+            clipboard,
+            pane.terminal.take_clipboard_requests(),
+            HAS_PRIMARY,
+        );
         // A new title shows on the tab bar even for a pane off screen.
         if visible || pane.terminal.take_title_changed() {
             self.window.request_redraw();
@@ -1933,6 +1939,23 @@ fn spawn_pane(
     })
 }
 
+/// Writes the clipboard `requests` of an application (OSC 52), skipping
+/// PRIMARY where the system has none (`has_primary`); failures only warn.
+fn set_clipboard(
+    clipboard: &mut dyn Clipboard,
+    requests: Vec<(ClipboardKind, String)>,
+    has_primary: bool,
+) {
+    for (kind, text) in requests {
+        if kind == ClipboardKind::Primary && !has_primary {
+            continue;
+        }
+        if let Err(error) = clipboard.set_text(kind, text) {
+            eprintln!("nxgterm: {error}");
+        }
+    }
+}
+
 /// Copies the selection of `terminal` to the selections the config names
 /// (see [`copy_on_select_kinds`]); failures only warn.
 fn copy_on_select(clipboard: &mut dyn Clipboard, config: &Config, terminal: &Terminal) {
@@ -2194,6 +2217,8 @@ mod tests {
     use std::io;
     use std::sync::{Arc, Mutex};
 
+    use nxg_core::ports::ClipboardError;
+
     use super::*;
 
     /// A pty that records the sizes it was resized to and the bytes written.
@@ -2282,6 +2307,40 @@ mod tests {
             [ClipboardKind::Primary, ClipboardKind::Clipboard]
         );
         assert_eq!(kinds(Both, false), [ClipboardKind::Clipboard]);
+    }
+
+    /// Records writes; reads always fail.
+    #[derive(Default)]
+    struct RecordingClipboard(Vec<(ClipboardKind, String)>);
+
+    impl Clipboard for RecordingClipboard {
+        fn get_text(&mut self, _: ClipboardKind) -> Result<String, ClipboardError> {
+            Err(ClipboardError("write only".into()))
+        }
+
+        fn set_text(&mut self, kind: ClipboardKind, text: String) -> Result<(), ClipboardError> {
+            self.0.push((kind, text));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn osc52_output_sets_the_clipboard_and_skips_missing_primary() {
+        let (mut pane, _, _) = pane(80, 24);
+        pane.terminal.advance(b"\x1b]52;pc;aGk=\x07");
+        let requests = pane.terminal.take_clipboard_requests();
+        let mut clipboard = RecordingClipboard::default();
+        set_clipboard(&mut clipboard, requests.clone(), true);
+        assert_eq!(
+            clipboard.0,
+            [
+                (ClipboardKind::Clipboard, "hi".to_string()),
+                (ClipboardKind::Primary, "hi".to_string()),
+            ]
+        );
+        let mut clipboard = RecordingClipboard::default();
+        set_clipboard(&mut clipboard, requests, false);
+        assert_eq!(clipboard.0, [(ClipboardKind::Clipboard, "hi".to_string())]);
     }
 
     #[test]

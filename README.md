@@ -361,6 +361,12 @@ the pane holds, history included, without changing the selection.
 clipboard, `"both"`, or `"off"` (also `false`).
 Words stop at spaces and ``()[]{}<>'"`,;:│``, so paths select whole.
 
+Programs can copy too, with OSC 52 (`ESC ] 52 ; c ; <base64> BEL`), as tmux,
+ngmux, Neovim and programs over SSH do: `c` or an empty target sets the
+clipboard, `p` or `s` the PRIMARY selection (where there is one). Only
+writes are honored, up to 1 MiB of text; reading the clipboard (`?`) is
+refused, and an empty payload leaves the clipboard alone.
+
 Pasted text has its line breaks sent as Enter (`\r`) and other control
 characters, escape included, removed. Programs that enable bracketed paste
 (mode 2004) receive it between `ESC [200~` and `ESC [201~`, so a pasted
