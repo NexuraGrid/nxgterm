@@ -4,7 +4,7 @@ use std::env;
 use std::error::Error;
 use std::io::{Read, Write};
 use std::panic::{self, AssertUnwindSafe};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
@@ -40,6 +40,7 @@ use crate::tabs::{TabId, Tabs};
 use crate::throttle::Throttle;
 use crate::title_bar::{self, Button, ButtonColors, Chrome, Rect, Region};
 use crate::watch::ConfigWatcher;
+use crate::wayland_drop::DropTarget;
 use crate::{
     appearance, bindings, choice, clipboard, dividers, icon, keys, mouse, reload, tab_bar,
 };
@@ -53,6 +54,10 @@ pub enum UserEvent {
     Exited(PaneId),
     /// The config file changed on disk.
     ConfigChanged,
+    /// Files dropped on the window where winit does not report them
+    /// (Wayland).
+    #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
+    DroppedPaths(Vec<PathBuf>),
 }
 
 /// One pane: a child process on its own pty and the terminal it draws.
@@ -68,6 +73,8 @@ struct Pane {
 
 /// Everything that exists once the window is up.
 struct Session {
+    /// Takes dropped files on Wayland; first, so it goes before the window.
+    _drop_target: Option<DropTarget>,
     window: Arc<Window>,
     renderer: Box<dyn WindowRenderer>,
     /// Font files of the configured family, rasterized at any size.
@@ -241,6 +248,7 @@ impl App {
         renderer.resize(pixels.width, pixels.height);
         report_opacity(config, transparent, renderer.as_ref());
         let mut session = Session {
+            _drop_target: DropTarget::attach(&window, self.proxy.clone()),
             window,
             renderer,
             faces,
@@ -831,6 +839,11 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::ConfigChanged => self.reload_config(),
+            UserEvent::DroppedPaths(paths) => {
+                if let Some(session) = &mut self.session {
+                    session.drop_paths(paths.iter().map(PathBuf::as_path));
+                }
+            }
         }
     }
 
@@ -874,13 +887,8 @@ impl ApplicationHandler<UserEvent> for App {
                 session.restyle(config);
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
-            WindowEvent::DroppedFile(path) => {
-                // One event per file: each path is pasted quoted and followed
-                // by a space, so agents (Claude Code...) and shells receive it.
-                let text = nxg_core::paste::dropped_path(&path.to_string_lossy(), cfg!(windows));
-                session.paste(&text);
-                session.window.focus_window();
-            }
+            // One event per file (X11, Windows, macOS).
+            WindowEvent::DroppedFile(path) => session.drop_paths([path.as_path()]),
             WindowEvent::MouseWheel { delta, .. } => {
                 let cell = layout(session.renderer.as_ref(), session.padding).cell;
                 let lines = session.wheel.lines(delta, cell.height);
@@ -1087,6 +1095,12 @@ impl Session {
         if tab::exit(&mut self.tabs, id) != Exit::Stale {
             self.tab_switched();
         }
+    }
+
+    /// Pastes dropped files into the focused pane and focuses the window.
+    fn drop_paths<'a>(&mut self, paths: impl IntoIterator<Item = &'a Path>) {
+        self.paste(&dropped_text(paths));
+        self.window.focus_window();
     }
 
     /// Sends pasted `text` to the focused pane, bracketed when the
@@ -2166,6 +2180,15 @@ fn spawn_waiter(id: PaneId, mut child: Box<dyn ChildProcess>, proxy: EventLoopPr
     });
 }
 
+/// The text pasted for dropped files: each path quoted and followed by a
+/// space, so agents (Claude Code...) and shells receive it.
+fn dropped_text<'a>(paths: impl IntoIterator<Item = &'a Path>) -> String {
+    paths
+        .into_iter()
+        .map(|path| nxg_core::paste::dropped_path(&path.to_string_lossy(), cfg!(windows)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
@@ -2217,6 +2240,18 @@ mod tests {
             resize: Throttle::default(),
         };
         (pane, resizes, written)
+    }
+
+    #[test]
+    fn dropped_paths_are_pasted_escaped_and_space_separated() {
+        let paths = [Path::new("/home/me/My Files/a.txt"), Path::new("/tmp/b")];
+        let expected = if cfg!(windows) {
+            "\"/home/me/My Files/a.txt\" /tmp/b "
+        } else {
+            "/home/me/My\\ Files/a.txt /tmp/b "
+        };
+        assert_eq!(dropped_text(paths), expected);
+        assert_eq!(dropped_text([]), "");
     }
 
     #[test]
