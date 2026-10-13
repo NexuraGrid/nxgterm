@@ -522,6 +522,7 @@ winpty (Windows Server 2016) does not pass images through either.
     targets, built-in box and block glyphs, WezTerm-style title bar, OSC
     window titles ✅
 16. 0.9.1: drag and drop on Wayland ✅
+17. 0.9.2: OSC 52 clipboard writes (copy from ngmux, tmux, nvim) ✅
 
 Planned work is tracked in
 [`openspec/RECOMMENDATIONS.md`](openspec/RECOMMENDATIONS.md).
