@@ -121,6 +121,10 @@ decided by the user before any push.
 
 User authorized (2026-10-13): commit, push, PR, merge and release 0.9.0.
 
+- Delivered: PRs #47-#49 merged, released as 0.9.0 and installed locally.
+  Wayland drop gap fixed in feature `wayland-drop` (0.9.1).
+
 ## Next step
 
-Push, PR, merge, release 0.9.0.
+Done. Known gaps: U+1FB3C+ wedges and powerline E0B4+ from fonts; circle
+button hit area is its square.
