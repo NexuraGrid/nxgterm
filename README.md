@@ -198,9 +198,22 @@ padding = 8                 # pixels around the grid at 100% scale
 columns = 100               # initial size in cells
 rows = 30
 tab_bar = "auto"            # auto (2+ tabs) | always | never
-decorations = "integrated"  # integrated (the tab bar is the title bar) | native
+decorations = "integrated"  # integrated (nxgterm draws the title bar) | native
 opacity = 1.0               # default background opacity, 0.0-1.0
 blur = false                # blur behind a translucent background
+
+[window.title_bar]          # the integrated title bar on Windows and Linux
+button_style = "circles"    # circles | windows (flat, full-height buttons)
+height = 34                 # pixels at 100% scale, never shorter than the font
+show_title = true           # the focused pane's title, centered
+show_icon = true            # the application icon, on the left
+# Unset colors follow the theme: background a little toward the foreground,
+# the foreground, and ANSI yellow, green and red for the buttons.
+# background = "#24273a"
+# foreground = "#cdd6f4"
+# minimize = "#f9e2af"
+# maximize = "#a6e3a1"
+# close = "#f38ba8"
 
 [colors]
 theme = "catppuccin-mocha"  # a built-in theme, or themes/<name>.toml (see below)
@@ -285,8 +298,8 @@ macOS, KDE Plasma (Wayland) and Windows 11 (Acrylic).
 
 The file is reloaded when saved, and so are its imports and its theme file
 (a directory that does not exist yet, such as a new `themes` directory, is
-watched from the next reload). Font, colors, padding, the tab bar, opacity,
-blur, the scrollback limit and key bindings apply at once; `[shell]`, `[renderer]`, the initial
+watched from the next reload). Font, colors, padding, the tab bar, the title
+bar (`[window.title_bar]`), opacity, blur, the scrollback limit and key bindings apply at once; `[shell]`, `[renderer]`, the initial
 `columns`/`rows`, `decorations` and lowering `opacity` from 1.0 (the window is created
 transparent only then) apply on the next start. An invalid file is reported on stderr (with the line and the reason,
 unknown keys included) and the previous settings stay in effect; at startup
@@ -380,18 +393,26 @@ labelled ` N: program `, the current tab highlighted; click a label to
 switch to it. Labels are the program name; titles set by programs (OSC 0/2)
 are not shown yet.
 
-With `window.decorations = "integrated"` (the default) the tab bar replaces
-the system title bar, as in Windows Terminal or a browser. It always shows, even with
-one tab, and has a `+` button after the last tab that opens a new one. Drag
-its empty part to move the window and double-click it to maximize or
-restore. On Windows and Linux it draws minimize, maximize/restore and close
-buttons in the top-right corner, as tall as the bar and at least 46 pixels
-wide (at 100% scale) with vector glyphs that grow with the display scale
-and the bar (close turns red under the pointer), the window keeps a
-drop shadow on Windows, and the outer 5 pixels (at 100% scale) of the window
-resize it, except while maximized; right-clicking the empty bar opens the
-window menu on Windows. On macOS the native window buttons stay at the left
-of the bar and the system resizes the window. Without the system title bar
+With `window.decorations = "integrated"` (the default) nxgterm draws its own
+title bar, as WezTerm does. On Windows and Linux it is a slim band, a little
+lighter (or darker) than the terminal background, with the application icon
+on the left, the window title (the focused pane's title, as on its tab)
+centered and cut with `…` when it would reach the icon or the buttons, and
+minimize, maximize/restore and close buttons on the right. By default they
+are small yellow, green and red circles that show their symbol while the
+pointer is over one of them; `button_style = "windows"` draws flat buttons as
+tall as the band and at least 46 pixels wide (at 100% scale) instead, close
+turning red under the pointer. Height, icon, title and colors are set in
+`[window.title_bar]` and apply on reload. With one tab the band shows just the
+title; with two or more (or `tab_bar = "always"`) the tab bar shows below it,
+with a `+` button after the last tab that opens a new one (`tab_bar =
+"never"` hides it). Drag the empty band (or the empty tab bar) to move the
+window and double-click it to maximize or restore. The window keeps a drop
+shadow on Windows, and the outer 5 pixels (at 100% scale) of the window
+resize it, except while maximized; right-clicking the empty band opens the
+window menu on Windows. On macOS the tab bar is the title bar instead: it
+always shows, with the native window buttons at its left, and the system
+resizes the window. Without the system title bar
 some desktop features are gone: the Windows 11 snap layouts shown when
 hovering the maximize button (dragging to a screen edge still snaps, and
 Win+arrow keys work) and, on Linux, the window manager's title bar menu.

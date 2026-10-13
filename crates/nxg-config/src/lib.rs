@@ -75,11 +75,12 @@ columns = 100
 rows = 30
 # Tab bar above the grid: auto (only with two or more tabs), always or never.
 tab_bar = "auto"
-# Window decorations: "integrated" (the tab bar is the title bar: it always
-# shows, drag it to move the window and double-click it to maximize; on
-# Windows and Linux it draws minimize, maximize and close buttons and the
-# window edges resize it, on macOS the native window buttons stay on its
-# left) or "native" (the system title bar, with the tab bar below it).
+# Window decorations: "integrated" (nxgterm draws the title bar: drag it to
+# move the window and double-click it to maximize; on Windows and Linux it
+# shows the icon, the window title and minimize, maximize and close buttons,
+# with the tab bar below it, and the window edges resize it; on macOS the tab
+# bar is the title bar, with the native window buttons on its left) or
+# "native" (the system title bar, with the tab bar below it).
 decorations = "integrated"
 # Opacity of the default background, from 0.0 (invisible) to 1.0 (opaque).
 # Text, the cursor, colored backgrounds, the selection, the tab bar and
@@ -90,6 +91,27 @@ opacity = 1.0
 # Ask the system to blur what is behind a translucent background (macOS,
 # KDE Plasma on Wayland, Windows 11 Acrylic).
 blur = false
+
+[window.title_bar]
+# The title bar drawn with decorations = "integrated" on Windows and Linux
+# (macOS keeps its native window buttons). Changes apply live.
+# Window buttons: "circles" (small colored circles that show their symbol
+# under the pointer) or "windows" (flat, full-height Windows-style buttons).
+button_style = "circles"
+# Height in pixels at 100% display scale; never shorter than the font.
+height = 34
+# Show the window title (the focused pane's title), centered.
+show_title = true
+# Show the application icon on the left.
+show_icon = true
+# Colors as "#rrggbb" (or "#rgb"). Unset, they follow the theme: the
+# background a little lighter (or darker) than the terminal's, the theme
+# foreground, and ANSI yellow, green and red for the buttons.
+# background = "#24273a"
+# foreground = "#cdd6f4"
+# minimize = "#f9e2af"
+# maximize = "#a6e3a1"
+# close = "#f38ba8"
 
 [colors]
 # Built-in theme: catppuccin-mocha, nxg-dark, nxg-light, tokyo-night,
@@ -289,6 +311,8 @@ pub struct WindowConfig {
     pub opacity: f32,
     /// Ask the system to blur what is behind a translucent background.
     pub blur: bool,
+    /// `[window.title_bar]`: the integrated title bar.
+    pub title_bar: TitleBarConfig,
 }
 
 impl WindowConfig {
@@ -308,8 +332,57 @@ impl Default for WindowConfig {
             decorations: Decorations::Integrated,
             opacity: 1.0,
             blur: false,
+            title_bar: TitleBarConfig::default(),
         }
     }
+}
+
+/// `[window.title_bar]`: the title bar drawn with integrated decorations on
+/// Windows and Linux. Unset colors follow the theme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TitleBarConfig {
+    pub button_style: ButtonStyle,
+    /// Height in pixels at scale 1.0; the renderer keeps it at least as
+    /// tall as the font.
+    pub height: u16,
+    /// Show the window title, centered.
+    pub show_title: bool,
+    /// Show the application icon on the left.
+    pub show_icon: bool,
+    pub background: Option<Rgb>,
+    pub foreground: Option<Rgb>,
+    pub minimize: Option<Rgb>,
+    pub maximize: Option<Rgb>,
+    pub close: Option<Rgb>,
+}
+
+impl Default for TitleBarConfig {
+    fn default() -> Self {
+        Self {
+            button_style: ButtonStyle::Circles,
+            height: 34,
+            show_title: true,
+            show_icon: true,
+            background: None,
+            foreground: None,
+            minimize: None,
+            maximize: None,
+            close: None,
+        }
+    }
+}
+
+/// How the minimize, maximize and close buttons of the integrated title
+/// bar look.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ButtonStyle {
+    /// Small colored circles, their symbols shown under the pointer.
+    #[default]
+    Circles,
+    /// Flat buttons as tall as the bar, as on Windows.
+    Windows,
 }
 
 /// `[colors]`: a built-in theme or theme file plus optional overrides.
@@ -828,6 +901,84 @@ mod tests {
         assert_eq!(decorations("native").unwrap(), Decorations::Native);
         assert_eq!(decorations("integrated").unwrap(), Decorations::Integrated);
         assert!(decorations("none").is_err());
+    }
+
+    #[test]
+    fn the_title_bar_defaults_to_circles_with_title_and_icon() {
+        let title_bar = Config::default().window.title_bar;
+        assert_eq!(title_bar.button_style, ButtonStyle::Circles);
+        assert_eq!(title_bar.height, 34);
+        assert!(title_bar.show_title && title_bar.show_icon);
+        assert_eq!(
+            (
+                title_bar.background,
+                title_bar.foreground,
+                title_bar.minimize,
+                title_bar.maximize,
+                title_bar.close
+            ),
+            (None, None, None, None, None),
+            "colors follow the theme"
+        );
+        assert_eq!(
+            parse("[window.title_bar]\n").unwrap().window.title_bar,
+            title_bar
+        );
+    }
+
+    #[test]
+    fn the_title_bar_table_sits_under_window() {
+        let config = parse(
+            "[window.title_bar]\nbutton_style = \"windows\"\nheight = 40\nshow_title = false\n\
+             show_icon = false\nbackground = \"#101010\"\nforeground = \"#eee\"\n\
+             minimize = \"#ffbd2e\"\nmaximize = \"#28c940\"\nclose = \"#ff5f57\"\n",
+        )
+        .unwrap();
+        let title_bar = config.window.title_bar;
+        assert_eq!(title_bar.button_style, ButtonStyle::Windows);
+        assert_eq!(title_bar.height, 40);
+        assert!(!title_bar.show_title && !title_bar.show_icon);
+        assert_eq!(title_bar.background, Some(Rgb::hex(0x101010)));
+        assert_eq!(title_bar.foreground, Some(Rgb::hex(0xeeeeee)));
+        assert_eq!(title_bar.minimize, Some(Rgb::hex(0xffbd2e)));
+        assert_eq!(title_bar.maximize, Some(Rgb::hex(0x28c940)));
+        assert_eq!(title_bar.close, Some(Rgb::hex(0xff5f57)));
+        // The other window keys are untouched.
+        assert_eq!(config.window.padding, 8);
+    }
+
+    #[test]
+    fn bad_title_bar_values_are_reported() {
+        let error = parse_error("[window.title_bar]\nbutton_style = \"squares\"\n");
+        assert!(
+            error.contains("squares") || error.contains("variant"),
+            "{error}"
+        );
+        assert!(parse("[window.title_bar]\nheight = -1\n").is_err());
+        assert!(parse("[window.title_bar]\nclose = \"red\"\n").is_err());
+        assert!(parse("[window.title_bar]\nshow_title = \"yes\"\n").is_err());
+        assert!(
+            parse("[window.title_bar]\ncolor = \"#fff\"\n").is_err(),
+            "unknown key"
+        );
+    }
+
+    #[test]
+    fn the_sample_documents_the_title_bar() {
+        for key in [
+            "[window.title_bar]",
+            "button_style = \"circles\"",
+            "height = 34",
+            "show_title = true",
+            "show_icon = true",
+            "# background =",
+            "# foreground =",
+            "# minimize =",
+            "# maximize =",
+            "# close =",
+        ] {
+            assert!(DEFAULT_CONFIG_TOML.contains(key), "{key} is not documented");
+        }
     }
 
     #[test]

@@ -12,7 +12,7 @@ use super::device::Gpu;
 use super::format;
 use super::painter::Painter;
 use crate::shape::Shape;
-use crate::style::{Overlay, PaneView, Style, WindowRenderer};
+use crate::style::{Header, Overlay, PaneView, Style, WindowRenderer};
 
 /// GPU renderer presenting to a window surface.
 #[derive(Debug)]
@@ -112,7 +112,7 @@ impl Renderer for GpuRenderer {
     }
 
     fn draw(&mut self, terminal: &Terminal) -> Result<(), RenderError> {
-        self.draw_layers(None, &[PaneView::single(terminal)], None, &[])
+        self.draw_layers(Header::default(), &[PaneView::single(terminal)], None, &[])
     }
 }
 
@@ -127,7 +127,7 @@ impl WindowRenderer for GpuRenderer {
 
     fn draw_layers(
         &mut self,
-        header: Option<&Terminal>,
+        header: Header<'_>,
         panes: &[PaneView<'_>],
         overlay: Option<Overlay<'_>>,
         shapes: &[Shape],

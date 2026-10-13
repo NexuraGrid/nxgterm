@@ -1,24 +1,29 @@
-//! The tab bar as a whole: the tab labels plus, when it is the window's
-//! title bar (`window.decorations = "integrated"`), an inset for the macOS
-//! window buttons, a new-tab button and minimize, maximize and close
-//! buttons. Layout, what a click hits, which window edge a press resizes,
-//! the drawn row and the window buttons' geometry are pure functions, unit
-//! tested.
+//! The window's chrome: the tab bar and, with `window.decorations =
+//! "integrated"`, the title bar. Layout, what a click hits, which window
+//! edge a press resizes, the drawn rows and the window buttons' geometry
+//! are pure functions, unit tested.
 //!
-//! The labels and the new-tab button are text on a one-row terminal. The
-//! window buttons are drawn as [`Shape`]s in window pixels instead: flush
-//! with the top-right corner, as tall as the bar and with vector glyphs,
-//! so they scale with the display and the bar rather than with the font's
-//! glyphs (whose box-drawing and geometric characters vary in size, and
-//! come from fallback fonts shrunk into a cell).
+//! On Windows and Linux the title bar is a band of its own at the window
+//! top, as in WezTerm: the application icon on the left, the window title
+//! centered and minimize, maximize and close buttons on the right, either
+//! small colored circles or flat Windows-style buttons. The tab bar shows
+//! below it only with tabs to switch between. On macOS the tab bar is the
+//! title bar, with an inset for the native window buttons.
+//!
+//! The tab labels and the new-tab button are text on a one-row terminal.
+//! The band is drawn as [`Shape`]s in window pixels instead (its title as a
+//! text mask), so it scales with the display and the configured height
+//! rather than with the font's glyphs.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Instant;
 
+use nxg_config::{ButtonStyle, TabBar};
 use nxg_core::{TermSize, Terminal};
+use nxg_render::paint::dim;
 use nxg_render::palette::{Rgb, rgb};
-use nxg_render::{Mask, Segment, Shape};
+use nxg_render::{Layout, Mask, Segment, Shape};
 use winit::window::ResizeDirection;
 
 use crate::appearance;
@@ -41,6 +46,22 @@ const RESIZE_BORDER: f64 = 5.0;
 /// Width the macOS window buttons (and a margin) take on the left of the
 /// title bar, in logical pixels.
 const MACOS_BUTTONS: f64 = 78.0;
+/// Diameter of the circle buttons, the space between them and their
+/// distance from the right edge, in logical pixels.
+const CIRCLE: f64 = 14.0;
+const CIRCLE_GAP: f64 = 8.0;
+const CIRCLE_MARGIN: f64 = 10.0;
+/// How far a hovered circle moves toward white, and its symbol from the
+/// circle's color toward black.
+const BRIGHTEN: f32 = 0.25;
+const SYMBOL_DARKEN: f32 = 0.6;
+/// Side of the icon and its distance from the left edge, in logical pixels.
+const ICON_SIDE: f64 = 16.0;
+const ICON_MARGIN: f64 = 10.0;
+/// Space between the title and the icon or the buttons, in logical pixels.
+const TITLE_GAP: f64 = 8.0;
+/// Space kept above and below the title's row, in logical pixels.
+const TITLE_MARGIN: f64 = 2.0;
 
 /// What the bar holds besides the tab labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,8 +70,8 @@ pub struct Chrome {
     pub inset: u16,
     /// A `+` button after the last label.
     pub new_tab: bool,
-    /// The first column under the minimize, maximize and close buttons
-    /// (see [`first_button_col`]), when they show.
+    /// The first column under window buttons drawn over the bar, when
+    /// they are.
     pub buttons: Option<u16>,
 }
 
@@ -227,15 +248,6 @@ pub fn button_at(buttons: &[(Button, Rect)], x: f64, y: f64) -> Option<Button> {
         .iter()
         .find(|(_, rect)| rect.contains(x, y))
         .map(|&(button, _)| button)
-}
-
-/// The first bar column, of `cell_width` pixels after `padding`, that the
-/// window `buttons` cover even in part: the bar's text stops before it.
-pub fn first_button_col(buttons: &[(Button, Rect)], padding: u32, cell_width: u32) -> u16 {
-    let left = buttons.iter().map(|(_, rect)| rect.x).min().unwrap_or(0);
-    let room = i64::from(left) - i64::from(padding);
-    let col = room.max(0) / i64::from(cell_width.max(1));
-    col.min(i64::from(u16::MAX)) as u16
 }
 
 /// Side of the glyph box and stroke width, in pixels, of the glyphs on a
@@ -416,6 +428,218 @@ pub fn macos_inset(scale: f64, padding: u32, cell_width: u32) -> u16 {
     cols.min(f64::from(u16::MAX)) as u16
 }
 
+/// Height in pixels of the title bar band configured `height` logical
+/// pixels tall, at `scale`: never shorter than the font's `cell_height`
+/// plus a small margin above and below.
+pub fn band_height(height: u16, scale: f64, cell_height: u32) -> u32 {
+    let scale = appearance::valid_scale(scale);
+    let margin = (TITLE_MARGIN * scale).round() as u32;
+    let wanted = (f64::from(height) * scale).round() as u32;
+    wanted.max(cell_height + 2 * margin)
+}
+
+/// Whether the tab bar row shows with `tabs` open. Below a title bar
+/// `band` (Windows and Linux) it follows `tab_bar`, so one tab shows just
+/// the title; an `integrated` bar without a band (macOS) is the title bar
+/// and always shows.
+pub fn tab_row(band: bool, integrated: bool, tab_bar: TabBar, tabs: usize) -> bool {
+    if band {
+        tab_bar.visible(tabs)
+    } else {
+        integrated || tab_bar.visible(tabs)
+    }
+}
+
+/// Where the grid sits: `base` (the window's cells and padding) pushed
+/// down by a `band` of pixels and the tab bar row, if it shows.
+pub fn grid_layout(base: Layout, band: u32, tab_row: bool) -> Layout {
+    let below_band = Layout {
+        top: base.top + band,
+        ..base
+    };
+    below_band.below(u16::from(tab_row))
+}
+
+/// The window buttons in `style` of a window `window_width` pixels wide
+/// under a `band` pixels tall, at `scale`.
+pub fn buttons(
+    style: ButtonStyle,
+    window_width: u32,
+    band: u32,
+    scale: f64,
+) -> [(Button, Rect); 3] {
+    match style {
+        ButtonStyle::Circles => circle_rects(window_width, band, scale),
+        ButtonStyle::Windows => button_rects(window_width, band, scale),
+    }
+}
+
+/// The minimize, maximize and close circles, left to right, of a window
+/// `window_width` pixels wide under a `band` pixels tall, at `scale`: the
+/// square around each circle, centered in the band and right-aligned with
+/// a margin. The squares are what the pointer hits.
+pub fn circle_rects(window_width: u32, band: u32, scale: f64) -> [(Button, Rect); 3] {
+    let scale = appearance::valid_scale(scale);
+    let side = (CIRCLE * scale).round() as i64;
+    let gap = (CIRCLE_GAP * scale).round() as i64;
+    let margin = (CIRCLE_MARGIN * scale).round() as i64;
+    let y = (i64::from(band) - side).max(0) / 2;
+    let right = i64::from(window_width) - margin;
+    BUTTONS.map(|button| {
+        let from_right = match button {
+            Button::Minimize => 3,
+            Button::Maximize => 2,
+            Button::Close => 1,
+        };
+        let x = right - from_right * side - (from_right - 1) * gap;
+        let rect = Rect {
+            x: x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+            y: y as i32,
+            width: side as u32,
+            height: side as u32,
+        };
+        (button, rect)
+    })
+}
+
+/// What the title bar band `band` pixels tall holds at window pixel `x`,
+/// `y`: a window button, else empty band that moves the window; `None`
+/// below the band.
+pub fn band_region(buttons: &[(Button, Rect)], band: u32, x: f64, y: f64) -> Option<Region> {
+    if let Some(button) = button_at(buttons, x, y) {
+        return Some(Region::Button(button));
+    }
+    (y < f64::from(band)).then_some(Region::Drag)
+}
+
+/// Colors of the title bar band.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Colors {
+    pub background: Rgb,
+    /// The title and the flat buttons' glyphs.
+    pub foreground: Rgb,
+    pub minimize: Rgb,
+    pub maximize: Rgb,
+    pub close: Rgb,
+}
+
+/// `color` lighter, for a hovered circle.
+pub fn brighten(color: Rgb) -> Rgb {
+    dim(color, rgb(255, 255, 255), BRIGHTEN)
+}
+
+/// The window `buttons` (see [`circle_rects`]) as filled circles in their
+/// `colors`, the `hover`ed one brighter. While one is hovered every circle
+/// shows its symbol (see [`glyph`]), as on macOS, in a darker shade of its
+/// color. `maximized` picks the restore symbol.
+pub fn circle_shapes(
+    buttons: &[(Button, Rect)],
+    hover: Option<Button>,
+    maximized: bool,
+    scale: f64,
+    colors: &Colors,
+) -> Vec<Shape> {
+    let color_of = |button| match button {
+        Button::Minimize => colors.minimize,
+        Button::Maximize => colors.maximize,
+        Button::Close => colors.close,
+    };
+    let mut shapes: Vec<Shape> = buttons
+        .iter()
+        .map(|&(button, rect)| {
+            let color = color_of(button);
+            Shape::Mask {
+                x: rect.x,
+                y: rect.y,
+                mask: Arc::new(Mask::disc(rect.width)),
+                color: if hover == Some(button) {
+                    brighten(color)
+                } else {
+                    color
+                },
+            }
+        })
+        .collect();
+    if hover.is_none() {
+        return shapes;
+    }
+    let stroke = appearance::valid_scale(scale).round().max(1.0) as u32;
+    for &(button, rect) in buttons {
+        let side = (f64::from(rect.width) * 0.5).round().max(3.0) as u32;
+        let segments: Vec<Segment> = glyph(button, maximized, side, stroke)
+            .into_iter()
+            .map(|Segment { from, to }| Segment {
+                from: (from.0 + stroke as f32, from.1 + stroke as f32),
+                to: (to.0 + stroke as f32, to.1 + stroke as f32),
+            })
+            .collect();
+        let size = side + 2 * stroke;
+        let inset = rect.width.saturating_sub(side) as i32 / 2 - stroke as i32;
+        shapes.push(Shape::Mask {
+            x: rect.x + inset,
+            y: rect.y + inset,
+            mask: Arc::new(Mask::stroke(size, size, &segments, stroke as f32)),
+            color: dim(color_of(button), rgb(0, 0, 0), SYMBOL_DARKEN),
+        });
+    }
+    shapes
+}
+
+/// Where the icon sits in a band `band` pixels tall at `scale`: near the
+/// left edge, vertically centered, never taller than the band.
+pub fn icon_rect(band: u32, scale: f64) -> Rect {
+    let scale = appearance::valid_scale(scale);
+    let side = ((ICON_SIDE * scale).round() as u32).min(band);
+    Rect {
+        x: (ICON_MARGIN * scale).round() as i32,
+        y: ((band - side) / 2) as i32,
+        width: side,
+        height: side,
+    }
+}
+
+/// The span of window pixels, `left..right`, the title may take: after
+/// the `icon` (or a margin when it is hidden) and before the `buttons`,
+/// with a gap on each side.
+pub fn title_room(icon: Option<Rect>, buttons: &[(Button, Rect)], scale: f64) -> (u32, u32) {
+    let scale = appearance::valid_scale(scale);
+    let gap = (TITLE_GAP * scale).round() as i64;
+    let left = icon.map_or((ICON_MARGIN * scale).round() as i64, |icon| {
+        i64::from(icon.x) + i64::from(icon.width) + gap
+    });
+    let right = buttons
+        .iter()
+        .map(|(_, rect)| i64::from(rect.x))
+        .min()
+        .map_or(left, |x| x - gap);
+    let clamp = |x: i64| x.clamp(0, i64::from(u32::MAX)) as u32;
+    (clamp(left), clamp(right.max(left)))
+}
+
+/// `title` placed on a window `window_width` pixels wide, at one cell of
+/// `cell_width` pixels per char, within `left..right`: centered in the
+/// window and moved aside as little as needed to stay in the span; when it
+/// is still too long it is cut with `…`. Returns what to draw and its left
+/// pixel, or `None` without a title or room for one char.
+pub fn place_title(
+    title: &str,
+    cell_width: u32,
+    window_width: u32,
+    left: u32,
+    right: u32,
+) -> Option<(String, u32)> {
+    let cell = cell_width.max(1);
+    let title: String = title.chars().filter(|c| !c.is_control()).collect();
+    let room = right.saturating_sub(left) / cell;
+    let text = tab_bar::truncate(&title, room as usize);
+    if text.is_empty() {
+        return None;
+    }
+    let width = text.chars().count() as u32 * cell;
+    let centered = window_width.saturating_sub(width) / 2;
+    Some((text, centered.clamp(left, right - width)))
+}
+
 /// Whether a press `now` on the empty bar makes a double click with the
 /// `previous` one.
 pub fn double_click(previous: Option<Instant>, now: Instant) -> bool {
@@ -426,6 +650,7 @@ pub fn double_click(previous: Option<Instant>, now: Instant) -> bool {
 mod tests {
     use super::*;
     use nxg_core::{Color, Flags};
+    use nxg_render::CellSize;
     use std::time::Duration;
 
     /// Window buttons over the last 15 columns of a 40-column bar.
@@ -569,15 +794,6 @@ mod tests {
         assert_eq!(button_at(&buttons, 930.0, 31.9), Some(Button::Maximize));
         assert_eq!(button_at(&buttons, 999.9, 5.0), Some(Button::Close));
         assert_eq!(button_at(&buttons, 970.0, 32.0), None, "below the bar");
-    }
-
-    #[test]
-    fn bar_text_stops_at_the_first_column_under_a_button() {
-        let buttons = button_rects(1000, 32, 1.0);
-        // Minimize starts at 862: (862 - 8) / 10 = column 85, in part.
-        assert_eq!(first_button_col(&buttons, 8, 10), 85);
-        assert_eq!(first_button_col(&button_rects(100, 32, 1.0), 8, 10), 0);
-        assert_eq!(first_button_col(&buttons, 8, 0), 854);
     }
 
     #[test]
@@ -735,6 +951,213 @@ mod tests {
         assert_eq!(at(1.0, 32, false).2, 12);
         let (normal, restore) = (at(2.0, 64, false), at(2.0, 64, true));
         assert_eq!(normal, restore, "same box when maximized");
+    }
+
+    #[test]
+    fn the_band_is_as_tall_as_configured_but_fits_the_font() {
+        assert_eq!(band_height(34, 1.0, 20), 34);
+        assert_eq!(band_height(34, 2.0, 40), 68);
+        assert_eq!(band_height(34, 1.5, 30), 51);
+        // Never shorter than the font plus 2 pixels above and below.
+        assert_eq!(band_height(10, 1.0, 20), 24);
+        assert_eq!(band_height(34, 1.0, 40), 44);
+        assert_eq!(band_height(0, 2.0, 40), 48);
+        assert_eq!(band_height(34, f64::NAN, 20), 34);
+    }
+
+    #[test]
+    fn the_tab_row_shows_below_the_band_only_with_tabs_to_switch() {
+        // Integrated title bar (Windows, Linux): tabs as configured.
+        assert!(!tab_row(true, true, TabBar::Auto, 1), "one tab: title only");
+        assert!(tab_row(true, true, TabBar::Auto, 2));
+        assert!(tab_row(true, true, TabBar::Always, 1));
+        assert!(!tab_row(true, true, TabBar::Never, 3));
+        // macOS: the tab bar is the title bar and always shows.
+        assert!(tab_row(false, true, TabBar::Auto, 1));
+        assert!(tab_row(false, true, TabBar::Never, 1));
+        // Native decorations: tabs as configured.
+        assert!(!tab_row(false, false, TabBar::Auto, 1));
+        assert!(tab_row(false, false, TabBar::Auto, 2));
+    }
+
+    #[test]
+    fn the_grid_sits_below_the_band_and_the_tab_row() {
+        let base = Layout {
+            cell: CellSize {
+                width: 10,
+                height: 20,
+            },
+            padding: 8,
+            left: 0,
+            top: 0,
+        };
+        let one_tab = grid_layout(base, 34, false);
+        assert_eq!(one_tab.top, 34);
+        assert_eq!(one_tab.origin(0, 0), (8, 42));
+        assert_eq!(one_tab.grid_size(1000, 700).rows(), 32);
+        let tabs = grid_layout(base, 34, true);
+        assert_eq!(tabs.top, 54, "one row more");
+        assert_eq!(tabs.grid_size(1000, 700).rows(), 31);
+        assert_eq!(grid_layout(base, 0, true), base.below(1), "macOS, native");
+        assert_eq!(grid_layout(base, 0, false), base);
+    }
+
+    #[test]
+    fn circles_sit_right_aligned_and_centered_in_the_band() {
+        let circles = circle_rects(1000, 34, 1.0);
+        let order: Vec<Button> = circles.iter().map(|&(b, _)| b).collect();
+        assert_eq!(order, BUTTONS);
+        // 14-pixel circles, 8 apart, 10 from the right edge.
+        assert_eq!(
+            rects(&circles),
+            [(932, 10, 14, 14), (954, 10, 14, 14), (976, 10, 14, 14)]
+        );
+        assert_eq!(
+            rects(&circle_rects(2000, 68, 2.0)),
+            [(1864, 20, 28, 28), (1908, 20, 28, 28), (1952, 20, 28, 28)]
+        );
+        assert_eq!(rects(&circle_rects(1000, 35, 1.0))[0].1, 10, "rounded down");
+        assert_eq!(rects(&circle_rects(1000, 34, f64::NAN))[2].2, 14);
+    }
+
+    #[test]
+    fn circles_are_found_by_pixel_at_any_scale() {
+        for scale in [1.0, 1.25, 2.0] {
+            let band = band_height(34, scale, 20);
+            let circles = circle_rects(1600, band, scale);
+            for &(button, rect) in &circles {
+                let (x, y) = (f64::from(rect.x), f64::from(rect.y));
+                let side = f64::from(rect.width);
+                let center = (x + side / 2.0, y + side / 2.0);
+                assert_eq!(button_at(&circles, center.0, center.1), Some(button));
+                assert_eq!(button_at(&circles, x, y), Some(button), "box corner");
+                assert_eq!(button_at(&circles, x - 1.0, center.1), None, "gap");
+                assert_eq!(button_at(&circles, center.0, y + side), None, "below");
+            }
+            let region = |x, y| band_region(&circles, band, x, y);
+            let close = circles[2].1;
+            let (cx, cy) = (f64::from(close.x) + 1.0, f64::from(close.y) + 1.0);
+            assert_eq!(region(cx, cy), Some(Region::Button(Button::Close)));
+            assert_eq!(region(10.0, 1.0), Some(Region::Drag), "empty band");
+            assert_eq!(region(cx - 3.0, cy), Some(Region::Drag), "between circles");
+            assert_eq!(region(10.0, f64::from(band)), None, "below the band");
+        }
+    }
+
+    #[test]
+    fn the_button_style_picks_the_rects() {
+        assert_eq!(
+            buttons(ButtonStyle::Circles, 1000, 34, 1.0),
+            circle_rects(1000, 34, 1.0)
+        );
+        assert_eq!(
+            buttons(ButtonStyle::Windows, 1000, 34, 1.0),
+            button_rects(1000, 34, 1.0)
+        );
+    }
+
+    const BAR: Colors = Colors {
+        background: rgb(30, 30, 46),
+        foreground: rgb(205, 214, 244),
+        minimize: rgb(249, 226, 175),
+        maximize: rgb(166, 227, 161),
+        close: rgb(243, 139, 168),
+    };
+
+    #[test]
+    fn circles_are_colored_discs_with_symbols_under_the_pointer() {
+        let circles = circle_rects(1000, 34, 1.0);
+        let plain = circle_shapes(&circles, None, false, 1.0, &BAR);
+        assert_eq!(plain.len(), 3, "discs only");
+        let colors: Vec<Rgb> = plain
+            .iter()
+            .map(|shape| match shape {
+                Shape::Mask { x, y, mask, color } => {
+                    assert_eq!(mask.width(), 14);
+                    assert!(circles.iter().any(|(_, r)| (r.x, r.y) == (*x, *y)));
+                    *color
+                }
+                other => panic!("disc: {other:?}"),
+            })
+            .collect();
+        assert_eq!(colors, [BAR.minimize, BAR.maximize, BAR.close]);
+
+        let hovered = circle_shapes(&circles, Some(Button::Maximize), false, 1.0, &BAR);
+        assert_eq!(hovered.len(), 6, "discs, then every symbol");
+        let Shape::Mask { color, .. } = &hovered[1] else {
+            panic!("maximize disc: {hovered:?}");
+        };
+        assert_eq!(*color, brighten(BAR.maximize), "hovered disc brightens");
+        assert_ne!(*color, BAR.maximize);
+        let Shape::Mask { color, .. } = &hovered[0] else {
+            panic!("minimize disc: {hovered:?}");
+        };
+        assert_eq!(*color, BAR.minimize, "the others keep their color");
+        for (i, &(_, rect)) in circles.iter().enumerate() {
+            let Shape::Mask { x, y, mask, color } = &hovered[3 + i] else {
+                panic!("symbol: {hovered:?}");
+            };
+            // Centered in its circle, darker than it.
+            let (cx, cy) = (*x + mask.width() as i32 / 2, *y + mask.height() as i32 / 2);
+            assert!((cx - (rect.x + 7)).abs() <= 1, "{cx} in {rect:?}");
+            assert!((cy - (rect.y + 7)).abs() <= 1, "{cy} in {rect:?}");
+            assert!(mask.width() < rect.width);
+            assert_ne!(*color, BAR.close);
+        }
+    }
+
+    #[test]
+    fn the_icon_sits_left_and_the_title_between_it_and_the_buttons() {
+        let icon = icon_rect(34, 1.0);
+        assert_eq!((icon.x, icon.y, icon.width, icon.height), (10, 9, 16, 16));
+        let icon = icon_rect(68, 2.0);
+        assert_eq!((icon.x, icon.y, icon.width, icon.height), (20, 18, 32, 32));
+        let small = icon_rect(12, 1.0);
+        assert_eq!((small.width, small.height), (12, 12), "fits the band");
+        let circles = circle_rects(1000, 34, 1.0);
+        // Icon: 10 + 16 + 8; buttons: 932 - 8.
+        assert_eq!(
+            title_room(Some(icon_rect(34, 1.0)), &circles, 1.0),
+            (34, 924)
+        );
+        assert_eq!(title_room(None, &circles, 1.0), (10, 924));
+    }
+
+    #[test]
+    fn titles_are_centered_in_the_window() {
+        assert_eq!(
+            place_title("zsh", 10, 1000, 34, 924),
+            Some(("zsh".into(), 485))
+        );
+        // Too close to the buttons: moved left, not cut.
+        let title = "a".repeat(15);
+        assert_eq!(
+            place_title(&title, 10, 300, 34, 224),
+            Some((title.clone(), 74))
+        );
+        let title = "b".repeat(11);
+        assert_eq!(
+            place_title(&title, 10, 300, 34, 224),
+            Some((title.clone(), 95))
+        );
+    }
+
+    #[test]
+    fn long_titles_are_cut_with_an_ellipsis_before_the_icon_and_buttons() {
+        let long = "x".repeat(100);
+        let (text, x) = place_title(&long, 10, 1000, 34, 924).unwrap();
+        assert_eq!(text.chars().count(), 89);
+        assert!(text.ends_with('…'));
+        assert_eq!(x, 34);
+        let (text, x) = place_title("~: ngmux - ngmux", 10, 200, 34, 124).unwrap();
+        assert_eq!((text.as_str(), x), ("~: ngmux…", 34));
+        assert_eq!(place_title("zsh", 10, 100, 34, 40), None, "no room");
+        assert_eq!(place_title("", 10, 1000, 34, 924), None, "no title");
+        assert_eq!(
+            place_title("a\x1b[1mb", 10, 1000, 0, 1000).unwrap().0,
+            "a[1mb",
+            "control characters dropped"
+        );
     }
 
     #[test]

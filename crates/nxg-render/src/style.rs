@@ -33,6 +33,41 @@ impl Style {
     }
 }
 
+/// What sits above the panes: a band `top` pixels tall at the window top,
+/// left to the caller's [`Shape`]s (such as an integrated title bar), then
+/// the rows of `rows` (such as the tab bar) at the top of the grid area.
+/// The default is neither: the panes start at the padding.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Header<'a> {
+    pub top: u32,
+    pub rows: Option<&'a Terminal>,
+}
+
+impl<'a> Header<'a> {
+    /// Just the rows of `rows`, without a band.
+    pub fn rows(rows: &'a Terminal) -> Self {
+        Self {
+            top: 0,
+            rows: Some(rows),
+        }
+    }
+
+    /// Where the rows sit, given the window-level `layout`: below the band.
+    pub fn layout(self, layout: Layout) -> Layout {
+        Layout {
+            top: layout.top + self.top,
+            ..layout
+        }
+    }
+
+    /// Where the grid sits, given the window-level `layout`: below the band
+    /// and the rows.
+    pub fn grid(self, layout: Layout) -> Layout {
+        let rows = self.rows.map_or(0, |rows| rows.size().rows());
+        self.layout(layout).below(rows)
+    }
+}
+
 /// A terminal drawn over the grid, such as the command palette, with its
 /// cell `0, 0` at the grid's cell `col`, `row` (see [`Layout::at`]). Every
 /// cell is opaque, default backgrounds included, and it has no images.
@@ -89,15 +124,15 @@ pub trait WindowRenderer: Renderer {
     /// Whether [`Style::background_opacity`] below 1.0 shows: the surface
     /// lets the system blend the window with what is behind it.
     fn translucent(&self) -> bool;
-    /// Draws and presents one frame with the rows of `header` (such as the
-    /// tab bar) at the top of the grid area, `panes` below them, at
-    /// [`Layout::below`] the header's rows, `overlay` on top of them and
-    /// `shapes` over everything. [`Renderer::draw`] is this with one
-    /// [`PaneView::single`]. The cursors of the header and the overlay are
-    /// drawn like any other.
+    /// Draws and presents one frame with the [`Header`] band and rows
+    /// (such as the title bar and the tab bar) at the top, `panes` below
+    /// them (see [`Header::grid`]), `overlay` on top of them and `shapes`
+    /// over everything. [`Renderer::draw`] is this with one
+    /// [`PaneView::single`] and no header. The cursors of the header and
+    /// the overlay are drawn like any other.
     fn draw_layers(
         &mut self,
-        header: Option<&Terminal>,
+        header: Header<'_>,
         panes: &[PaneView<'_>],
         overlay: Option<Overlay<'_>>,
         shapes: &[Shape],

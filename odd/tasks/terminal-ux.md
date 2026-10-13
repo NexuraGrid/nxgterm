@@ -41,7 +41,10 @@ Out of scope: rounded window corners/shadows, ligatures, HTML copy.
 - [x] T1 Drag and drop file paths into the terminal + tests
 - [x] T2 Copy everything: SelectAll default binding, CopyScrollback, copy_on_select target + tests
 - [x] T3 Built-in procedural box/block/sextant/powerline glyphs (CPU + GPU) + tests
-- [ ] T4 WezTerm-style configurable title bar + tests
+- [x] T4 WezTerm-style configurable title bar + tests
+- [ ] T5 Track OSC 0/2 window titles in nxg-core and show them in the
+  title bar and tab labels (gap found in T4: the bar shows only the program
+  name, the reference shows "~: ngmux - ngmux") + tests
 
 ## Route
 
@@ -90,7 +93,20 @@ decided by the user before any push.
   stubs + config compile error; GREEN after. Writer checks: 923/0, clippy
   clean, fmt clean; parent spot check identical. Gaps: U+1FB3C+ wedges and
   powerline E0B4+ still from fonts; thin arcs at 1px look faint.
+  Commit 30114cc; assess medium, slice_budget_reached -> native review of
+  a50bedb..30114cc (T2+T3): granted, reliability lens approved and
+  acknowledged (lineage review-3331e658a891e63b). Reviewed boundary = 30114cc.
+- T4 done (delegated writer): `[window.title_bar]` (button_style
+  circles|windows, height, show_title, show_icon, background, foreground,
+  minimize, maximize, close), own band (34px default, bg = theme bg 8% toward
+  fg), icon left via shape masks, centered/ellipsized title as a text mask,
+  14px circle buttons with hover symbols, tab row below only with 2+ tabs,
+  renderers take `Header { top, rows }`; applies on reload; macOS and native
+  unchanged. RED: compile failures in config/render/nxgterm tests + one
+  failing reload assertion; GREEN after. Writer checks: 943/0, clippy clean,
+  fmt clean, release build ok; parent spot check identical. Not yet seen
+  on screen. Gaps: OSC titles (-> T5), circle hit area is its square.
 
 ## Next step
 
-T4.
+T5.

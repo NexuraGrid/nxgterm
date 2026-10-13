@@ -1,8 +1,9 @@
 //! Config values turned into what renderers draw with: palette, pixel
 //! sizes at the window's scale factor, and font zoom.
 
-use nxg_config::{Colors, Rgb, clamp_font_size};
+use nxg_config::{Colors, Rgb, TitleBarConfig, clamp_font_size};
 use nxg_render::Palette;
+use nxg_render::paint::dim;
 use nxg_render::palette::rgb;
 use winit::window::Theme;
 
@@ -20,6 +21,28 @@ pub fn palette(colors: &Colors) -> Palette {
         ansi: colors.ansi.map(pixel),
         selection_foreground: colors.selection_foreground.map(pixel),
         selection_background: colors.selection_background.map(pixel),
+    }
+}
+
+/// How far the default title bar background moves from the theme
+/// background toward the foreground, so the bar stands apart.
+const TITLE_BAR_TINT: f32 = 0.08;
+
+/// The colors of the integrated title bar: those `config` sets, the rest
+/// from the `theme` (its background tinted toward the foreground, its
+/// foreground, and ANSI yellow, green and red for minimize, maximize and
+/// close).
+pub fn title_bar_colors(config: &TitleBarConfig, theme: &Palette) -> crate::title_bar::Colors {
+    let or = |color: Option<Rgb>, default: u32| color.map_or(default, pixel);
+    crate::title_bar::Colors {
+        background: or(
+            config.background,
+            dim(theme.background, theme.foreground, TITLE_BAR_TINT),
+        ),
+        foreground: or(config.foreground, theme.foreground),
+        minimize: or(config.minimize, theme.ansi[3]),
+        maximize: or(config.maximize, theme.ansi[2]),
+        close: or(config.close, theme.ansi[1]),
     }
 }
 
@@ -123,7 +146,8 @@ pub(crate) fn valid_scale(scale: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nxg_config::{Config, MAX_FONT_SIZE, MIN_FONT_SIZE, THEMES};
+    use nxg_config::{Config, MAX_FONT_SIZE, MIN_FONT_SIZE, THEMES, TitleBarConfig};
+    use nxg_render::paint::dim;
 
     #[test]
     fn nxg_dark_keeps_the_original_palette() {
@@ -162,6 +186,42 @@ mod tests {
         let mut colors = theme("nxg-light");
         colors.background = Rgb::hex(0x202020);
         assert_eq!(window_theme(&colors), Theme::Dark, "background override");
+    }
+
+    #[test]
+    fn title_bar_colors_follow_the_theme_unless_set() {
+        let theme = palette(&Config::default().colors.resolve());
+        let defaults = title_bar_colors(&TitleBarConfig::default(), &theme);
+        assert_eq!(
+            defaults.background,
+            dim(theme.background, theme.foreground, 0.08),
+            "the background nudged toward the foreground"
+        );
+        assert_ne!(defaults.background, theme.background);
+        assert_eq!(defaults.foreground, theme.foreground);
+        assert_eq!(defaults.minimize, theme.ansi[3], "yellow");
+        assert_eq!(defaults.maximize, theme.ansi[2], "green");
+        assert_eq!(defaults.close, theme.ansi[1], "red");
+
+        let config = TitleBarConfig {
+            background: Some(Rgb::hex(0x010203)),
+            foreground: Some(Rgb::hex(0x040506)),
+            minimize: Some(Rgb::hex(0x070809)),
+            maximize: Some(Rgb::hex(0x0a0b0c)),
+            close: Some(Rgb::hex(0x0d0e0f)),
+            ..TitleBarConfig::default()
+        };
+        let set = title_bar_colors(&config, &theme);
+        assert_eq!(
+            [
+                set.background,
+                set.foreground,
+                set.minimize,
+                set.maximize,
+                set.close
+            ],
+            [0x010203, 0x040506, 0x070809, 0x0a0b0c, 0x0d0e0f]
+        );
     }
 
     #[test]

@@ -9,8 +9,8 @@ pub struct Changes {
     pub font_faces: bool,
     /// Configured font size changed: drop any zoom and use the new size.
     pub font_size: bool,
-    /// Font, colors, padding, the tab bar mode or the background opacity
-    /// changed: give the renderer a new style and recompute the grid size.
+    /// Font, colors, padding, the tab bar mode, the title bar or the
+    /// background opacity changed: give the renderer a new style and recompute the grid size.
     pub restyle: bool,
     /// `window.blur` changed: ask the system again.
     pub blur: bool,
@@ -32,6 +32,7 @@ pub fn diff(old: &Config, new: &Config) -> Changes {
         || old.colors != new.colors
         || old.window.padding != new.window.padding
         || old.window.tab_bar != new.window.tab_bar
+        || old.window.title_bar != new.window.title_bar
         || old.window.opacity != new.window.opacity;
     let blur = old.window.blur != new.window.blur;
     let scrollback = old.scrollback != new.scrollback;
@@ -98,6 +99,24 @@ mod tests {
             expected
         );
         assert_eq!(with(|c| c.window.opacity = 0.8), expected);
+    }
+
+    #[test]
+    fn title_bar_changes_restyle_live() {
+        let expected = Changes {
+            restyle: true,
+            ..Changes::default()
+        };
+        assert_eq!(
+            with(|c| c.window.title_bar.button_style = nxg_config::ButtonStyle::Windows),
+            expected
+        );
+        assert_eq!(with(|c| c.window.title_bar.height = 40), expected);
+        assert_eq!(with(|c| c.window.title_bar.show_icon = false), expected);
+        assert_eq!(
+            with(|c| c.window.title_bar.close = Some(nxg_config::Rgb::hex(0xff0000))),
+            expected
+        );
     }
 
     #[test]

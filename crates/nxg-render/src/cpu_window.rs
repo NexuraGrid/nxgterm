@@ -14,7 +14,7 @@ use softbuffer::{Context, SoftBufferError, Surface};
 use crate::frame::Frame;
 use crate::renderer::CpuRenderer;
 use crate::shape::Shape;
-use crate::style::{Overlay, PaneView, Style, WindowRenderer};
+use crate::style::{Header, Overlay, PaneView, Style, WindowRenderer};
 
 /// [`CpuRenderer`] plus a softbuffer surface; works everywhere.
 pub struct CpuWindowRenderer<W: HasDisplayHandle + HasWindowHandle> {
@@ -69,7 +69,7 @@ impl<W: HasDisplayHandle + HasWindowHandle> Renderer for CpuWindowRenderer<W> {
     }
 
     fn draw(&mut self, terminal: &Terminal) -> Result<(), RenderError> {
-        self.draw_layers(None, &[PaneView::single(terminal)], None, &[])
+        self.draw_layers(Header::default(), &[PaneView::single(terminal)], None, &[])
     }
 }
 
@@ -84,7 +84,7 @@ impl<W: HasDisplayHandle + HasWindowHandle> WindowRenderer for CpuWindowRenderer
 
     fn draw_layers(
         &mut self,
-        header: Option<&Terminal>,
+        header: Header<'_>,
         panes: &[PaneView<'_>],
         overlay: Option<Overlay<'_>>,
         shapes: &[Shape],

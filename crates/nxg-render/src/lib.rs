@@ -34,4 +34,4 @@ pub use paint::{CellSize, Layout};
 pub use palette::Palette;
 pub use renderer::CpuRenderer;
 pub use shape::{Mask, Segment, Shape};
-pub use style::{Overlay, PaneView, Style, WindowRenderer};
+pub use style::{Header, Overlay, PaneView, Style, WindowRenderer};

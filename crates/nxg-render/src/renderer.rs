@@ -7,7 +7,7 @@ use crate::images;
 use crate::paint::{self, CellSize, Layout, Look};
 use crate::shape;
 use crate::shape::Shape;
-use crate::style::{Overlay, PaneView, Style};
+use crate::style::{Header, Overlay, PaneView, Style};
 
 /// Software renderer for the terminal grid.
 #[derive(Debug)]
@@ -35,27 +35,34 @@ impl CpuRenderer {
     /// Draws `term` into `frame`; pixels outside the grid (the padding
     /// included) get the background.
     pub fn render(&mut self, term: &Terminal, frame: &mut Frame<'_>) {
-        self.render_layers(None, &[PaneView::single(term)], None, &[], frame);
+        self.render_layers(
+            Header::default(),
+            &[PaneView::single(term)],
+            None,
+            &[],
+            frame,
+        );
     }
 
-    /// Draws the rows of `header` at the top of the grid area, `panes`
-    /// below them (see [`Layout::below`], [`Layout::at`]) and `overlay` over
-    /// the grid and `shapes` over everything. The cursors of the
-    /// header and the overlay are drawn like any other.
+    /// Draws the rows of `header` below its band, `panes` below them (see
+    /// [`Header::grid`], [`Layout::at`]) and `overlay` over the grid and
+    /// `shapes` over everything. The band shows the background until
+    /// `shapes` cover it. The cursors of the header and the overlay are
+    /// drawn like any other.
     pub fn render_layers(
         &mut self,
-        header: Option<&Terminal>,
+        header: Header<'_>,
         panes: &[PaneView<'_>],
         overlay: Option<Overlay<'_>>,
         shapes: &[Shape],
         frame: &mut Frame<'_>,
     ) {
-        let mut layout = self.layout();
+        let window = self.layout();
         frame.clear(self.style.palette.background);
-        if let Some(header) = header {
-            self.paint(header, frame, layout, Look::ACTIVE);
-            layout = layout.below(header.size().rows());
+        if let Some(rows) = header.rows {
+            self.paint(rows, frame, header.layout(window), Look::ACTIVE);
         }
+        let layout = header.grid(window);
         for pane in panes {
             let at = layout.at(pane.col, pane.row);
             self.paint(pane.terminal, frame, at, pane.look());
@@ -316,7 +323,7 @@ mod tests {
         let mut pixels = vec![0; (w * h) as usize];
         let mut frame = Frame::new(&mut pixels, w, h).unwrap();
         renderer.render_layers(
-            Some(&header),
+            Header::rows(&header),
             &[PaneView::single(&term)],
             None,
             &[],
@@ -330,6 +337,46 @@ mod tests {
             "grid below the header"
         );
         assert_eq!(frame.pixel(0, 0), Some(palette.background), "padding");
+    }
+
+    #[test]
+    fn a_top_band_pushes_the_header_rows_and_the_grid_down() {
+        let Some(style) = style(1) else { return };
+        let mut renderer = CpuRenderer::new(style);
+        let cell = renderer.cell_size();
+        let mut rows = Terminal::new(TermSize::new(1, 1).unwrap());
+        rows.advance(b"\x1b[?25l\x1b[41m \x1b[0m");
+        let mut term = Terminal::new(TermSize::new(1, 1).unwrap());
+        term.advance(b"\x1b[?25l\x1b[44m \x1b[0m");
+        let header = Header {
+            top: 6,
+            rows: Some(&rows),
+        };
+        let layout = renderer.layout();
+        assert_eq!(header.layout(layout).top, 6);
+        assert_eq!(
+            header.grid(layout),
+            Layout {
+                top: 6 + cell.height,
+                ..layout
+            }
+        );
+        let (w, h) = header.grid(layout).window_size(term.size());
+        assert_eq!(h, 6 + 2 * cell.height + 2);
+        let mut pixels = vec![0; (w * h) as usize];
+        let mut frame = Frame::new(&mut pixels, w, h).unwrap();
+        renderer.render_layers(header, &[PaneView::single(&term)], None, &[], &mut frame);
+        let palette = Palette::default();
+        assert_eq!(frame.pixel(1, 3), Some(palette.background), "band");
+        assert_eq!(frame.pixel(1, 7), Some(palette.ansi[1]), "header row");
+        assert_eq!(
+            frame.pixel(1, 7 + cell.height),
+            Some(palette.ansi[4]),
+            "grid below the header"
+        );
+        let bare = Header { top: 6, rows: None };
+        assert_eq!(bare.grid(layout).top, 6, "no rows: just the band");
+        assert_eq!(Header::default().grid(layout), layout);
     }
 
     #[test]
@@ -353,7 +400,7 @@ mod tests {
             row: 1,
         };
         renderer.render_layers(
-            Some(&header),
+            Header::rows(&header),
             &[PaneView::single(&term)],
             Some(overlay),
             &[],
@@ -458,7 +505,7 @@ mod tests {
         let (w, h) = (cell.width * cols, cell.height);
         let mut pixels = vec![0; (w * h) as usize];
         let mut frame = Frame::new(&mut pixels, w, h).unwrap();
-        renderer.render_layers(None, panes, None, shapes, &mut frame);
+        renderer.render_layers(Header::default(), panes, None, shapes, &mut frame);
         pixels
     }
 

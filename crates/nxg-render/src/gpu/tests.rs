@@ -17,7 +17,7 @@ use crate::images::tests::encode_base64;
 use crate::palette::{Palette, rgb};
 use crate::renderer::CpuRenderer;
 use crate::shape::{Mask, Segment, Shape};
-use crate::style::{Overlay, PaneView, Style};
+use crate::style::{Header, Overlay, PaneView, Style};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -35,7 +35,7 @@ fn headless_gpu() -> Option<Gpu> {
 
 /// Renders `term` offscreen and reads it back as 0RGB pixels.
 fn render_offscreen(gpu: &Gpu, painter: &mut Painter, term: &Terminal, w: u32, h: u32) -> Vec<u32> {
-    render_offscreen_with(gpu, painter, None, term, None, &[], w, h)
+    render_offscreen_with(gpu, painter, Header::default(), term, None, &[], w, h)
 }
 
 /// [`render_offscreen`] with `header` rows above the grid, `overlay` over
@@ -44,7 +44,7 @@ fn render_offscreen(gpu: &Gpu, painter: &mut Painter, term: &Terminal, w: u32, h
 fn render_offscreen_with(
     gpu: &Gpu,
     painter: &mut Painter,
-    header: Option<&Terminal>,
+    header: Header<'_>,
     term: &Terminal,
     overlay: Option<Overlay<'_>>,
     shapes: &[Shape],
@@ -71,7 +71,7 @@ fn render_offscreen_with(
 fn render_rgba(
     gpu: &Gpu,
     painter: &mut Painter,
-    header: Option<&Terminal>,
+    header: Header<'_>,
     panes: &[PaneView<'_>],
     overlay: Option<Overlay<'_>>,
     shapes: &[Shape],
@@ -183,11 +183,15 @@ fn gpu_output_matches_cpu_renderer() {
     );
     term.extend_selection(term.point_at(1, 1));
     assert!(term.selection().is_some());
-    // A header row (like the tab bar) checks that both push the grid and
-    // its images down the same way.
-    let mut header = Terminal::new(TermSize::new(8, 1).unwrap());
-    header.advance(b"\x1b[?25l\x1b[7m 1: sh \x1b[0m\x1b[90m 2:");
-    let header = Some(&header);
+    // A band (like the integrated title bar) and a header row (like the
+    // tab bar) check that both push the grid and its images down the same
+    // way.
+    let mut rows = Terminal::new(TermSize::new(8, 1).unwrap());
+    rows.advance(b"\x1b[?25l\x1b[7m 1: sh \x1b[0m\x1b[90m 2:");
+    let header = Header {
+        top: 3,
+        rows: Some(&rows),
+    };
     // An overlay (like the command palette) checks that both draw it over
     // the grid and its images, default backgrounds and cursor included.
     let mut boxed = Terminal::new(TermSize::new(5, 2).unwrap());
@@ -198,7 +202,7 @@ fn gpu_output_matches_cpu_renderer() {
         row: 1,
     });
     // A margin right and below the padded grid checks the clear color too.
-    let (w, h) = cpu.layout().below(1).window_size(term.size());
+    let (w, h) = header.grid(cpu.layout()).window_size(term.size());
     let (w, h) = (w + 3, h + 2);
     // Shapes (like the window buttons) check that both draw rectangles
     // and anti-aliased masks the same way, over everything.
@@ -384,7 +388,7 @@ fn translucent_targets_get_a_premultiplied_default_background_only() {
     let pixels = render_rgba(
         &gpu,
         &mut painter,
-        Some(&header),
+        Header::rows(&header),
         &[PaneView::single(&term)],
         None,
         &[],
@@ -413,7 +417,7 @@ fn translucent_targets_get_a_premultiplied_default_background_only() {
     let opaque = render_rgba(
         &gpu,
         &mut painter,
-        Some(&header),
+        Header::rows(&header),
         &[PaneView::single(&term)],
         None,
         &[],
@@ -487,7 +491,7 @@ fn two_panes_with_images_match_the_cpu_renderer_and_keep_their_textures() {
     }];
     let mut expected = vec![0; (w * h) as usize];
     cpu.render_layers(
-        None,
+        Header::default(),
         &panes,
         None,
         &shapes,
@@ -495,10 +499,19 @@ fn two_panes_with_images_match_the_cpu_renderer_and_keep_their_textures() {
     );
 
     let mut painter = Painter::new(&gpu, FORMAT, style(gpu_font));
-    let actual: Vec<u32> = render_rgba(&gpu, &mut painter, None, &panes, None, &shapes, w, h)
-        .into_iter()
-        .map(|[r, g, b, _]| rgb(r, g, b))
-        .collect();
+    let actual: Vec<u32> = render_rgba(
+        &gpu,
+        &mut painter,
+        Header::default(),
+        &panes,
+        None,
+        &shapes,
+        w,
+        h,
+    )
+    .into_iter()
+    .map(|[r, g, b, _]| rgb(r, g, b))
+    .collect();
     assert_eq!(painter.texture_count(), 2, "one texture per pane, same key");
     assert_eq!(gpu.failure(), None);
 

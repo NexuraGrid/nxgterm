@@ -2,8 +2,6 @@
 
 use std::ops::Range;
 
-use nxg_core::Terminal;
-
 use super::atlas::{Atlas, Source};
 use super::device::Gpu;
 use super::format;
@@ -13,7 +11,7 @@ use crate::images::{self as placements, ImageDraw};
 use crate::paint::{CellSize, Layout};
 use crate::palette::Palette;
 use crate::shape::Shape;
-use crate::style::{Overlay, PaneView, Style};
+use crate::style::{Header, Overlay, PaneView, Style};
 
 /// Instance capacity of the first vertex buffer; it grows on demand.
 const INITIAL_INSTANCES: u64 = 4096;
@@ -181,9 +179,9 @@ impl Painter {
     }
 
     /// Draws `panes` into `target` (`width x height` pixels) and submits,
-    /// with the rows of `header` at the top of the grid area, the panes
-    /// below them (see [`Layout::below`], [`Layout::at`]), `overlay` over the
-    /// grid and `shapes` over everything.
+    /// with the rows of `header` below its band, the panes below them (see
+    /// [`Header::grid`], [`Layout::at`]), `overlay` over the grid and
+    /// `shapes` over everything.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
@@ -191,13 +189,12 @@ impl Painter {
         target: &wgpu::TextureView,
         width: u32,
         height: u32,
-        header: Option<&Terminal>,
+        header: Header<'_>,
         panes: &[PaneView<'_>],
         overlay: Option<Overlay<'_>>,
         shapes: &[Shape],
     ) {
-        let rows = header.map_or(0, |header| header.size().rows());
-        let grid = self.style.layout().below(rows);
+        let grid = header.grid(self.style.layout());
         let Frame {
             quads: instances,
             panes: ranges,
@@ -354,7 +351,7 @@ impl Painter {
     fn build(
         &mut self,
         queue: &wgpu::Queue,
-        header: Option<&Terminal>,
+        header: Header<'_>,
         panes: &[PaneView<'_>],
         overlay: Option<Overlay<'_>>,
         shapes: &[Shape],
@@ -409,7 +406,7 @@ struct PaneQuads {
 #[allow(clippy::too_many_arguments)]
 fn frame_quads(
     panes: &[PaneView<'_>],
-    header: Option<&Terminal>,
+    header: Header<'_>,
     overlay: Option<Overlay<'_>>,
     shapes: &[Shape],
     palette: &Palette,
@@ -418,7 +415,7 @@ fn frame_quads(
     opaque_header: bool,
     slot: &mut dyn FnMut(Source<'_>) -> Result<Option<GlyphSlot>, AtlasFull>,
 ) -> Result<Frame, AtlasFull> {
-    let grid = layout.below(header.map_or(0, |header| header.size().rows()));
+    let grid = header.grid(layout);
     let glyph = &mut |ch, bold, wide| slot(Source::Glyph(ch, bold, wide));
     let mut frame = Frame::default();
     for pane in panes {
@@ -441,11 +438,11 @@ fn frame_quads(
         frame.quads.extend(quads.instances);
     }
     frame.tail_start = frame.quads.len();
-    if let Some(header) = header {
+    if let Some(rows) = header.rows {
         let extra = instance::build(
-            header,
+            rows,
             palette,
-            layout,
+            header.layout(layout),
             baseline,
             opaque_header,
             &mut *glyph,
@@ -550,7 +547,7 @@ mod tests {
     use super::*;
     use crate::palette::{Palette, rgb};
     use crate::style::PaneView;
-    use nxg_core::TermSize;
+    use nxg_core::{TermSize, Terminal};
 
     const CELL: CellSize = CellSize {
         width: 10,
@@ -603,7 +600,7 @@ mod tests {
         let mut slot = slot;
         let frame = frame_quads(
             &panes,
-            None,
+            Header::default(),
             None,
             &shapes,
             &Palette::default(),
