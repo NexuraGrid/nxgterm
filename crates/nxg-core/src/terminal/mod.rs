@@ -4,6 +4,7 @@ use crate::apc::{ApcFilter, Event};
 use crate::cell::{Cell, Color, Flags, Marks};
 use crate::image::{ImageStore, Placement, SrcRect};
 use crate::kitty::{self, Graphics};
+use crate::ports::ClipboardKind;
 use crate::sixel::{self, SixelDecoder};
 use crate::{CellPixels, TermSize};
 use unicode_normalization::char::compose;
@@ -11,6 +12,7 @@ use unicode_width::UnicodeWidthChar;
 
 mod edit;
 mod modes;
+mod osc52;
 mod screen;
 mod scrollback;
 mod selection;
@@ -91,6 +93,8 @@ struct State {
     selection: Option<selection::Selected>,
     /// The window title set by OSC 0/2 and its XTWINOPS stack.
     titles: Titles,
+    /// Clipboard writes requested with OSC 52, waiting for the app.
+    clipboard: osc52::Requests,
 }
 
 impl Terminal {
@@ -118,6 +122,7 @@ impl Terminal {
                 bracketed_paste: false,
                 selection: None,
                 titles: Titles::default(),
+                clipboard: osc52::Requests::default(),
             },
         }
     }
@@ -175,6 +180,12 @@ impl Terminal {
     /// Whether [`Terminal::title`] changed since the last call.
     pub fn take_title_changed(&mut self) -> bool {
         self.state.titles.take_changed()
+    }
+
+    /// Clipboard writes the child requested with OSC 52 (see the `osc52`
+    /// module), at most one per kind. Drains the queue.
+    pub fn take_clipboard_requests(&mut self) -> Vec<(ClipboardKind, String)> {
+        self.state.clipboard.take()
     }
 
     /// The cells of `row`. Panics if `row` is out of bounds.
@@ -534,10 +545,13 @@ impl vte::Perform for State {
     }
 
     /// OSC 0 and OSC 2 set the window title (vte splits it on `;`, so the
-    /// pieces are joined back). OSC 1 (icon name) and the rest are ignored.
+    /// pieces are joined back). OSC 52 asks to set the clipboard. OSC 1
+    /// (icon name) and the rest are ignored.
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
-        if let [b"0" | b"2", text @ ..] = params {
-            self.titles.set(&text.join(&b';'));
+        match params {
+            [b"0" | b"2", text @ ..] => self.titles.set(&text.join(&b';')),
+            [b"52", selection, data] => self.clipboard.handle(selection, data),
+            _ => {}
         }
     }
 
