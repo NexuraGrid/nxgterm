@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use fontdb::{Database, Family, Query, Weight};
 
+use crate::builtin;
 use crate::paint::CellSize;
 
 /// Default font size in pixels.
@@ -298,6 +299,9 @@ pub struct Font {
     cell: CellSize,
     /// Distance from the cell top to the baseline in pixels.
     baseline: i32,
+    /// Draw box drawing, block, sextant and powerline chars with
+    /// [`builtin`] instead of the faces.
+    builtin: bool,
     cache: HashMap<(char, bool, bool), Glyph>,
 }
 
@@ -348,6 +352,7 @@ impl Font {
             px,
             cell,
             baseline: line.ascent.ceil() as i32,
+            builtin: true,
             cache: HashMap::new(),
         })
     }
@@ -358,6 +363,15 @@ impl Font {
 
     pub fn baseline(&self) -> i32 {
         self.baseline
+    }
+
+    /// Whether box drawing, block, sextant and powerline chars are drawn
+    /// built in, filling the cell exactly (the default), or taken from
+    /// the faces like any other char.
+    pub fn with_builtin_glyphs(mut self, on: bool) -> Self {
+        self.builtin = on;
+        self.cache.clear();
+        self
     }
 
     /// Searches `fallbacks`, in order, for glyphs this font lacks.
@@ -373,9 +387,13 @@ impl Font {
     /// color-only emoji) is skipped. Without any, the primary face draws
     /// its missing-glyph box. A `wide` glyph (a double-width cell) is
     /// fitted into two cells. A zero-width char (a combining mark, see
-    /// [`Font::mark`]) is centered in its base's cells instead. The result is
-    /// cached per character.
+    /// [`Font::mark`]) is centered in its base's cells instead. Box drawing,
+    /// block, sextant and powerline chars are drawn by [`builtin`] to fill
+    /// the cells exactly, unless turned off (see
+    /// [`Font::with_builtin_glyphs`]); bold does not change them. The
+    /// result is cached per character.
     pub fn glyph(&mut self, ch: char, bold: bool, wide: bool) -> &Glyph {
+        let bold = bold && !self.is_builtin(ch);
         let key = (ch, bold, wide);
         if !self.cache.contains_key(&key) {
             let glyph = self.rasterize(ch, bold, wide);
@@ -384,7 +402,24 @@ impl Font {
         &self.cache[&key]
     }
 
+    fn is_builtin(&self, ch: char) -> bool {
+        self.builtin && builtin::supports(ch)
+    }
+
     fn rasterize(&self, ch: char, bold: bool, wide: bool) -> Glyph {
+        if self.is_builtin(ch)
+            && let Some(coverage) = builtin::coverage(ch, self.cell, wide)
+        {
+            // Placed at baseline - ymin - height: the top of the cell.
+            let height = self.cell.height as usize;
+            return Glyph {
+                xmin: 0,
+                ymin: self.baseline - height as i32,
+                width: coverage.len() / height.max(1),
+                height,
+                coverage,
+            };
+        }
         let primary = self.primary(bold);
         if nxg_core::cell::is_zero_width(ch) {
             return self.mark(ch, bold, 1 + u32::from(wide));
@@ -705,6 +740,34 @@ mod tests {
         let bold = test_font::box_font(&['M'], 600);
         let mut font = Font::from_bytes(regular, 0, Some((bold, 0)), PX).unwrap();
         assert!(inked(font.glyph('A', true, false)));
+    }
+
+    #[test]
+    fn box_and_block_chars_are_built_in_and_fill_the_cell() {
+        let mut font = box_fonts(&['M', '█', '─'], &[]);
+        let cell = font.cell_size();
+        let (width, height) = (cell.width as usize, cell.height as usize);
+        // Placed at pen x + xmin and baseline - ymin - height: the cell origin.
+        let top = font.baseline() - cell.height as i32;
+        for bold in [false, true] {
+            let full = font.glyph('█', bold, false);
+            assert_eq!((full.xmin, full.ymin), (0, top), "bold {bold}");
+            assert_eq!((full.width, full.height), (width, height));
+            assert!(full.coverage.iter().all(|&a| a == 255));
+        }
+        let wide = font.glyph('█', false, true);
+        assert_eq!((wide.width, wide.height), (2 * width, height));
+        let line = font.glyph('─', false, false);
+        assert_eq!((line.xmin, line.width), (0, width), "edge to edge");
+    }
+
+    #[test]
+    fn built_in_glyphs_can_be_turned_off() {
+        let mut font = box_fonts(&['M', '█'], &[]).with_builtin_glyphs(false);
+        let full = font.glyph('█', false, false);
+        assert_eq!((full.xmin, full.width), (2, 8), "the font's own box");
+        let mut font = font.with_builtin_glyphs(true);
+        assert_eq!(font.glyph('█', false, false).xmin, 0);
     }
 
     fn names(names: &[&str]) -> Vec<String> {

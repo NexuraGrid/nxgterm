@@ -190,6 +190,32 @@ mod tests {
     }
 
     #[test]
+    fn built_in_block_glyphs_fill_their_cell_exactly() {
+        use crate::test_font::box_font;
+        let font = Font::from_bytes(box_font(&['M', '█'], 600), 0, None, 20.0).unwrap();
+        let mut renderer = CpuRenderer::new(Style {
+            font,
+            palette: Palette::default(),
+            padding: 0,
+            background_opacity: 1.0,
+        });
+        let cell = renderer.cell_size();
+        let mut term = Terminal::new(TermSize::new(2, 1).unwrap());
+        term.advance("\x1b[?25l█".as_bytes());
+        let (w, h) = (cell.width * 2, cell.height);
+        let mut pixels = vec![0; (w * h) as usize];
+        let mut frame = Frame::new(&mut pixels, w, h).unwrap();
+        renderer.render(&term, &mut frame);
+        let fg = Palette::default().foreground;
+        for y in 0..h {
+            for x in 0..w {
+                let inked = frame.pixel(x, y) == Some(fg);
+                assert_eq!(inked, x < cell.width, "pixel {x},{y}");
+            }
+        }
+    }
+
+    #[test]
     fn combining_marks_are_drawn_centered_over_their_base_cells() {
         use crate::font::parse_face;
         use crate::test_font::{box_font, ink_font};

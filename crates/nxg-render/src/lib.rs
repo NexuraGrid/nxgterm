@@ -12,6 +12,7 @@
 //! colors, padding) applies without recreating the surface, and draw
 //! [`Shape`]s (such as the window buttons) in window pixels over the rest.
 
+pub mod builtin;
 pub mod cpu_window;
 pub mod font;
 pub mod frame;

@@ -1861,7 +1861,9 @@ fn build_style(
     scale: f64,
 ) -> Result<Style, FontError> {
     Ok(Style {
-        font: faces.font(appearance::font_px(font_size, scale))?,
+        font: faces
+            .font(appearance::font_px(font_size, scale))?
+            .with_builtin_glyphs(config.font.builtin_box_drawing),
         palette: appearance::palette(&config.colors.resolve()),
         padding: appearance::padding_px(config.window.padding, scale),
         background_opacity: config.window.opacity,

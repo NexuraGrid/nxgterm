@@ -115,6 +115,9 @@ mod tests {
         assert!(size.restyle && size.font_size && !size.font_faces);
         let fallback = with(|c| c.font.fallback = vec!["Symbols Nerd Font Mono".into()]);
         assert!(fallback.restyle && fallback.font_faces && !fallback.font_size);
+        let builtin = with(|c| c.font.builtin_box_drawing = false);
+        assert!(builtin.restyle && !builtin.font_faces && !builtin.font_size);
+        assert!(builtin.on_restart.is_empty(), "applies on reload");
     }
 
     #[test]

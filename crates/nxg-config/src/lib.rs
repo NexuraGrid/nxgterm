@@ -62,6 +62,10 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# nxgterm configuration.
 # fallback = ["Symbols Nerd Font Mono"]
 # Size in points at 100% display scale (clamped to 6-72).
 size = 14.0
+# Draw box drawing, block element, sextant and powerline characters
+# built in, so they fill the cell exactly and join up across cells,
+# instead of taking them from the fonts above.
+builtin_box_drawing = true
 
 [window]
 # Space around the grid, in pixels at 100% display scale.
@@ -250,6 +254,9 @@ pub struct FontConfig {
     /// Points at scale 1.0, already clamped with [`clamp_font_size`].
     #[serde(deserialize_with = "font_size")]
     pub size: f32,
+    /// Draw box drawing, block, sextant and powerline chars built in to
+    /// fill the cell exactly instead of taking them from the fonts.
+    pub builtin_box_drawing: bool,
 }
 
 impl Default for FontConfig {
@@ -258,6 +265,7 @@ impl Default for FontConfig {
             family: Vec::new(),
             fallback: Vec::new(),
             size: DEFAULT_FONT_SIZE,
+            builtin_box_drawing: true,
         }
     }
 }
@@ -1064,6 +1072,14 @@ mod tests {
             let error = dim(value).unwrap_err().to_string();
             assert!(error.contains("invalid inactive_dim"), "{error}");
         }
+    }
+
+    #[test]
+    fn built_in_box_drawing_is_on_by_default_and_documented() {
+        assert!(Config::default().font.builtin_box_drawing);
+        let config = parse("[font]\nbuiltin_box_drawing = false\n").unwrap();
+        assert!(!config.font.builtin_box_drawing);
+        assert!(DEFAULT_CONFIG_TOML.contains("builtin_box_drawing = true"));
     }
 
     #[test]

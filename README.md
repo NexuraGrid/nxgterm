@@ -191,6 +191,7 @@ family = "JetBrains Mono"   # or a list, e.g. ["JetBrainsMono Nerd Font", "Fira 
                             # the first installed one wins, else the system monospace font
 fallback = ["Symbols Nerd Font Mono"]  # for glyphs the family lacks, e.g. icons
 size = 14.0                 # points at 100% scale, clamped to 6-72
+builtin_box_drawing = true  # draw box/block/sextant/powerline chars to fill the cell
 
 [window]
 padding = 8                 # pixels around the grid at 100% scale

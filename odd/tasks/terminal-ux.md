@@ -40,7 +40,7 @@ Out of scope: rounded window corners/shadows, ligatures, HTML copy.
 
 - [x] T1 Drag and drop file paths into the terminal + tests
 - [x] T2 Copy everything: SelectAll default binding, CopyScrollback, copy_on_select target + tests
-- [ ] T3 Built-in procedural box/block/sextant/powerline glyphs (CPU + GPU) + tests
+- [x] T3 Built-in procedural box/block/sextant/powerline glyphs (CPU + GPU) + tests
 - [ ] T4 WezTerm-style configurable title bar + tests
 
 ## Route
@@ -80,7 +80,17 @@ decided by the user before any push.
   Writer checks: cargo test 899/0, clippy -D warnings clean, fmt clean.
   Parent spot check: same results re-run. Note: with clipboard/both,
   select_all also copies to the clipboard (shared copy-on-select path).
+  Commit 7e67081; assess medium, under_budget (pending in slice).
+- T3 done (delegated writer): new `crates/nxg-render/src/builtin.rs`
+  (table-driven box drawing, blocks, sextants, powerline E0B0–E0B3, cell-sized
+  coverage, shared rounded edges, 4x4 supersampled arcs/diagonals);
+  `Font::with_builtin_glyphs`, built-in glyphs placed at the cell origin
+  (xmin 0, ymin = baseline - cell.height); `font.builtin_box_drawing`
+  (default true, applies on reload). RED: 22 nxg-render tests failing on
+  stubs + config compile error; GREEN after. Writer checks: 923/0, clippy
+  clean, fmt clean; parent spot check identical. Gaps: U+1FB3C+ wedges and
+  powerline E0B4+ still from fonts; thin arcs at 1px look faint.
 
 ## Next step
 
-T3.
+T4.

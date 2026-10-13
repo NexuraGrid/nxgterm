@@ -58,6 +58,7 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | `font.family` | string or list of strings, first installed one wins; blank names dropped | system monospace |
 | `font.fallback` | list of family names searched per missing glyph; blank names dropped | `[]` (built-in defaults still apply) |
 | `font.size` | integer or float points, clamped to 6-72; non-finite = 14 | `14.0` |
+| `font.builtin_box_drawing` | bool; draw box drawing (U+2500-257F), block elements (U+2580-259F), sextants (U+1FB00-1FB3B) and powerline separators (U+E0B0-E0B3) built in to fill the cell exactly, instead of from the fonts; applies on reload | `true` |
 | `window.padding` | u16 logical pixels | `8` |
 | `window.columns`, `window.rows` | non-zero u16 initial cells | `100`, `30` |
 | `window.tab_bar` | `auto` (two or more tabs), `always`, `never` | `auto` |
