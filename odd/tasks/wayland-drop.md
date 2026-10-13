@@ -30,7 +30,7 @@ cursor. Windows, macOS and X11 already deliver `DroppedFile` (T1 of
 ## Tasks
 
 - [x] W1 Wayland drag and drop + uri-list parsing + tests + docs
-- [ ] W2 Release 0.9.1 (version, README, Fedora changelog, tag, manifests) and install locally
+- [x] W2 Release 0.9.1 (version, README, Fedora changelog, tag, manifests) and install locally
 
 ## Route
 
@@ -72,6 +72,13 @@ merge and release 0.9.1 (2026-10-13).
   kept raw, `file:/path` and own-hostname URIs unsupported, 1 MiB cap may
   cut the last path; seats never released.
 
+- W2 done (inline): fix PR #50 (merge d7fc6a0), release PR #51 (merge
+  7671c19), tag v0.9.1 (release workflow green, 12 assets), manifests PR #52
+  (merge 98e6ec3). Installed locally from the verified tarball:
+  `nxgterm --version` -> 0.9.1. README already documents Wayland drop and the
+  0.9.1 roadmap entry.
+
 ## Next step
 
-W2.
+Manual drop test by the user on KDE Wayland (restart nxgterm first). Optional
+follow-ups listed under W1.
