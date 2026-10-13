@@ -23,6 +23,7 @@ mod tabs;
 mod throttle;
 mod title_bar;
 mod watch;
+mod wayland_drop;
 
 use std::env;
 use std::error::Error;

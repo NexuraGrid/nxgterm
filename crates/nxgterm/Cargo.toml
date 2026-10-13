@@ -20,6 +20,11 @@ nxg-config.workspace = true
 notify.workspace = true
 winit.workspace = true
 
+# Drag and drop on Wayland, which winit leaves out: joins winit's
+# connection (`system`), with libwayland loaded at runtime like winit does.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+wayland-client = { version = "0.31.15", features = ["system", "dlopen"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_System_Console"] }
 

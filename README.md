@@ -367,6 +367,11 @@ characters, escape included, removed. Programs that enable bracketed paste
 command does not run by itself. When a program uses the mouse, hold `Shift`
 to select or middle-click paste instead.
 
+Files dropped on the window (X11, Wayland, Windows, macOS) paste their
+paths into the focused pane, escaped for the shell (quoted on Windows) and
+followed by a space, so shells and agents such as Claude Code take them as
+arguments.
+
 ### Command palette
 
 `Ctrl+Shift+P` opens a box over the terminal listing every action with its
