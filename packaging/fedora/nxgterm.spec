@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           nxgterm
-Version:        0.9.0
+Version:        0.9.1
 Release:        1%{?dist}
 Summary:        Fast, configurable, cross-platform terminal emulator
 
@@ -79,6 +79,9 @@ cargo test --release --locked --workspace
 %{_datadir}/%{name}/
 
 %changelog
+* Tue Oct 13 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.9.1-1
+- Drag and drop of files on Wayland
+
 * Tue Oct 13 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.9.0-1
 - Drag and drop of file paths; copy scrollback and copy-on-select targets;
   built-in box, block, sextant and powerline glyphs; WezTerm-style

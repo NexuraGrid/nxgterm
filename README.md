@@ -515,6 +515,7 @@ winpty (Windows Server 2016) does not pass images through either.
 15. 0.9.0: drag and drop of file paths, copy scrollback and copy-on-select
     targets, built-in box and block glyphs, WezTerm-style title bar, OSC
     window titles ✅
+16. 0.9.1: drag and drop on Wayland ✅
 
 Planned work is tracked in
 [`openspec/RECOMMENDATIONS.md`](openspec/RECOMMENDATIONS.md).
