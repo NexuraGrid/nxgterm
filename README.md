@@ -191,15 +191,29 @@ family = "JetBrains Mono"   # or a list, e.g. ["JetBrainsMono Nerd Font", "Fira 
                             # the first installed one wins, else the system monospace font
 fallback = ["Symbols Nerd Font Mono"]  # for glyphs the family lacks, e.g. icons
 size = 14.0                 # points at 100% scale, clamped to 6-72
+builtin_box_drawing = true  # draw box/block/sextant/powerline chars to fill the cell
 
 [window]
 padding = 8                 # pixels around the grid at 100% scale
 columns = 100               # initial size in cells
 rows = 30
 tab_bar = "auto"            # auto (2+ tabs) | always | never
-decorations = "integrated"  # integrated (the tab bar is the title bar) | native
+decorations = "integrated"  # integrated (nxgterm draws the title bar) | native
 opacity = 1.0               # default background opacity, 0.0-1.0
 blur = false                # blur behind a translucent background
+
+[window.title_bar]          # the integrated title bar on Windows and Linux
+button_style = "circles"    # circles | windows (flat, full-height buttons)
+height = 34                 # pixels at 100% scale, never shorter than the font
+show_title = true           # the focused pane's title, centered
+show_icon = true            # the application icon, on the left
+# Unset colors follow the theme: background a little toward the foreground,
+# the foreground, and ANSI yellow, green and red for the buttons.
+# background = "#24273a"
+# foreground = "#cdd6f4"
+# minimize = "#f9e2af"
+# maximize = "#a6e3a1"
+# close = "#f38ba8"
 
 [colors]
 theme = "catppuccin-mocha"  # a built-in theme, or themes/<name>.toml (see below)
@@ -222,7 +236,7 @@ backend = "auto"            # auto | gpu | cpu
 lines = 10000               # history kept on the main screen; 0 disables it
 
 [selection]
-copy_on_select = true       # selected text goes to PRIMARY (Linux only)
+copy_on_select = "primary"  # "primary" (Linux only), "clipboard", "both" or "off"
 
 [keybindings]
 "ctrl+shift+r" = "reload_config"  # "chord" = "action", added to the defaults
@@ -284,8 +298,8 @@ macOS, KDE Plasma (Wayland) and Windows 11 (Acrylic).
 
 The file is reloaded when saved, and so are its imports and its theme file
 (a directory that does not exist yet, such as a new `themes` directory, is
-watched from the next reload). Font, colors, padding, the tab bar, opacity,
-blur, the scrollback limit and key bindings apply at once; `[shell]`, `[renderer]`, the initial
+watched from the next reload). Font, colors, padding, the tab bar, the title
+bar (`[window.title_bar]`), opacity, blur, the scrollback limit and key bindings apply at once; `[shell]`, `[renderer]`, the initial
 `columns`/`rows`, `decorations` and lowering `opacity` from 1.0 (the window is created
 transparent only then) apply on the next start. An invalid file is reported on stderr (with the line and the reason,
 unknown keys included) and the previous settings stay in effect; at startup
@@ -310,7 +324,9 @@ the defaults are used instead.
 | `Ctrl+Shift+P` | `command_palette`: list and run every action |
 | `Ctrl+Shift+C` (`Cmd+C` on macOS) | `copy`: the selection to the clipboard |
 | `Ctrl+Shift+V` (`Cmd+V` on macOS), `Shift+Insert` | `paste`: the clipboard into the shell |
-| (unbound) | `select_all`, `reload_config`, `equalize_panes` |
+| `Ctrl+Shift+A` (`Cmd+A` on macOS) | `select_all`: the whole history and screen |
+| (unbound) | `copy_scrollback`: the whole history and screen to the clipboard, keeping the selection |
+| (unbound) | `reload_config`, `equalize_panes` |
 
 Bound keys are handled by the terminal and never reach the shell (the
 scrolling keys still do in full-screen programs, which have no history).
@@ -336,8 +352,13 @@ Selected text stays selected while the view scrolls and output moves it into
 the history; output that changes a selected line, a resize or switching
 screens clears it. Copied text has trailing blanks trimmed and lines that
 wrapped automatically joined. `Ctrl+C` stays an interrupt for the shell, and
-copy without a selection does nothing. On Linux (X11 and Wayland) every
-selection is also copied to the PRIMARY selection (`selection.copy_on_select`).
+copy without a selection does nothing. `copy_scrollback` copies everything
+the pane holds, history included, without changing the selection.
+
+`selection.copy_on_select` picks where every finished selection is copied:
+`"primary"` (the default, also `true`) for the PRIMARY selection on Linux
+(X11 and Wayland; nothing on other systems), `"clipboard"` for the
+clipboard, `"both"`, or `"off"` (also `false`).
 Words stop at spaces and ``()[]{}<>'"`,;:│``, so paths select whole.
 
 Pasted text has its line breaks sent as Enter (`\r`) and other control
@@ -368,22 +389,32 @@ exits with the last one. `Alt+N` goes to tab N (`Alt+9` past the last tab
 goes to the last).
 
 With two or more tabs (see `window.tab_bar`) a bar takes the top row,
-labelled ` N: program `, the current tab highlighted; click a label to
-switch to it. Labels are the program name; titles set by programs (OSC 0/2)
-are not shown yet.
+labelled ` N: title `, the current tab highlighted; click a label to
+switch to it. A label is the title the focused pane's program set (OSC 0 or
+OSC 2, e.g. `~: ngmux - ngmux`), or the program name until it sets one or
+after it sets an empty one. The OS window title (taskbar, window switcher)
+follows the focused pane's title too.
 
-With `window.decorations = "integrated"` (the default) the tab bar replaces
-the system title bar, as in Windows Terminal or a browser. It always shows, even with
-one tab, and has a `+` button after the last tab that opens a new one. Drag
-its empty part to move the window and double-click it to maximize or
-restore. On Windows and Linux it draws minimize, maximize/restore and close
-buttons in the top-right corner, as tall as the bar and at least 46 pixels
-wide (at 100% scale) with vector glyphs that grow with the display scale
-and the bar (close turns red under the pointer), the window keeps a
-drop shadow on Windows, and the outer 5 pixels (at 100% scale) of the window
-resize it, except while maximized; right-clicking the empty bar opens the
-window menu on Windows. On macOS the native window buttons stay at the left
-of the bar and the system resizes the window. Without the system title bar
+With `window.decorations = "integrated"` (the default) nxgterm draws its own
+title bar, as WezTerm does. On Windows and Linux it is a slim band, a little
+lighter (or darker) than the terminal background, with the application icon
+on the left, the window title (the focused pane's title, as on its tab)
+centered and cut with `…` when it would reach the icon or the buttons, and
+minimize, maximize/restore and close buttons on the right. By default they
+are small yellow, green and red circles that show their symbol while the
+pointer is over one of them; `button_style = "windows"` draws flat buttons as
+tall as the band and at least 46 pixels wide (at 100% scale) instead, close
+turning red under the pointer. Height, icon, title and colors are set in
+`[window.title_bar]` and apply on reload. With one tab the band shows just the
+title; with two or more (or `tab_bar = "always"`) the tab bar shows below it,
+with a `+` button after the last tab that opens a new one (`tab_bar =
+"never"` hides it). Drag the empty band (or the empty tab bar) to move the
+window and double-click it to maximize or restore. The window keeps a drop
+shadow on Windows, and the outer 5 pixels (at 100% scale) of the window
+resize it, except while maximized; right-clicking the empty band opens the
+window menu on Windows. On macOS the tab bar is the title bar instead: it
+always shows, with the native window buttons at its left, and the system
+resizes the window. Without the system title bar
 some desktop features are gone: the Windows 11 snap layouts shown when
 hovering the maximize button (dragging to a screen edge still snaps, and
 Win+arrow keys work) and, on Linux, the window manager's title bar menu.

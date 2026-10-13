@@ -6,6 +6,7 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
+use crate::font::Font;
 use crate::frame::Frame;
 use crate::palette::Rgb;
 
@@ -84,6 +85,21 @@ impl Mask {
         Self::new(width, height, coverage)
     }
 
+    /// A filled circle `diameter` pixels wide on a square mask, its edge
+    /// anti-aliased with a one-pixel ramp.
+    pub fn disc(diameter: u32) -> Self {
+        let radius = diameter as f32 / 2.0;
+        let mut coverage = Vec::with_capacity(diameter as usize * diameter as usize);
+        for y in 0..diameter {
+            for x in 0..diameter {
+                let (dx, dy) = (x as f32 + 0.5 - radius, y as f32 + 0.5 - radius);
+                let alpha = (radius - (dx * dx + dy * dy).sqrt() + 0.5).clamp(0.0, 1.0);
+                coverage.push((alpha * 255.0).round() as u8);
+            }
+        }
+        Self::new(diameter, diameter, coverage)
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -122,6 +138,35 @@ impl Segment {
         let across = (rx * uy - ry * ux).abs() - half;
         along.max(across)
     }
+}
+
+/// `text` written with `font` on one row of its cells, one cell per char,
+/// as a mask the row's size: glyphs sit on the font's baseline and ink
+/// past the row is cut. Lets text such as a window title be drawn as a
+/// [`Shape`], over shapes drawn before it.
+pub fn text_mask(font: &mut Font, text: &str) -> Mask {
+    let cell = font.cell_size();
+    let baseline = i64::from(font.baseline());
+    let cols = text.chars().count() as u32;
+    let (width, height) = (cols * cell.width, cell.height);
+    let mut coverage = vec![0u8; width as usize * height as usize];
+    for (i, ch) in text.chars().enumerate() {
+        let glyph = font.glyph(ch, false, false);
+        let left = i as i64 * i64::from(cell.width) + i64::from(glyph.xmin);
+        let top = baseline - i64::from(glyph.ymin) - glyph.height as i64;
+        for (j, &alpha) in glyph.coverage.iter().enumerate() {
+            let x = left + (j % glyph.width.max(1)) as i64;
+            let y = top + (j / glyph.width.max(1)) as i64;
+            if alpha > 0
+                && (0..i64::from(width)).contains(&x)
+                && (0..i64::from(height)).contains(&y)
+            {
+                let pixel = &mut coverage[(y * i64::from(width) + x) as usize];
+                *pixel = (*pixel).max(alpha);
+            }
+        }
+    }
+    Mask::new(width, height, coverage)
 }
 
 /// Paints `shapes` over `frame`, in order.
@@ -232,6 +277,47 @@ mod tests {
         };
         let mask = Mask::stroke(3, 3, &[across, down], 1.0);
         assert_eq!(rows(&mask), [[0, 255, 0], [255, 255, 255], [0, 255, 0]]);
+    }
+
+    #[test]
+    fn discs_are_round_symmetric_and_anti_aliased() {
+        let disc = Mask::disc(14);
+        assert_eq!((disc.width(), disc.height()), (14, 14));
+        let at = |x: usize, y: usize| disc.coverage()[y * 14 + x];
+        assert_eq!(at(7, 7), 255, "center");
+        assert_eq!(at(0, 0), 0, "corner");
+        assert!(at(0, 7) > 0 && at(0, 7) < 255, "anti-aliased edge");
+        for y in 0..14 {
+            for x in 0..14 {
+                assert_eq!(at(x, y), at(13 - x, y), "mirrored at {x},{y}");
+                assert_eq!(at(x, y), at(y, x), "transposed at {x},{y}");
+            }
+        }
+        assert_eq!(Mask::disc(0).coverage(), [] as [u8; 0]);
+    }
+
+    #[test]
+    fn text_masks_put_one_char_per_cell_on_the_baseline() {
+        use crate::font::Font;
+        use crate::test_font::box_font;
+        let mut font = Font::from_bytes(box_font(&['M'], 600), 0, None, 20.0).unwrap();
+        let cell = font.cell_size();
+        let mask = text_mask(&mut font, "M M");
+        assert_eq!((mask.width(), mask.height()), (3 * cell.width, cell.height));
+        let inked = |col: u32| {
+            let (x0, x1) = (col * cell.width, (col + 1) * cell.width);
+            mask.coverage()
+                .chunks(mask.width() as usize)
+                .any(|row| row[x0 as usize..x1 as usize].iter().any(|&a| a > 0))
+        };
+        assert!(inked(0) && !inked(1) && inked(2));
+        let one = text_mask(&mut font, "M");
+        let row = |mask: &Mask, y: usize, from: usize| {
+            mask.coverage()[y * mask.width() as usize + from..][..cell.width as usize].to_vec()
+        };
+        let y = cell.height as usize / 2;
+        assert_eq!(row(&mask, y, 2 * cell.width as usize), row(&one, y, 0));
+        assert_eq!(text_mask(&mut font, "").width(), 0);
     }
 
     #[test]

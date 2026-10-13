@@ -82,11 +82,12 @@ pub fn tab_at(labels: &[Label], col: u16) -> Option<usize> {
 }
 
 /// The bar column under the pointer at `x`, `y` window pixels, or `None`
-/// when the pointer is below the bar. `layout` is the window's layout
-/// without the bar (`top` 0); the padding above the bar counts as bar.
+/// when the pointer is above or below the bar. `layout` is where the bar
+/// sits: the window's layout, its `top` below the title bar band if any;
+/// the padding above the bar counts as bar.
 pub fn column_at(layout: Layout, cols: u16, x: f64, y: f64) -> Option<u16> {
     let bottom = f64::from(layout.padding + layout.top + layout.cell.height);
-    if y >= bottom {
+    if y < f64::from(layout.top) || y >= bottom {
         return None;
     }
     let col = ((x - f64::from(layout.padding)) / f64::from(layout.cell.width.max(1))).floor();
@@ -186,6 +187,12 @@ mod tests {
         assert_eq!(column_at(layout, 8, 26.0, 24.9), Some(2));
         assert_eq!(column_at(layout, 8, 999.0, 10.0), Some(7));
         assert_eq!(column_at(layout, 8, 26.0, 25.0), None, "grid row 0");
+        // Below a 30-pixel title bar band: the band is not the tab bar.
+        let below = Layout { top: 30, ..layout };
+        assert_eq!(column_at(below, 8, 26.0, 29.9), None, "band");
+        assert_eq!(column_at(below, 8, 26.0, 30.0), Some(2), "padding");
+        assert_eq!(column_at(below, 8, 26.0, 54.9), Some(2));
+        assert_eq!(column_at(below, 8, 26.0, 55.0), None, "grid row 0");
     }
 
     #[test]

@@ -12,6 +12,7 @@
 //! colors, padding) applies without recreating the surface, and draw
 //! [`Shape`]s (such as the window buttons) in window pixels over the rest.
 
+pub mod builtin;
 pub mod cpu_window;
 pub mod font;
 pub mod frame;
@@ -33,4 +34,4 @@ pub use paint::{CellSize, Layout};
 pub use palette::Palette;
 pub use renderer::CpuRenderer;
 pub use shape::{Mask, Segment, Shape};
-pub use style::{Overlay, PaneView, Style, WindowRenderer};
+pub use style::{Header, Overlay, PaneView, Style, WindowRenderer};

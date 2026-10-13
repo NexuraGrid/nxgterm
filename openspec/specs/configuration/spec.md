@@ -58,10 +58,16 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | `font.family` | string or list of strings, first installed one wins; blank names dropped | system monospace |
 | `font.fallback` | list of family names searched per missing glyph; blank names dropped | `[]` (built-in defaults still apply) |
 | `font.size` | integer or float points, clamped to 6-72; non-finite = 14 | `14.0` |
+| `font.builtin_box_drawing` | bool; draw box drawing (U+2500-257F), block elements (U+2580-259F), sextants (U+1FB00-1FB3B) and powerline separators (U+E0B0-E0B3) built in to fill the cell exactly, instead of from the fonts; applies on reload | `true` |
 | `window.padding` | u16 logical pixels | `8` |
 | `window.columns`, `window.rows` | non-zero u16 initial cells | `100`, `30` |
 | `window.tab_bar` | `auto` (two or more tabs), `always`, `never` | `auto` |
-| `window.decorations` | `integrated` (the tab bar is the title bar) or `native` (system title bar) | `integrated` |
+| `window.decorations` | `integrated` (nxgterm draws the title bar) or `native` (system title bar) | `integrated` |
+| `window.title_bar.button_style` | `circles` or `windows` | `circles` |
+| `window.title_bar.height` | u16 logical pixels, never shorter than the font's cell plus 2 logical pixels above and below | `34` |
+| `window.title_bar.show_title`, `show_icon` | bool | `true`, `true` |
+| `window.title_bar.background`/`foreground` | `#rrggbb` or `#rgb` | theme background moved 8% toward the foreground, theme foreground |
+| `window.title_bar.minimize`/`maximize`/`close` | `#rrggbb` or `#rgb` | ANSI yellow, green, red of the theme |
 | `window.opacity` | integer or float opacity of the default background, clamped to 0.0-1.0; `nan`/`inf` are errors | `1.0` |
 | `window.blur` | bool; ask the system to blur behind a translucent background | `false` |
 | `colors.theme` | theme file name in `themes/`, else built-in theme name (case-insensitive) | `catppuccin-mocha` |
@@ -71,7 +77,7 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | `shell.program`, `shell.args` | string; blank = unset / list | platform default / `[]` |
 | `renderer.backend` | `auto` \| `gpu` \| `cpu` | `auto` |
 | `scrollback.lines` | usize history lines; `0` disables the scrollback | `10000` |
-| `selection.copy_on_select` | bool; copy finished selections to PRIMARY (Linux X11/Wayland only, ignored elsewhere) | `true` |
+| `selection.copy_on_select` | `primary` \| `clipboard` \| `both` \| `off`, or bool (`true` = `primary`, `false` = `off`); where finished selections are copied (PRIMARY on Linux X11/Wayland only, ignored elsewhere) | `primary` |
 | `keybindings` | table of `"chord" = "action"` (or `"none"`), merged over the defaults | see Key bindings |
 
 `--print-config` MUST print a documented sample that parses to exactly the
@@ -167,8 +173,8 @@ MUST be watched (so editors that save by rename are handled; directories
 that do not exist yet are tried again after each reload), events for other
 files, reads and access-time updates MUST be ignored, and bursts MUST be debounced to one reload after
 200 ms of quiet. Font family, fallback families, font size, colors, padding,
-`window.tab_bar` and `window.opacity` (on a window created transparent) MUST
-apply immediately (restyle and refit the grid); `window.blur` MUST be asked of
+`window.tab_bar`, `[window.title_bar]` and `window.opacity` (on a window
+created transparent) MUST apply immediately (restyle and refit the grid); `window.blur` MUST be asked of
 the system again; `scrollback.lines` MUST apply
 immediately, dropping the oldest lines beyond a lower limit; `[keybindings]`
 MUST apply to the next key press. Changes to `[shell]`,
@@ -235,27 +241,44 @@ protocol, the Acrylic system backdrop on Windows 11.
 
 With `window.decorations = "native"` the window MUST keep the system title
 bar and borders and the tab bar MUST behave as `window.tab_bar` says. With
-`integrated`, applied at start, the tab bar MUST be the window's title bar:
+`integrated`, applied at start, nxgterm MUST draw the title bar:
 
-- It MUST always show, whatever `window.tab_bar` says, and the initial window
-  size MUST include its row.
 - On Windows and Linux the window MUST be created without decorations (on
-  Windows with the undecorated drop shadow) and the bar MUST end with
-  minimize, maximize/restore and close buttons that act when the left button
-  is released over the one it was pressed on; the button under the pointer
-  MUST be highlighted, close in red. The buttons MUST sit flush with the
-  window's top-right corner, span the bar's height and be at least 46
-  logical pixels wide (46:32 on a taller bar), with anti-aliased vector
-  glyphs (a line, a square, two overlapping squares while maximized, an X)
-  that scale with the display scale and the bar height, never with the
-  font's glyphs.
+  Windows with the undecorated drop shadow) and the title bar MUST be a band
+  at the window top, `window.title_bar.height` logical pixels tall (never
+  shorter than the font's cell plus 2 logical pixels above and below), in
+  `window.title_bar.background`. It MUST show the application icon on its
+  left (`show_icon`), the focused pane's title (the same text as its tab
+  label) centered in the window (`show_title`), moved aside as little as
+  needed to clear the icon and the buttons and cut with `…` when it still
+  does not fit, and minimize, maximize/restore and close buttons on its
+  right that act when the left button is released over the one it was
+  pressed on. The initial window size MUST include the band.
+- With `button_style = "circles"` the buttons MUST be anti-aliased filled
+  circles 14 logical pixels wide, 8 apart and 10 from the right edge,
+  vertically centered, in the `minimize`, `maximize` and `close` colors;
+  the one under the pointer MUST be brighter and, while one is under the
+  pointer, every circle MUST show its symbol (a line, a square or two
+  overlapping squares while maximized, an X) in a darker shade of its
+  color. The square around each circle is what the pointer hits.
+- With `button_style = "windows"` the buttons MUST sit flush with the
+  window's top-right corner, span the band's height and be at least 46
+  logical pixels wide (46:32 on a taller band), with anti-aliased vector
+  glyphs that scale with the display scale and the band height, never with
+  the font's glyphs; the button under the pointer MUST be highlighted, close
+  in red.
+- The tab bar MUST show as a row below the band as `window.tab_bar` says
+  (with `auto` and one tab only the band shows), and the grid MUST sit
+  below both.
 - On macOS the window MUST keep its frame with a transparent, hidden title
-  and full-size content; the bar MUST leave room on its left for the native
-  window buttons and MUST NOT draw its own.
+  and full-size content; the tab bar MUST be the title bar, always show
+  (the initial window size including its row), leave room on its left for
+  the native window buttons and MUST NOT draw its own.
 - A `+` button after the last tab, when it fits, MUST open a new tab.
-- A left press on the empty bar MUST move the window; a second one within
-  the double-click time MUST maximize or restore it instead. A right press
-  there SHOULD open the system window menu (Windows).
+- A left press on the empty band or the empty tab bar MUST move the window;
+  a second one within the double-click time MUST maximize or restore it
+  instead. A right press there SHOULD open the system window menu
+  (Windows).
 - Outside macOS and while not maximized or fullscreen, a left press within
   5 logical pixels of a window edge (corners twice as far along the edges)
   MUST resize the window from that edge or corner, and the pointer MUST
@@ -264,10 +287,20 @@ bar and borders and the tab bar MUST behave as `window.tab_bar` says. With
 - Clicking a tab label MUST still switch to it, and key bindings MUST NOT
   change.
 
-#### Scenario: One tab with an integrated title bar on Windows
-- GIVEN `[window] decorations = "integrated"` on Windows
-- WHEN nxgterm starts with one tab
-- THEN the window has no system title bar, the bar shows ` 1: pwsh `, `+` and the three window buttons, and the grid is below it
+#### Scenario: One tab with an integrated title bar on Linux
+- GIVEN `[window] decorations = "integrated"` on Linux and the defaults
+- WHEN nxgterm starts with one tab running fish
+- THEN the window has no system title bar, a 34-pixel band shows the icon, `fish` centered and three colored circles on the right, there is no tab bar, and the grid is below the band
+
+#### Scenario: A second tab
+- GIVEN the window above
+- WHEN a second tab opens
+- THEN the tab bar shows ` 1: fish ` and ` 2: fish ` with `+` in a row below the band and the grid loses one row
+
+#### Scenario: Flat buttons
+- GIVEN `[window.title_bar] button_style = "windows"`
+- WHEN the config is saved
+- THEN the circles are replaced by full-height flat buttons without a restart
 
 #### Scenario: Resizing from an edge
 - GIVEN an integrated title bar on Linux and a program with mouse reporting on
@@ -296,17 +329,20 @@ Actions MUST have stable snake_case names: `zoom_in`, `zoom_out`,
 `reset_zoom`, `scroll_page_up`, `scroll_page_down`, `scroll_to_top`,
 `scroll_to_bottom`, `new_tab`, `close_tab`, `next_tab`, `previous_tab`,
 `goto_tab_1`..`goto_tab_9`, `command_palette`, `copy`, `paste`,
-`select_all` and `reload_config`, each with a title and a category for
+`select_all`, `copy_scrollback` and `reload_config`, each with a title and a category for
 listing. The defaults MUST be: Ctrl (Cmd on
 macOS) with `=` or `+` for `zoom_in`, `-` for `zoom_out` and `0` for
 `reset_zoom`; Shift+PageUp/PageDown/Home/End for the scroll actions;
 Ctrl+Shift+T/W for `new_tab`/`close_tab`; Ctrl+Tab and Ctrl+Shift+Tab for
 `next_tab`/`previous_tab`; Alt+1..9 for `goto_tab_N`; Ctrl+Shift+P for
 `command_palette`; Ctrl+Shift+C for `copy` and Ctrl+Shift+V for `paste`
-(Cmd+C and Cmd+V on macOS), plus Shift+Insert for `paste`. `select_all` and
-`reload_config` MUST be unbound by default. Ctrl+C and Ctrl+V MUST reach
-the shell. `copy` without a selection MUST do nothing, and MUST NOT write to
-the PTY.
+(Cmd+C and Cmd+V on macOS), plus Shift+Insert for `paste`; Ctrl+Shift+A
+(Cmd+A on macOS) for `select_all`. `copy_scrollback` and `reload_config`
+MUST be unbound by default. Ctrl+C, Ctrl+V and Ctrl+A MUST reach the shell.
+`copy` without a selection MUST do nothing, and MUST NOT write to the PTY.
+`copy_scrollback` MUST copy the focused pane's history and screen text to
+the clipboard (soft-wrapped lines joined, trailing blanks and blank rows
+below the output trimmed) without changing the selection.
 
 `[keybindings]` entries MUST be added over the defaults; `"none"` MUST
 remove a binding. Chords are modifiers (`ctrl`, `alt`, `shift`,
@@ -344,6 +380,17 @@ of its shortcut (e.g. `Ctrl+Shift+T`) MUST be listable.
 - WHEN Ctrl+C is pressed
 - THEN the shell receives ETX and the clipboard is unchanged
 - AND Ctrl+Shift+C copies the selected text
+
+#### Scenario: Copy the whole scrollback
+- GIVEN `[keybindings] "ctrl+shift+s" = "copy_scrollback"`, output in the history and a selection
+- WHEN Ctrl+Shift+S is pressed
+- THEN the clipboard holds the history and screen text
+- AND the selection is unchanged
+
+#### Scenario: Copy on select to the clipboard
+- GIVEN `[selection] copy_on_select = "clipboard"` on any system
+- WHEN a mouse selection ends
+- THEN the selected text is in the clipboard
 
 ### Requirement: Command-line interface
 

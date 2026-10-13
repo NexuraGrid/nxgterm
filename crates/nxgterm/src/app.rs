@@ -9,15 +9,19 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
-use nxg_config::{Backend, Bindings, Config, Decorations, FontConfig, TabBar};
+use nxg_config::{
+    Backend, Bindings, ButtonStyle, Config, CopyOnSelect, Decorations, FontConfig, TabBar,
+    TitleBarConfig,
+};
 use nxg_core::fallback::{self, Init};
 use nxg_core::mouse::{MouseAction, MouseButton, MouseEvent};
 use nxg_core::ports::{ChildProcess, Clipboard, ClipboardKind, PtyControl, RenderError, Renderer};
 use nxg_core::{CellPixels, TermSize, Terminal, WinSize};
 use nxg_pty::ShellCommand;
+use nxg_render::paint::dim;
 use nxg_render::{
-    CellSize, CpuWindowRenderer, FontError, FontFaces, GpuRenderer, Layout, Overlay, PaneView,
-    Shape, Style, WindowRenderer,
+    CellSize, CpuWindowRenderer, Font, FontError, FontFaces, GpuRenderer, Header, Layout, Mask,
+    Overlay, PaneView, Shape, Style, WindowRenderer,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -55,8 +59,8 @@ pub enum UserEvent {
 struct Pane {
     terminal: Terminal,
     pty: Box<dyn PtyControl>,
-    /// Label on the tab bar while the pane has focus: the program name
-    /// (OSC 0/2 titles are not supported yet).
+    /// The program name: the label while the child sets no title of its
+    /// own (see [`Pane::label`]).
     title: String,
     /// Sizes the pty has not been told yet while a divider is dragged.
     resize: Throttle<WinSize>,
@@ -85,10 +89,23 @@ struct Session {
     pane_ids: PaneIds,
     /// When the tab bar shows; the grid is one row shorter while it does.
     tab_bar: TabBar,
-    /// The tab bar is the window's title bar (`window.decorations =
-    /// "integrated"` at start): it always shows, moves the window and,
-    /// except on macOS, has the window buttons and resizing edges.
+    /// The window has no system title bar (`window.decorations =
+    /// "integrated"` at start). Except on macOS it draws its own title bar
+    /// band, with the window buttons, and resizes from its edges; on macOS
+    /// the tab bar is the title bar and always shows. Either moves the
+    /// window.
     integrated: bool,
+    /// How the integrated title bar looks.
+    title_bar: TitleBarConfig,
+    /// The current style's font, to write the window title on the title
+    /// bar band.
+    font: Font,
+    /// The last title drawn on the band, with its mask.
+    title_mask: Option<(String, Arc<Mask>)>,
+    /// The title last given to the OS window.
+    window_title: String,
+    /// The icon's shapes for the last place it was drawn at.
+    icon_shapes: Option<(Rect, Vec<Shape>)>,
     /// The pointer in window pixels.
     cursor: (f64, f64),
     /// The window edge under the pointer, shown with a resize cursor.
@@ -207,16 +224,18 @@ impl App {
         let style = build_style(&faces, config, config.font.size, scale)?;
 
         let initial = TermSize::new(config.window.columns.get(), config.window.rows.get())?;
-        // The integrated bar is part of the window: add its row.
-        let (width, height) = style
-            .layout()
-            .below(u16::from(integrated))
-            .window_size(initial);
+        // The integrated title bar is part of the window: add its band, or
+        // the tab bar row it is on macOS.
+        let band = band_height(integrated, &config.window.title_bar, &style, scale);
+        let tab_row = title_bar::tab_row(band > 0, integrated, config.window.tab_bar, 1);
+        let (width, height) =
+            title_bar::grid_layout(style.layout(), band, tab_row).window_size(initial);
         // May be ignored (tiling window managers) or applied later through
         // a `Resized` event; the grid follows the actual size either way.
         let _ = window.request_inner_size(PhysicalSize::new(width, height));
 
         let padding = style.padding;
+        let font = style.font.clone();
         let mut renderer = select_renderer(&window, &style, config.renderer.backend, transparent)?;
         let pixels = window.inner_size();
         renderer.resize(pixels.width, pixels.height);
@@ -233,6 +252,11 @@ impl App {
             pane_ids: PaneIds::default(),
             tab_bar: config.window.tab_bar,
             integrated,
+            title_bar: config.window.title_bar,
+            font,
+            title_mask: None,
+            window_title: "nxgterm".into(),
+            icon_shapes: None,
             cursor: (0.0, 0.0),
             resize_hover: None,
             bar_hover: None,
@@ -507,6 +531,10 @@ impl App {
                 self.select_all();
                 return true;
             }
+            Action::CopyScrollback => {
+                self.copy_scrollback();
+                return true;
+            }
             _ => {}
         }
         if let Some(command) = tab::command(action) {
@@ -559,6 +587,7 @@ impl App {
             Action::Copy
             | Action::Paste
             | Action::SelectAll
+            | Action::CopyScrollback
             | Action::CommandPalette
             | Action::ZoomIn
             | Action::ZoomOut
@@ -637,6 +666,21 @@ impl App {
         }
     }
 
+    /// Copies the whole history and screen of the focused pane to the
+    /// clipboard, leaving its selection alone.
+    fn copy_scrollback(&mut self) {
+        let text = self
+            .session
+            .as_ref()
+            .and_then(|session| tab::focused(&session.tabs))
+            .and_then(|pane| pane.terminal.all_text());
+        if let Some(text) = text {
+            if let Err(error) = self.clipboard.set_text(ClipboardKind::Clipboard, text) {
+                eprintln!("nxgterm: {error}");
+            }
+        }
+    }
+
     /// Pastes the text of the clipboard `kind` into the focused pane.
     fn paste(&mut self, kind: ClipboardKind) {
         let text = match self.clipboard.get_text(kind) {
@@ -706,6 +750,7 @@ impl App {
             }
             if changes.restyle {
                 session.tab_bar = new.window.tab_bar;
+                session.title_bar = new.window.title_bar;
                 session.restyle(&new);
             }
             if self.config.colors != new.colors {
@@ -829,6 +874,13 @@ impl ApplicationHandler<UserEvent> for App {
                 session.restyle(config);
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
+            WindowEvent::DroppedFile(path) => {
+                // One event per file: each path is pasted quoted and followed
+                // by a space, so agents (Claude Code...) and shells receive it.
+                let text = nxg_core::paste::dropped_path(&path.to_string_lossy(), cfg!(windows));
+                session.paste(&text);
+                session.window.focus_window();
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 let cell = layout(session.renderer.as_ref(), session.padding).cell;
                 let lines = session.wheel.lines(delta, cell.height);
@@ -954,7 +1006,17 @@ impl ApplicationHandler<UserEvent> for App {
 
 const MAX_FRAME_RETRIES: u8 = 3;
 
+/// How far a hovered Windows-style button's background moves from the
+/// title bar background toward its foreground.
+const WINDOWS_HOVER: f32 = 0.15;
+
 impl Pane {
+    /// What the tab bar and the title bar show for the pane: the title
+    /// the child set (OSC 0/2), else the program name.
+    fn label(&self) -> &str {
+        self.terminal.title().unwrap_or(&self.title)
+    }
+
     /// Writes input for the child.
     fn send(&mut self, bytes: &[u8]) {
         if let Err(error) = self.pty.write_all(bytes) {
@@ -1013,7 +1075,8 @@ impl Session {
         if !responses.is_empty() {
             pane.send(&responses);
         }
-        if visible {
+        // A new title shows on the tab bar even for a pane off screen.
+        if visible || pane.terminal.take_title_changed() {
             self.window.request_redraw();
         }
     }
@@ -1309,21 +1372,42 @@ impl Session {
         }
     }
 
-    /// Where the grid sits in the window, below the tab bar if it shows.
+    /// Where the grid sits in the window, below the title bar band and the
+    /// tab bar if they show.
     fn grid_layout(&self) -> Layout {
         self.grid_layout_for(self.tabs.len())
     }
 
-    /// Whether the tab bar shows with `tabs` tabs open: always when it is
-    /// the title bar.
+    /// Height in pixels of the integrated title bar band: 0 without one
+    /// (native decorations, or macOS, where the tab bar is the title bar).
+    fn band(&self) -> u32 {
+        let cell = self.renderer.cell_size().1;
+        if self.integrated && !MACOS {
+            title_bar::band_height(self.title_bar.height, self.scale, cell)
+        } else {
+            0
+        }
+    }
+
+    /// Whether the tab bar shows with `tabs` tabs open (see
+    /// [`title_bar::tab_row`]).
     fn bar_visible(&self, tabs: usize) -> bool {
-        self.integrated || self.tab_bar.visible(tabs)
+        title_bar::tab_row(self.band() > 0, self.integrated, self.tab_bar, tabs)
     }
 
     /// [`Session::grid_layout`] with `tabs` tabs open.
     fn grid_layout_for(&self, tabs: usize) -> Layout {
-        let bar = u16::from(self.bar_visible(tabs));
-        layout(self.renderer.as_ref(), self.padding).below(bar)
+        let base = layout(self.renderer.as_ref(), self.padding);
+        title_bar::grid_layout(base, self.band(), self.bar_visible(tabs))
+    }
+
+    /// Where the tab bar sits: below the title bar band, if any.
+    fn bar_layout(&self) -> Layout {
+        title_bar::grid_layout(
+            layout(self.renderer.as_ref(), self.padding),
+            self.band(),
+            false,
+        )
     }
 
     /// Follows the pointer at window pixel `x`, `y`: remembers it and
@@ -1373,57 +1457,52 @@ impl Session {
         self.grid_layout().grid_size(pixels.width, pixels.height)
     }
 
-    /// What the tab bar holds besides the labels.
+    /// What the tab bar holds besides the labels: with integrated
+    /// decorations a new-tab button and, on macOS, where it is the title
+    /// bar, an inset for the window buttons.
     fn chrome(&self) -> Chrome {
         if !self.integrated {
             return Chrome::NATIVE;
         }
-        let cell = layout(self.renderer.as_ref(), self.padding).cell;
         let inset = if MACOS {
+            let cell = layout(self.renderer.as_ref(), self.padding).cell;
             title_bar::macos_inset(self.scale, self.padding, cell.width)
         } else {
             0
         };
-        let buttons = self
-            .window_buttons()
-            .map(|buttons| title_bar::first_button_col(&buttons, self.padding, cell.width));
         Chrome {
             inset,
             new_tab: true,
-            buttons,
+            buttons: None,
         }
     }
 
-    /// The minimize, maximize and close buttons of the integrated title
-    /// bar in window pixels, except on macOS (which keeps its own): as
-    /// tall as the bar, from the window top to below its row.
+    /// The minimize, maximize and close buttons on the title bar band in
+    /// window pixels, in the configured style; none without a band.
     fn window_buttons(&self) -> Option<[(Button, Rect); 3]> {
-        if !self.integrated || MACOS || !self.bar_visible(self.tabs.len()) {
+        let band = self.band();
+        if band == 0 {
             return None;
         }
-        let layout = layout(self.renderer.as_ref(), self.padding);
-        let bar_height = layout.padding + layout.cell.height;
         let width = self.window.inner_size().width;
-        Some(title_bar::button_rects(width, bar_height, self.scale))
+        let style = self.title_bar.button_style;
+        Some(title_bar::buttons(style, width, band, self.scale))
     }
 
     /// The tab bar laid out `cols` columns wide.
     fn bar(&self, cols: u16) -> title_bar::Bar {
-        let titles: Vec<&str> = self
-            .tabs
-            .iter()
-            .map(|tab| tab.focused().title.as_str())
-            .collect();
+        let titles: Vec<&str> = self.tabs.iter().map(|tab| tab.focused().label()).collect();
         title_bar::layout(&titles, self.tabs.active_index(), cols, self.chrome())
     }
 
-    /// What is on the tab bar at window pixel `x`, `y`, if it shows there.
+    /// What is on the title bar band or the tab bar at window pixel `x`,
+    /// `y`, if they show there.
     fn bar_region_at(&self, x: f64, y: f64) -> Option<Region> {
-        let button = self
+        let band = self
             .window_buttons()
-            .and_then(|buttons| title_bar::button_at(&buttons, x, y));
-        if let Some(button) = button {
-            return Some(Region::Button(button));
+            .and_then(|buttons| title_bar::band_region(&buttons, self.band(), x, y));
+        if band.is_some() {
+            return band;
         }
         let col = self.bar_column_at(x, y)?;
         Some(self.bar(self.content_size().cols()).region_at(col))
@@ -1498,8 +1577,7 @@ impl Session {
             return None;
         }
         let cols = self.content_size().cols();
-        let layout = layout(self.renderer.as_ref(), self.padding);
-        tab_bar::column_at(layout, cols, x, y)
+        tab_bar::column_at(self.bar_layout(), cols, x, y)
     }
 
     /// Activates the tab whose label is at bar column `col`.
@@ -1513,6 +1591,8 @@ impl Session {
     }
 
     fn redraw(&mut self, config: &Config) -> Result<(), Box<dyn Error>> {
+        self.sync_window_title();
+        let band = self.band_shapes(config);
         let Some(tab) = self.tabs.active() else {
             return Ok(());
         };
@@ -1520,20 +1600,6 @@ impl Session {
         let bar = self
             .bar_visible(self.tabs.len())
             .then(|| title_bar::render(&self.bar(content.cols()), self.bar_hover));
-        let buttons = self.window_buttons().map(|buttons| {
-            let theme = appearance::palette(&config.colors.resolve());
-            let colors = ButtonColors {
-                glyph: theme.foreground,
-                // The new-tab button's hover background.
-                hover: theme.ansi[8],
-            };
-            let hover = match self.bar_hover {
-                Some(Region::Button(button)) => Some(button),
-                _ => None,
-            };
-            let maximized = self.window.is_maximized();
-            title_bar::button_shapes(&buttons, hover, maximized, self.scale, colors)
-        });
         let palette = self.palette.as_ref().map(|palette| {
             let rect = palette.rect(content);
             let theme = appearance::palette(&config.colors.resolve());
@@ -1563,16 +1629,17 @@ impl Session {
             width,
             color,
         );
-        shapes.extend(buttons.into_iter().flatten());
+        shapes.extend(band);
         let overlay = palette.as_ref().map(|(terminal, rect)| Overlay {
             terminal,
             col: rect.col,
             row: rect.row,
         });
-        match self
-            .renderer
-            .draw_layers(bar.as_ref(), &views, overlay, &shapes)
-        {
+        let header = Header {
+            top: self.band(),
+            rows: bar.as_ref(),
+        };
+        match self.renderer.draw_layers(header, &views, overlay, &shapes) {
             Ok(()) => {
                 self.skipped_frames = 0;
                 Ok(())
@@ -1596,6 +1663,95 @@ impl Session {
         }
     }
 
+    /// Gives the OS window (taskbar, window switcher) the label of the
+    /// focused pane, when it changed.
+    fn sync_window_title(&mut self) {
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        let label = tab.focused().label();
+        if label != self.window_title {
+            self.window_title = label.to_owned();
+            self.window.set_title(label);
+        }
+    }
+
+    /// The title bar band as shapes, drawn over everything: its
+    /// background, the icon, the centered window title and the window
+    /// buttons. None without a band.
+    fn band_shapes(&mut self, config: &Config) -> Vec<Shape> {
+        let Some(buttons) = self.window_buttons() else {
+            return Vec::new();
+        };
+        let band = self.band();
+        let width = self.window.inner_size().width;
+        let theme = appearance::palette(&config.colors.resolve());
+        let colors = appearance::title_bar_colors(&self.title_bar, &theme);
+        let mut shapes = vec![Shape::Rect {
+            x: 0,
+            y: 0,
+            width,
+            height: band,
+            color: colors.background,
+        }];
+        let icon = self
+            .title_bar
+            .show_icon
+            .then(|| title_bar::icon_rect(band, self.scale));
+        if let Some(rect) = icon {
+            if self.icon_shapes.as_ref().is_none_or(|(at, _)| *at != rect) {
+                self.icon_shapes = Some((rect, icon::shapes(rect.x, rect.y, rect.width)));
+            }
+            shapes.extend(self.icon_shapes.iter().flat_map(|(_, icon)| icon.clone()));
+        }
+        if self.title_bar.show_title {
+            let title = self
+                .tabs
+                .active()
+                .map(|tab| tab.focused().label().to_owned());
+            let (left, right) = title_bar::title_room(icon, &buttons, self.scale);
+            let cell = self.font.cell_size();
+            let placed = title
+                .and_then(|title| title_bar::place_title(&title, cell.width, width, left, right));
+            if let Some((text, x)) = placed {
+                if self
+                    .title_mask
+                    .as_ref()
+                    .is_none_or(|(drawn, _)| *drawn != text)
+                {
+                    let mask = nxg_render::shape::text_mask(&mut self.font, &text);
+                    self.title_mask = Some((text, Arc::new(mask)));
+                }
+                if let Some((_, mask)) = &self.title_mask {
+                    shapes.push(Shape::Mask {
+                        x: x as i32,
+                        y: (band.saturating_sub(cell.height) / 2) as i32,
+                        mask: Arc::clone(mask),
+                        color: colors.foreground,
+                    });
+                }
+            }
+        }
+        let hover = match self.bar_hover {
+            Some(Region::Button(button)) => Some(button),
+            _ => None,
+        };
+        let maximized = self.window.is_maximized();
+        shapes.extend(match self.title_bar.button_style {
+            ButtonStyle::Circles => {
+                title_bar::circle_shapes(&buttons, hover, maximized, self.scale, &colors)
+            }
+            ButtonStyle::Windows => {
+                let colors = ButtonColors {
+                    glyph: colors.foreground,
+                    hover: dim(colors.background, colors.foreground, WINDOWS_HOVER),
+                };
+                title_bar::button_shapes(&buttons, hover, maximized, self.scale, colors)
+            }
+        });
+        shapes
+    }
+
     /// Replaces a failed renderer with the CPU one and redraws.
     fn fall_back_to_cpu(&mut self, config: &Config) -> Result<(), Box<dyn Error>> {
         // Release the failed renderer's surface before attaching a new one:
@@ -1603,6 +1759,7 @@ impl Session {
         drop(std::mem::replace(&mut self.renderer, Box::new(Detached)));
         let style = self.style(config)?;
         self.padding = style.padding;
+        self.set_font(style.font.clone());
         self.renderer = cpu_renderer(self.window.clone(), style, self.transparent)?;
         let pixels = self.window.inner_size();
         self.renderer.resize(pixels.width, pixels.height);
@@ -1611,6 +1768,13 @@ impl Session {
         self.sync_grid_size();
         self.window.request_redraw();
         Ok(())
+    }
+
+    /// Takes the font of a new style for the title, which is drawn again.
+    fn set_font(&mut self, font: Font) {
+        self.font = font;
+        self.title_mask = None;
+        self.icon_shapes = None;
     }
 
     /// The style for the current font size, scale and `config`.
@@ -1624,6 +1788,7 @@ impl Session {
         match self.style(config) {
             Ok(style) => {
                 self.padding = style.padding;
+                self.set_font(style.font.clone());
                 self.renderer.set_style(style);
                 self.sync_grid_size();
                 self.window.request_redraw();
@@ -1754,16 +1919,43 @@ fn spawn_pane(
     })
 }
 
-/// Copies the selection of `terminal` to the PRIMARY selection when the
-/// config asks for it and the system has one; failures only warn.
+/// Copies the selection of `terminal` to the selections the config names
+/// (see [`copy_on_select_kinds`]); failures only warn.
 fn copy_on_select(clipboard: &mut dyn Clipboard, config: &Config, terminal: &Terminal) {
-    if !(HAS_PRIMARY && config.selection.copy_on_select) {
+    let target = config.selection.copy_on_select;
+    let mut kinds = copy_on_select_kinds(target, HAS_PRIMARY).peekable();
+    if kinds.peek().is_none() {
         return;
     }
-    if let Some(text) = terminal.selection_text() {
-        if let Err(error) = clipboard.set_text(ClipboardKind::Primary, text) {
+    let Some(text) = terminal.selection_text() else {
+        return;
+    };
+    for kind in kinds {
+        if let Err(error) = clipboard.set_text(kind, text.clone()) {
             eprintln!("nxgterm: {error}");
         }
+    }
+}
+
+/// The selections `target` copies to; PRIMARY only where the system has
+/// one (`has_primary`).
+fn copy_on_select_kinds(
+    target: CopyOnSelect,
+    has_primary: bool,
+) -> impl Iterator<Item = ClipboardKind> {
+    let primary = (has_primary && target.primary()).then_some(ClipboardKind::Primary);
+    let clipboard = target.clipboard().then_some(ClipboardKind::Clipboard);
+    primary.into_iter().chain(clipboard)
+}
+
+/// Height in pixels of the title bar band for a window with `integrated`
+/// decorations drawn with `style` at `scale`: 0 on macOS and with native
+/// decorations.
+fn band_height(integrated: bool, title_bar: &TitleBarConfig, style: &Style, scale: f64) -> u32 {
+    if integrated && !MACOS {
+        title_bar::band_height(title_bar.height, scale, style.font.cell_size().height)
+    } else {
+        0
     }
 }
 
@@ -1818,7 +2010,9 @@ fn build_style(
     scale: f64,
 ) -> Result<Style, FontError> {
     Ok(Style {
-        font: faces.font(appearance::font_px(font_size, scale))?,
+        font: faces
+            .font(appearance::font_px(font_size, scale))?
+            .with_builtin_glyphs(config.font.builtin_box_drawing),
         palette: appearance::palette(&config.colors.resolve()),
         padding: appearance::padding_px(config.window.padding, scale),
         background_opacity: config.window.opacity,
@@ -1932,7 +2126,7 @@ impl WindowRenderer for Detached {
 
     fn draw_layers(
         &mut self,
-        _header: Option<&Terminal>,
+        _header: Header<'_>,
         _panes: &[PaneView<'_>],
         _overlay: Option<Overlay<'_>>,
         _shapes: &[Shape],
@@ -2023,6 +2217,36 @@ mod tests {
             resize: Throttle::default(),
         };
         (pane, resizes, written)
+    }
+
+    #[test]
+    fn the_label_prefers_the_title_the_child_set() {
+        let (mut pane, _, _) = pane(10, 2);
+        assert_eq!(pane.label(), "sh", "the program name until one is set");
+        pane.terminal.advance(b"\x1b]2;~: ngmux - ngmux\x07");
+        assert_eq!(pane.label(), "~: ngmux - ngmux");
+        pane.terminal.advance(b"\x1b]2;\x07");
+        assert_eq!(pane.label(), "sh", "an empty title falls back");
+    }
+
+    #[test]
+    fn copy_on_select_skips_primary_where_there_is_none() {
+        use nxg_config::CopyOnSelect::{Both, Clipboard, Off, Primary};
+        let kinds =
+            |target, has_primary| copy_on_select_kinds(target, has_primary).collect::<Vec<_>>();
+        assert_eq!(kinds(Off, true), []);
+        assert_eq!(kinds(Primary, true), [ClipboardKind::Primary]);
+        assert_eq!(
+            kinds(Primary, false),
+            [],
+            "true stays a no-op without PRIMARY"
+        );
+        assert_eq!(kinds(Clipboard, false), [ClipboardKind::Clipboard]);
+        assert_eq!(
+            kinds(Both, true),
+            [ClipboardKind::Primary, ClipboardKind::Clipboard]
+        );
+        assert_eq!(kinds(Both, false), [ClipboardKind::Clipboard]);
     }
 
     #[test]

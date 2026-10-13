@@ -62,6 +62,10 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# nxgterm configuration.
 # fallback = ["Symbols Nerd Font Mono"]
 # Size in points at 100% display scale (clamped to 6-72).
 size = 14.0
+# Draw box drawing, block element, sextant and powerline characters
+# built in, so they fill the cell exactly and join up across cells,
+# instead of taking them from the fonts above.
+builtin_box_drawing = true
 
 [window]
 # Space around the grid, in pixels at 100% display scale.
@@ -71,11 +75,12 @@ columns = 100
 rows = 30
 # Tab bar above the grid: auto (only with two or more tabs), always or never.
 tab_bar = "auto"
-# Window decorations: "integrated" (the tab bar is the title bar: it always
-# shows, drag it to move the window and double-click it to maximize; on
-# Windows and Linux it draws minimize, maximize and close buttons and the
-# window edges resize it, on macOS the native window buttons stay on its
-# left) or "native" (the system title bar, with the tab bar below it).
+# Window decorations: "integrated" (nxgterm draws the title bar: drag it to
+# move the window and double-click it to maximize; on Windows and Linux it
+# shows the icon, the window title and minimize, maximize and close buttons,
+# with the tab bar below it, and the window edges resize it; on macOS the tab
+# bar is the title bar, with the native window buttons on its left) or
+# "native" (the system title bar, with the tab bar below it).
 decorations = "integrated"
 # Opacity of the default background, from 0.0 (invisible) to 1.0 (opaque).
 # Text, the cursor, colored backgrounds, the selection, the tab bar and
@@ -86,6 +91,27 @@ opacity = 1.0
 # Ask the system to blur what is behind a translucent background (macOS,
 # KDE Plasma on Wayland, Windows 11 Acrylic).
 blur = false
+
+[window.title_bar]
+# The title bar drawn with decorations = "integrated" on Windows and Linux
+# (macOS keeps its native window buttons). Changes apply live.
+# Window buttons: "circles" (small colored circles that show their symbol
+# under the pointer) or "windows" (flat, full-height Windows-style buttons).
+button_style = "circles"
+# Height in pixels at 100% display scale; never shorter than the font.
+height = 34
+# Show the window title (the focused pane's title), centered.
+show_title = true
+# Show the application icon on the left.
+show_icon = true
+# Colors as "#rrggbb" (or "#rgb"). Unset, they follow the theme: the
+# background a little lighter (or darker) than the terminal's, the theme
+# foreground, and ANSI yellow, green and red for the buttons.
+# background = "#24273a"
+# foreground = "#cdd6f4"
+# minimize = "#f9e2af"
+# maximize = "#a6e3a1"
+# close = "#f38ba8"
 
 [colors]
 # Built-in theme: catppuccin-mocha, nxg-dark, nxg-light, tokyo-night,
@@ -127,9 +153,11 @@ lines = 10000
 # triple-click for a line, Alt+drag for a block. While a program uses the
 # mouse, hold Shift to select. Middle-click pastes the PRIMARY selection
 # (Linux).
-# Copy selected text to the PRIMARY selection right away (Linux X11 and
-# Wayland; ignored on other systems).
-copy_on_select = true
+# Where selected text is copied as soon as it is made (or select_all runs):
+# "primary" (or true) for the PRIMARY selection (Linux X11 and Wayland;
+# nothing on other systems), "clipboard" for the clipboard, "both", or
+# "off" (or false).
+copy_on_select = "primary"
 
 [panes]
 # Split panes (see the split_* and focus_pane_* actions below). Color of the
@@ -158,13 +186,16 @@ inactive_dim = 0.25
 # focus_pane_right, focus_pane_up, focus_pane_down, resize_pane_left,
 # resize_pane_right, resize_pane_up, resize_pane_down, close_pane, zoom_pane,
 # equalize_panes (unbound by default), command_palette, copy, paste,
-# select_all (unbound by default), reload_config (unbound by default), none. Scrolling keys reach
-# the application on the alternate screen (full-screen programs). Copy does
-# nothing without a selection; ctrl+c stays an interrupt for the shell.
+# select_all, copy_scrollback (unbound by default: the whole history and
+# screen to the clipboard, keeping the selection), reload_config (unbound by
+# default), none. Scrolling keys reach the application on the alternate
+# screen (full-screen programs). Copy does nothing without a selection;
+# ctrl+c stays an interrupt for the shell.
 #
 # The defaults (on macOS the zoom chords use cmd instead of ctrl, copy and
 # paste are cmd+c and cmd+v, and the pane focus and resize chords use cmd
-# instead of ctrl, because ctrl+arrows belong to Mission Control). On Linux
+# instead of ctrl, because ctrl+arrows belong to Mission Control; select_all
+# is cmd+a). On Linux
 # desktops (KDE, GNOME) ctrl+alt+arrows may switch workspaces: rebind the
 # focus_pane_* chords or free them with "none":
 # "ctrl+equal" = "zoom_in"
@@ -204,6 +235,7 @@ inactive_dim = 0.25
 # "ctrl+shift+c" = "copy"
 # "ctrl+shift+v" = "paste"
 # "shift+insert" = "paste"
+# "ctrl+shift+a" = "select_all"
 #
 # Examples:
 # "ctrl+shift+r" = "reload_config"
@@ -244,6 +276,9 @@ pub struct FontConfig {
     /// Points at scale 1.0, already clamped with [`clamp_font_size`].
     #[serde(deserialize_with = "font_size")]
     pub size: f32,
+    /// Draw box drawing, block, sextant and powerline chars built in to
+    /// fill the cell exactly instead of taking them from the fonts.
+    pub builtin_box_drawing: bool,
 }
 
 impl Default for FontConfig {
@@ -252,6 +287,7 @@ impl Default for FontConfig {
             family: Vec::new(),
             fallback: Vec::new(),
             size: DEFAULT_FONT_SIZE,
+            builtin_box_drawing: true,
         }
     }
 }
@@ -275,6 +311,8 @@ pub struct WindowConfig {
     pub opacity: f32,
     /// Ask the system to blur what is behind a translucent background.
     pub blur: bool,
+    /// `[window.title_bar]`: the integrated title bar.
+    pub title_bar: TitleBarConfig,
 }
 
 impl WindowConfig {
@@ -294,8 +332,57 @@ impl Default for WindowConfig {
             decorations: Decorations::Integrated,
             opacity: 1.0,
             blur: false,
+            title_bar: TitleBarConfig::default(),
         }
     }
+}
+
+/// `[window.title_bar]`: the title bar drawn with integrated decorations on
+/// Windows and Linux. Unset colors follow the theme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TitleBarConfig {
+    pub button_style: ButtonStyle,
+    /// Height in pixels at scale 1.0; the renderer keeps it at least as
+    /// tall as the font.
+    pub height: u16,
+    /// Show the window title, centered.
+    pub show_title: bool,
+    /// Show the application icon on the left.
+    pub show_icon: bool,
+    pub background: Option<Rgb>,
+    pub foreground: Option<Rgb>,
+    pub minimize: Option<Rgb>,
+    pub maximize: Option<Rgb>,
+    pub close: Option<Rgb>,
+}
+
+impl Default for TitleBarConfig {
+    fn default() -> Self {
+        Self {
+            button_style: ButtonStyle::Circles,
+            height: 34,
+            show_title: true,
+            show_icon: true,
+            background: None,
+            foreground: None,
+            minimize: None,
+            maximize: None,
+            close: None,
+        }
+    }
+}
+
+/// How the minimize, maximize and close buttons of the integrated title
+/// bar look.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ButtonStyle {
+    /// Small colored circles, their symbols shown under the pointer.
+    #[default]
+    Circles,
+    /// Flat buttons as tall as the bar, as on Windows.
+    Windows,
 }
 
 /// `[colors]`: a built-in theme or theme file plus optional overrides.
@@ -385,18 +472,60 @@ impl Default for PanesConfig {
 }
 
 /// `[selection]`
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SelectionConfig {
-    /// Copy selected text to the PRIMARY selection as soon as it is made
-    /// (Linux X11 and Wayland; ignored elsewhere).
-    pub copy_on_select: bool,
+    /// Where selected text is copied as soon as it is made.
+    pub copy_on_select: CopyOnSelect,
 }
 
-impl Default for SelectionConfig {
-    fn default() -> Self {
-        Self {
-            copy_on_select: true,
+/// Where a finished selection is copied: `true` is [`Self::Primary`] and
+/// `false` is [`Self::Off`], as before the targets existed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CopyOnSelect {
+    Off,
+    /// The PRIMARY selection (Linux X11 and Wayland; nothing elsewhere).
+    #[default]
+    Primary,
+    Clipboard,
+    Both,
+}
+
+impl CopyOnSelect {
+    /// Whether the PRIMARY selection receives the text.
+    pub fn primary(self) -> bool {
+        matches!(self, Self::Primary | Self::Both)
+    }
+
+    /// Whether the clipboard receives the text.
+    pub fn clipboard(self) -> bool {
+        matches!(self, Self::Clipboard | Self::Both)
+    }
+}
+
+impl<'de> Deserialize<'de> for CopyOnSelect {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(
+            untagged,
+            expecting = "true, false, \"primary\", \"clipboard\", \"both\" or \"off\""
+        )]
+        enum Raw {
+            Bool(bool),
+            Name(String),
+        }
+        match Raw::deserialize(deserializer)? {
+            Raw::Bool(true) => Ok(Self::Primary),
+            Raw::Bool(false) => Ok(Self::Off),
+            Raw::Name(name) => match name.trim().to_ascii_lowercase().as_str() {
+                "primary" => Ok(Self::Primary),
+                "clipboard" => Ok(Self::Clipboard),
+                "both" => Ok(Self::Both),
+                "off" => Ok(Self::Off),
+                _ => Err(serde::de::Error::custom(format!(
+                    "invalid copy_on_select `{name}`, expected \"primary\", \"clipboard\", \"both\" or \"off\""
+                ))),
+            },
         }
     }
 }
@@ -746,7 +875,7 @@ mod tests {
         assert_eq!(config.window.opacity, 1.0);
         assert!(!config.window.translucent());
         assert!(!config.window.blur);
-        assert!(config.selection.copy_on_select);
+        assert_eq!(config.selection.copy_on_select, CopyOnSelect::Primary);
         assert_eq!(
             config.colors.resolve().selection_background,
             Some(Rgb::hex(0x585b70))
@@ -772,6 +901,84 @@ mod tests {
         assert_eq!(decorations("native").unwrap(), Decorations::Native);
         assert_eq!(decorations("integrated").unwrap(), Decorations::Integrated);
         assert!(decorations("none").is_err());
+    }
+
+    #[test]
+    fn the_title_bar_defaults_to_circles_with_title_and_icon() {
+        let title_bar = Config::default().window.title_bar;
+        assert_eq!(title_bar.button_style, ButtonStyle::Circles);
+        assert_eq!(title_bar.height, 34);
+        assert!(title_bar.show_title && title_bar.show_icon);
+        assert_eq!(
+            (
+                title_bar.background,
+                title_bar.foreground,
+                title_bar.minimize,
+                title_bar.maximize,
+                title_bar.close
+            ),
+            (None, None, None, None, None),
+            "colors follow the theme"
+        );
+        assert_eq!(
+            parse("[window.title_bar]\n").unwrap().window.title_bar,
+            title_bar
+        );
+    }
+
+    #[test]
+    fn the_title_bar_table_sits_under_window() {
+        let config = parse(
+            "[window.title_bar]\nbutton_style = \"windows\"\nheight = 40\nshow_title = false\n\
+             show_icon = false\nbackground = \"#101010\"\nforeground = \"#eee\"\n\
+             minimize = \"#ffbd2e\"\nmaximize = \"#28c940\"\nclose = \"#ff5f57\"\n",
+        )
+        .unwrap();
+        let title_bar = config.window.title_bar;
+        assert_eq!(title_bar.button_style, ButtonStyle::Windows);
+        assert_eq!(title_bar.height, 40);
+        assert!(!title_bar.show_title && !title_bar.show_icon);
+        assert_eq!(title_bar.background, Some(Rgb::hex(0x101010)));
+        assert_eq!(title_bar.foreground, Some(Rgb::hex(0xeeeeee)));
+        assert_eq!(title_bar.minimize, Some(Rgb::hex(0xffbd2e)));
+        assert_eq!(title_bar.maximize, Some(Rgb::hex(0x28c940)));
+        assert_eq!(title_bar.close, Some(Rgb::hex(0xff5f57)));
+        // The other window keys are untouched.
+        assert_eq!(config.window.padding, 8);
+    }
+
+    #[test]
+    fn bad_title_bar_values_are_reported() {
+        let error = parse_error("[window.title_bar]\nbutton_style = \"squares\"\n");
+        assert!(
+            error.contains("squares") || error.contains("variant"),
+            "{error}"
+        );
+        assert!(parse("[window.title_bar]\nheight = -1\n").is_err());
+        assert!(parse("[window.title_bar]\nclose = \"red\"\n").is_err());
+        assert!(parse("[window.title_bar]\nshow_title = \"yes\"\n").is_err());
+        assert!(
+            parse("[window.title_bar]\ncolor = \"#fff\"\n").is_err(),
+            "unknown key"
+        );
+    }
+
+    #[test]
+    fn the_sample_documents_the_title_bar() {
+        for key in [
+            "[window.title_bar]",
+            "button_style = \"circles\"",
+            "height = 34",
+            "show_title = true",
+            "show_icon = true",
+            "# background =",
+            "# foreground =",
+            "# minimize =",
+            "# maximize =",
+            "# close =",
+        ] {
+            assert!(DEFAULT_CONFIG_TOML.contains(key), "{key} is not documented");
+        }
     }
 
     #[test]
@@ -866,7 +1073,31 @@ mod tests {
         assert_eq!(config.shell.args, ["-NoLogo"]);
         assert_eq!(config.renderer.backend, Backend::Cpu);
         assert_eq!(config.scrollback.lines, 0);
-        assert!(!config.selection.copy_on_select);
+        assert_eq!(config.selection.copy_on_select, CopyOnSelect::Off);
+    }
+
+    #[test]
+    fn copy_on_select_takes_a_bool_or_a_target() {
+        let text = |value: &str| format!("[selection]\ncopy_on_select = {value}\n");
+        let copy_on_select = |value: &str| parse(&text(value)).unwrap().selection.copy_on_select;
+        assert_eq!(copy_on_select("true"), CopyOnSelect::Primary);
+        assert_eq!(copy_on_select("false"), CopyOnSelect::Off);
+        assert_eq!(copy_on_select("\"primary\""), CopyOnSelect::Primary);
+        assert_eq!(copy_on_select("\"clipboard\""), CopyOnSelect::Clipboard);
+        assert_eq!(copy_on_select("\"Both\""), CopyOnSelect::Both);
+        assert_eq!(copy_on_select("\"off\""), CopyOnSelect::Off);
+        let error = parse_error(&text("\"secondary\""));
+        assert!(error.contains("secondary"), "{error}");
+        assert!(parse(&text("1")).is_err());
+    }
+
+    #[test]
+    fn copy_on_select_targets_name_their_selections() {
+        let targets = |c: CopyOnSelect| (c.primary(), c.clipboard());
+        assert_eq!(targets(CopyOnSelect::Off), (false, false));
+        assert_eq!(targets(CopyOnSelect::Primary), (true, false));
+        assert_eq!(targets(CopyOnSelect::Clipboard), (false, true));
+        assert_eq!(targets(CopyOnSelect::Both), (true, true));
     }
 
     #[test]
@@ -992,6 +1223,14 @@ mod tests {
             let error = dim(value).unwrap_err().to_string();
             assert!(error.contains("invalid inactive_dim"), "{error}");
         }
+    }
+
+    #[test]
+    fn built_in_box_drawing_is_on_by_default_and_documented() {
+        assert!(Config::default().font.builtin_box_drawing);
+        let config = parse("[font]\nbuiltin_box_drawing = false\n").unwrap();
+        assert!(!config.font.builtin_box_drawing);
+        assert!(DEFAULT_CONFIG_TOML.contains("builtin_box_drawing = true"));
     }
 
     #[test]

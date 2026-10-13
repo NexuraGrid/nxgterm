@@ -16,12 +16,14 @@ mod scrollback;
 mod selection;
 #[cfg(test)]
 mod testing;
+mod title;
 
 pub use modes::Modes;
 use modes::MouseModes;
 use screen::Screen;
 pub use scrollback::DEFAULT_SCROLLBACK;
 use scrollback::Scrollback;
+use title::Titles;
 
 /// Cursor position (zero-based) and visibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +89,8 @@ struct State {
     bracketed_paste: bool,
     /// The text selection, in absolute lines; see the `selection` module.
     selection: Option<selection::Selected>,
+    /// The window title set by OSC 0/2 and its XTWINOPS stack.
+    titles: Titles,
 }
 
 impl Terminal {
@@ -113,6 +117,7 @@ impl Terminal {
                 mouse: MouseModes::default(),
                 bracketed_paste: false,
                 selection: None,
+                titles: Titles::default(),
             },
         }
     }
@@ -160,6 +165,16 @@ impl Terminal {
     /// cursor position and device attribute queries). Drains the buffer.
     pub fn take_responses(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.state.responses)
+    }
+
+    /// The window title the child set with OSC 0 or OSC 2, if any.
+    pub fn title(&self) -> Option<&str> {
+        self.state.titles.get()
+    }
+
+    /// Whether [`Terminal::title`] changed since the last call.
+    pub fn take_title_changed(&mut self) -> bool {
+        self.state.titles.take_changed()
     }
 
     /// The cells of `row`. Panics if `row` is out of bounds.
@@ -345,6 +360,14 @@ impl State {
         self.responses.extend_from_slice(reply.as_bytes());
     }
 
+    /// XTWINOPS 22/23: saves or restores the title; `what` 1 names the
+    /// icon name alone, which is not kept.
+    fn title_stack(&mut self, what: u16, op: fn(&mut Titles)) {
+        if matches!(what, 0 | 2) {
+            op(&mut self.titles);
+        }
+    }
+
     /// XTSMGRAPHICS (`CSI ? Pi ; Pa S`): reports color registers and the
     /// largest sixel image; nothing can be changed.
     fn graphics_attributes(&mut self, item: u16) {
@@ -510,6 +533,14 @@ impl vte::Perform for State {
         }
     }
 
+    /// OSC 0 and OSC 2 set the window title (vte splits it on `;`, so the
+    /// pieces are joined back). OSC 1 (icon name) and the rest are ignored.
+    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+        if let [b"0" | b"2", text @ ..] = params {
+            self.titles.set(&text.join(&b';'));
+        }
+    }
+
     fn hook(&mut self, params: &vte::Params, intermediates: &[u8], ignore: bool, action: char) {
         self.sixel = None;
         if action == 'q' && intermediates.is_empty() && !ignore {
@@ -612,6 +643,8 @@ impl vte::Perform for State {
             }
             // DA1: a VT220 with sixel graphics (4) and ANSI color (22).
             (false, 'c') if first == 0 => self.responses.extend_from_slice(b"\x1b[?62;4;22c"),
+            (false, 't') if first == 22 => self.title_stack(second, Titles::push),
+            (false, 't') if first == 23 => self.title_stack(second, Titles::pop),
             (false, 't') => self.window_report(first),
             _ => {}
         }

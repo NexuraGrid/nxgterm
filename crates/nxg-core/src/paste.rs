@@ -37,6 +37,35 @@ pub fn encode(text: &str, bracketed: bool) -> Vec<u8> {
     out
 }
 
+/// The text pasted for a file dropped on the window: its `path` quoted so
+/// a shell (or an agent's prompt) reads it as one word, followed by a space
+/// so several dropped files end up separated.
+///
+/// On Unix shell metacharacters and spaces are escaped with a backslash,
+/// as Ghostty and WezTerm do; on `windows` a path with spaces is wrapped
+/// in double quotes (backslashes there are separators, not escapes).
+pub fn dropped_path(path: &str, windows: bool) -> String {
+    let mut out = String::with_capacity(path.len() + 3);
+    if windows {
+        if path.contains([' ', '&', '(', ')', '^', ';', ',']) {
+            out.push('"');
+            out.push_str(path);
+            out.push('"');
+        } else {
+            out.push_str(path);
+        }
+    } else {
+        for ch in path.chars() {
+            if ch.is_ascii() && !ch.is_ascii_alphanumeric() && !"/._-+,:@%=~".contains(ch) {
+                out.push('\\');
+            }
+            out.push(ch);
+        }
+    }
+    out.push(' ');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,6 +95,37 @@ mod tests {
     fn bracketed_pastes_are_wrapped() {
         assert_eq!(encode("hi\n", true), b"\x1b[200~hi\r\x1b[201~");
         assert_eq!(encode("", true), b"\x1b[200~\x1b[201~");
+    }
+
+    #[test]
+    fn plain_dropped_paths_are_kept_and_followed_by_a_space() {
+        assert_eq!(
+            dropped_path("/home/u/img-1_a.png", false),
+            "/home/u/img-1_a.png "
+        );
+        assert_eq!(dropped_path("/tmp/ñandú.jpg", false), "/tmp/ñandú.jpg ");
+    }
+
+    #[test]
+    fn shell_special_characters_in_dropped_paths_are_escaped() {
+        assert_eq!(
+            dropped_path("/home/u/My Pics/a (1).png", false),
+            r"/home/u/My\ Pics/a\ \(1\).png "
+        );
+        assert_eq!(
+            dropped_path("/x/it's&$`\"*?;|<>!#.png", false),
+            r#"/x/it\'s\&\$\`\"\*\?\;\|\<\>\!\#.png "#
+        );
+        assert_eq!(dropped_path(r"/x/a\b", false), r"/x/a\\b ");
+    }
+
+    #[test]
+    fn windows_dropped_paths_are_double_quoted_only_when_needed() {
+        assert_eq!(dropped_path(r"C:\img.png", true), r"C:\img.png ");
+        assert_eq!(
+            dropped_path(r"C:\My Pics\a.png", true),
+            r#""C:\My Pics\a.png" "#
+        );
     }
 
     #[test]
