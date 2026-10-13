@@ -64,6 +64,13 @@ merge and release 0.9.1 (2026-10-13).
   connection). RED: 5 parse tests failing on stub; GREEN after. Checks:
   961/0, clippy linux + windows-gnu clean, fmt clean, release build ok,
   starts on Wayland without DnD errors. Manual drop on KDE pending (user).
+  Commit 2bca068; assess HIGH; native review consent DECLINED by the user.
+  Off path: independent verifier -> PASS-WITH-NOTES (no blocker/major).
+  Follow-ups (minor): detached pipe-read thread can block forever and hold
+  the Connection past display close at exit (poll with timeout, finish via
+  channel); one offer slot shared across seats; non-UTF-8 percent escapes
+  kept raw, `file:/path` and own-hostname URIs unsupported, 1 MiB cap may
+  cut the last path; seats never released.
 
 ## Next step
 
