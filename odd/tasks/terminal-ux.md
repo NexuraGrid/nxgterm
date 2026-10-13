@@ -42,7 +42,7 @@ Out of scope: rounded window corners/shadows, ligatures, HTML copy.
 - [x] T2 Copy everything: SelectAll default binding, CopyScrollback, copy_on_select target + tests
 - [x] T3 Built-in procedural box/block/sextant/powerline glyphs (CPU + GPU) + tests
 - [x] T4 WezTerm-style configurable title bar + tests
-- [ ] T5 Track OSC 0/2 window titles in nxg-core and show them in the
+- [x] T5 Track OSC 0/2 window titles in nxg-core and show them in the
   title bar and tab labels (gap found in T4: the bar shows only the program
   name, the reference shows "~: ngmux - ngmux") + tests
 
@@ -110,6 +110,17 @@ decided by the user before any push.
   DECLINED by the user for this candidate (30114cc..6e1cb28). Off path:
   medium tier -> writer self-verification + parent spot check (done).
 
+- T5 done (delegated writer): new `nxg-core/src/terminal/title.rs`,
+  `osc_dispatch` (OSC 0/2 set title, OSC 1 ignored, sanitized, 1024-byte
+  cap, empty resets), CSI 22/23 t title stack (10), `Terminal::title()` /
+  `take_title_changed()`, `Pane::label()` for tabs and band, OS window title
+  synced on redraw. RED: 7 core assertions + 1 label test failing on stubs;
+  GREEN after. Checks: 955/0, clippy clean, fmt clean (writer + parent).
+
+## Delivery
+
+User authorized (2026-10-13): commit, push, PR, merge and release 0.9.0.
+
 ## Next step
 
-T5.
+Push, PR, merge, release 0.9.0.

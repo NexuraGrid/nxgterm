@@ -59,8 +59,8 @@ pub enum UserEvent {
 struct Pane {
     terminal: Terminal,
     pty: Box<dyn PtyControl>,
-    /// Label on the tab bar while the pane has focus: the program name
-    /// (OSC 0/2 titles are not supported yet).
+    /// The program name: the label while the child sets no title of its
+    /// own (see [`Pane::label`]).
     title: String,
     /// Sizes the pty has not been told yet while a divider is dragged.
     resize: Throttle<WinSize>,
@@ -102,6 +102,8 @@ struct Session {
     font: Font,
     /// The last title drawn on the band, with its mask.
     title_mask: Option<(String, Arc<Mask>)>,
+    /// The title last given to the OS window.
+    window_title: String,
     /// The icon's shapes for the last place it was drawn at.
     icon_shapes: Option<(Rect, Vec<Shape>)>,
     /// The pointer in window pixels.
@@ -253,6 +255,7 @@ impl App {
             title_bar: config.window.title_bar,
             font,
             title_mask: None,
+            window_title: "nxgterm".into(),
             icon_shapes: None,
             cursor: (0.0, 0.0),
             resize_hover: None,
@@ -1008,6 +1011,12 @@ const MAX_FRAME_RETRIES: u8 = 3;
 const WINDOWS_HOVER: f32 = 0.15;
 
 impl Pane {
+    /// What the tab bar and the title bar show for the pane: the title
+    /// the child set (OSC 0/2), else the program name.
+    fn label(&self) -> &str {
+        self.terminal.title().unwrap_or(&self.title)
+    }
+
     /// Writes input for the child.
     fn send(&mut self, bytes: &[u8]) {
         if let Err(error) = self.pty.write_all(bytes) {
@@ -1066,7 +1075,8 @@ impl Session {
         if !responses.is_empty() {
             pane.send(&responses);
         }
-        if visible {
+        // A new title shows on the tab bar even for a pane off screen.
+        if visible || pane.terminal.take_title_changed() {
             self.window.request_redraw();
         }
     }
@@ -1481,11 +1491,7 @@ impl Session {
 
     /// The tab bar laid out `cols` columns wide.
     fn bar(&self, cols: u16) -> title_bar::Bar {
-        let titles: Vec<&str> = self
-            .tabs
-            .iter()
-            .map(|tab| tab.focused().title.as_str())
-            .collect();
+        let titles: Vec<&str> = self.tabs.iter().map(|tab| tab.focused().label()).collect();
         title_bar::layout(&titles, self.tabs.active_index(), cols, self.chrome())
     }
 
@@ -1585,6 +1591,7 @@ impl Session {
     }
 
     fn redraw(&mut self, config: &Config) -> Result<(), Box<dyn Error>> {
+        self.sync_window_title();
         let band = self.band_shapes(config);
         let Some(tab) = self.tabs.active() else {
             return Ok(());
@@ -1656,6 +1663,19 @@ impl Session {
         }
     }
 
+    /// Gives the OS window (taskbar, window switcher) the label of the
+    /// focused pane, when it changed.
+    fn sync_window_title(&mut self) {
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        let label = tab.focused().label();
+        if label != self.window_title {
+            self.window_title = label.to_owned();
+            self.window.set_title(label);
+        }
+    }
+
     /// The title bar band as shapes, drawn over everything: its
     /// background, the icon, the centered window title and the window
     /// buttons. None without a band.
@@ -1685,7 +1705,10 @@ impl Session {
             shapes.extend(self.icon_shapes.iter().flat_map(|(_, icon)| icon.clone()));
         }
         if self.title_bar.show_title {
-            let title = self.tabs.active().map(|tab| tab.focused().title.clone());
+            let title = self
+                .tabs
+                .active()
+                .map(|tab| tab.focused().label().to_owned());
             let (left, right) = title_bar::title_room(icon, &buttons, self.scale);
             let cell = self.font.cell_size();
             let placed = title
@@ -2194,6 +2217,16 @@ mod tests {
             resize: Throttle::default(),
         };
         (pane, resizes, written)
+    }
+
+    #[test]
+    fn the_label_prefers_the_title_the_child_set() {
+        let (mut pane, _, _) = pane(10, 2);
+        assert_eq!(pane.label(), "sh", "the program name until one is set");
+        pane.terminal.advance(b"\x1b]2;~: ngmux - ngmux\x07");
+        assert_eq!(pane.label(), "~: ngmux - ngmux");
+        pane.terminal.advance(b"\x1b]2;\x07");
+        assert_eq!(pane.label(), "sh", "an empty title falls back");
     }
 
     #[test]

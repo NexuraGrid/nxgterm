@@ -389,9 +389,11 @@ exits with the last one. `Alt+N` goes to tab N (`Alt+9` past the last tab
 goes to the last).
 
 With two or more tabs (see `window.tab_bar`) a bar takes the top row,
-labelled ` N: program `, the current tab highlighted; click a label to
-switch to it. Labels are the program name; titles set by programs (OSC 0/2)
-are not shown yet.
+labelled ` N: title `, the current tab highlighted; click a label to
+switch to it. A label is the title the focused pane's program set (OSC 0 or
+OSC 2, e.g. `~: ngmux - ngmux`), or the program name until it sets one or
+after it sets an empty one. The OS window title (taskbar, window switcher)
+follows the focused pane's title too.
 
 With `window.decorations = "integrated"` (the default) nxgterm draws its own
 title bar, as WezTerm does. On Windows and Linux it is a slim band, a little

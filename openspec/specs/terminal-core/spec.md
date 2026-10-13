@@ -137,6 +137,25 @@ the application MUST write them back to the PTY. The terminal SHALL answer:
 - THEN `take_responses` returns `ESC [ 3 ; 5 R`
 - AND a second call returns nothing
 
+### Requirement: Window title
+
+OSC 0 and OSC 2 (`ESC ] 0 ; text BEL`, also terminated by `ESC \`) MUST set
+the title exposed by `Terminal::title`; `;` inside the text MUST be kept.
+OSC 1 (icon name) MUST be ignored, and OSC 0 sets only the title. The text
+MUST have invalid UTF-8 replaced and control characters removed and be cut
+to 1024 bytes (`MAX_TITLE_BYTES`) on a character boundary; a title empty
+or blank after that MUST clear it (`title()` is None). XTWINOPS
+`CSI 22 ; Ps t` MUST save and `CSI 23 ; Ps t` restore the title for `Ps`
+0 or 2 (1, the icon name, does nothing), on a stack of 10 that drops the
+oldest entry when full; popping an empty stack does nothing. A full reset
+keeps the title. `take_title_changed` MUST report a title change once.
+
+#### Scenario: A program names the window
+- GIVEN no title set
+- WHEN `ESC ] 2 ; hello BEL` is fed
+- THEN `title()` is `hello` and `take_title_changed` is true once
+- AND after `ESC ] 2 ; BEL` `title()` is None again
+
 ### Requirement: APC pre-filter
 
 Because vte 0.15 discards APC strings, the terminal MUST pass child output

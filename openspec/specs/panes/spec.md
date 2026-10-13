@@ -45,7 +45,9 @@ Exactly one pane per tab MUST have focus. Keyboard input, paste, copy, select
 all and the command palette MUST target the focused pane. `focus_*` actions
 (left, right, up, down) MUST move focus to the adjacent pane in that
 direction and do nothing when none exists. The tab label MUST come from the
-focused pane.
+focused pane: the title its terminal reports (OSC 0/2) or, without one, the
+program name. The OS window title MUST follow the label of the focused pane
+of the active tab, set only when it changes.
 
 #### Scenario: Directional focus
 - GIVEN panes A | B and A focused
