@@ -106,6 +106,9 @@ decided by the user before any push.
   failing reload assertion; GREEN after. Writer checks: 943/0, clippy clean,
   fmt clean, release build ok; parent spot check identical. Not yet seen
   on screen. Gaps: OSC titles (-> T5), circle hit area is its square.
+  Commit 6e1cb28; assess medium, slice_budget_reached; native review consent
+  DECLINED by the user for this candidate (30114cc..6e1cb28). Off path:
+  medium tier -> writer self-verification + parent spot check (done).
 
 ## Next step
 
