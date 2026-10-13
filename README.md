@@ -222,7 +222,7 @@ backend = "auto"            # auto | gpu | cpu
 lines = 10000               # history kept on the main screen; 0 disables it
 
 [selection]
-copy_on_select = true       # selected text goes to PRIMARY (Linux only)
+copy_on_select = "primary"  # "primary" (Linux only), "clipboard", "both" or "off"
 
 [keybindings]
 "ctrl+shift+r" = "reload_config"  # "chord" = "action", added to the defaults
@@ -310,7 +310,9 @@ the defaults are used instead.
 | `Ctrl+Shift+P` | `command_palette`: list and run every action |
 | `Ctrl+Shift+C` (`Cmd+C` on macOS) | `copy`: the selection to the clipboard |
 | `Ctrl+Shift+V` (`Cmd+V` on macOS), `Shift+Insert` | `paste`: the clipboard into the shell |
-| (unbound) | `select_all`, `reload_config`, `equalize_panes` |
+| `Ctrl+Shift+A` (`Cmd+A` on macOS) | `select_all`: the whole history and screen |
+| (unbound) | `copy_scrollback`: the whole history and screen to the clipboard, keeping the selection |
+| (unbound) | `reload_config`, `equalize_panes` |
 
 Bound keys are handled by the terminal and never reach the shell (the
 scrolling keys still do in full-screen programs, which have no history).
@@ -336,8 +338,13 @@ Selected text stays selected while the view scrolls and output moves it into
 the history; output that changes a selected line, a resize or switching
 screens clears it. Copied text has trailing blanks trimmed and lines that
 wrapped automatically joined. `Ctrl+C` stays an interrupt for the shell, and
-copy without a selection does nothing. On Linux (X11 and Wayland) every
-selection is also copied to the PRIMARY selection (`selection.copy_on_select`).
+copy without a selection does nothing. `copy_scrollback` copies everything
+the pane holds, history included, without changing the selection.
+
+`selection.copy_on_select` picks where every finished selection is copied:
+`"primary"` (the default, also `true`) for the PRIMARY selection on Linux
+(X11 and Wayland; nothing on other systems), `"clipboard"` for the
+clipboard, `"both"`, or `"off"` (also `false`).
 Words stop at spaces and ``()[]{}<>'"`,;:│``, so paths select whole.
 
 Pasted text has its line breaks sent as Enter (`\r`) and other control

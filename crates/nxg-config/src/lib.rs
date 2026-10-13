@@ -127,9 +127,11 @@ lines = 10000
 # triple-click for a line, Alt+drag for a block. While a program uses the
 # mouse, hold Shift to select. Middle-click pastes the PRIMARY selection
 # (Linux).
-# Copy selected text to the PRIMARY selection right away (Linux X11 and
-# Wayland; ignored on other systems).
-copy_on_select = true
+# Where selected text is copied as soon as it is made (or select_all runs):
+# "primary" (or true) for the PRIMARY selection (Linux X11 and Wayland;
+# nothing on other systems), "clipboard" for the clipboard, "both", or
+# "off" (or false).
+copy_on_select = "primary"
 
 [panes]
 # Split panes (see the split_* and focus_pane_* actions below). Color of the
@@ -158,13 +160,16 @@ inactive_dim = 0.25
 # focus_pane_right, focus_pane_up, focus_pane_down, resize_pane_left,
 # resize_pane_right, resize_pane_up, resize_pane_down, close_pane, zoom_pane,
 # equalize_panes (unbound by default), command_palette, copy, paste,
-# select_all (unbound by default), reload_config (unbound by default), none. Scrolling keys reach
-# the application on the alternate screen (full-screen programs). Copy does
-# nothing without a selection; ctrl+c stays an interrupt for the shell.
+# select_all, copy_scrollback (unbound by default: the whole history and
+# screen to the clipboard, keeping the selection), reload_config (unbound by
+# default), none. Scrolling keys reach the application on the alternate
+# screen (full-screen programs). Copy does nothing without a selection;
+# ctrl+c stays an interrupt for the shell.
 #
 # The defaults (on macOS the zoom chords use cmd instead of ctrl, copy and
 # paste are cmd+c and cmd+v, and the pane focus and resize chords use cmd
-# instead of ctrl, because ctrl+arrows belong to Mission Control). On Linux
+# instead of ctrl, because ctrl+arrows belong to Mission Control; select_all
+# is cmd+a). On Linux
 # desktops (KDE, GNOME) ctrl+alt+arrows may switch workspaces: rebind the
 # focus_pane_* chords or free them with "none":
 # "ctrl+equal" = "zoom_in"
@@ -204,6 +209,7 @@ inactive_dim = 0.25
 # "ctrl+shift+c" = "copy"
 # "ctrl+shift+v" = "paste"
 # "shift+insert" = "paste"
+# "ctrl+shift+a" = "select_all"
 #
 # Examples:
 # "ctrl+shift+r" = "reload_config"
@@ -385,18 +391,60 @@ impl Default for PanesConfig {
 }
 
 /// `[selection]`
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SelectionConfig {
-    /// Copy selected text to the PRIMARY selection as soon as it is made
-    /// (Linux X11 and Wayland; ignored elsewhere).
-    pub copy_on_select: bool,
+    /// Where selected text is copied as soon as it is made.
+    pub copy_on_select: CopyOnSelect,
 }
 
-impl Default for SelectionConfig {
-    fn default() -> Self {
-        Self {
-            copy_on_select: true,
+/// Where a finished selection is copied: `true` is [`Self::Primary`] and
+/// `false` is [`Self::Off`], as before the targets existed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CopyOnSelect {
+    Off,
+    /// The PRIMARY selection (Linux X11 and Wayland; nothing elsewhere).
+    #[default]
+    Primary,
+    Clipboard,
+    Both,
+}
+
+impl CopyOnSelect {
+    /// Whether the PRIMARY selection receives the text.
+    pub fn primary(self) -> bool {
+        matches!(self, Self::Primary | Self::Both)
+    }
+
+    /// Whether the clipboard receives the text.
+    pub fn clipboard(self) -> bool {
+        matches!(self, Self::Clipboard | Self::Both)
+    }
+}
+
+impl<'de> Deserialize<'de> for CopyOnSelect {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(
+            untagged,
+            expecting = "true, false, \"primary\", \"clipboard\", \"both\" or \"off\""
+        )]
+        enum Raw {
+            Bool(bool),
+            Name(String),
+        }
+        match Raw::deserialize(deserializer)? {
+            Raw::Bool(true) => Ok(Self::Primary),
+            Raw::Bool(false) => Ok(Self::Off),
+            Raw::Name(name) => match name.trim().to_ascii_lowercase().as_str() {
+                "primary" => Ok(Self::Primary),
+                "clipboard" => Ok(Self::Clipboard),
+                "both" => Ok(Self::Both),
+                "off" => Ok(Self::Off),
+                _ => Err(serde::de::Error::custom(format!(
+                    "invalid copy_on_select `{name}`, expected \"primary\", \"clipboard\", \"both\" or \"off\""
+                ))),
+            },
         }
     }
 }
@@ -746,7 +794,7 @@ mod tests {
         assert_eq!(config.window.opacity, 1.0);
         assert!(!config.window.translucent());
         assert!(!config.window.blur);
-        assert!(config.selection.copy_on_select);
+        assert_eq!(config.selection.copy_on_select, CopyOnSelect::Primary);
         assert_eq!(
             config.colors.resolve().selection_background,
             Some(Rgb::hex(0x585b70))
@@ -866,7 +914,31 @@ mod tests {
         assert_eq!(config.shell.args, ["-NoLogo"]);
         assert_eq!(config.renderer.backend, Backend::Cpu);
         assert_eq!(config.scrollback.lines, 0);
-        assert!(!config.selection.copy_on_select);
+        assert_eq!(config.selection.copy_on_select, CopyOnSelect::Off);
+    }
+
+    #[test]
+    fn copy_on_select_takes_a_bool_or_a_target() {
+        let text = |value: &str| format!("[selection]\ncopy_on_select = {value}\n");
+        let copy_on_select = |value: &str| parse(&text(value)).unwrap().selection.copy_on_select;
+        assert_eq!(copy_on_select("true"), CopyOnSelect::Primary);
+        assert_eq!(copy_on_select("false"), CopyOnSelect::Off);
+        assert_eq!(copy_on_select("\"primary\""), CopyOnSelect::Primary);
+        assert_eq!(copy_on_select("\"clipboard\""), CopyOnSelect::Clipboard);
+        assert_eq!(copy_on_select("\"Both\""), CopyOnSelect::Both);
+        assert_eq!(copy_on_select("\"off\""), CopyOnSelect::Off);
+        let error = parse_error(&text("\"secondary\""));
+        assert!(error.contains("secondary"), "{error}");
+        assert!(parse(&text("1")).is_err());
+    }
+
+    #[test]
+    fn copy_on_select_targets_name_their_selections() {
+        let targets = |c: CopyOnSelect| (c.primary(), c.clipboard());
+        assert_eq!(targets(CopyOnSelect::Off), (false, false));
+        assert_eq!(targets(CopyOnSelect::Primary), (true, false));
+        assert_eq!(targets(CopyOnSelect::Clipboard), (false, true));
+        assert_eq!(targets(CopyOnSelect::Both), (true, true));
     }
 
     #[test]

@@ -71,7 +71,7 @@ missing key MUST yield the defaults. Unknown keys MUST be errors. The schema:
 | `shell.program`, `shell.args` | string; blank = unset / list | platform default / `[]` |
 | `renderer.backend` | `auto` \| `gpu` \| `cpu` | `auto` |
 | `scrollback.lines` | usize history lines; `0` disables the scrollback | `10000` |
-| `selection.copy_on_select` | bool; copy finished selections to PRIMARY (Linux X11/Wayland only, ignored elsewhere) | `true` |
+| `selection.copy_on_select` | `primary` \| `clipboard` \| `both` \| `off`, or bool (`true` = `primary`, `false` = `off`); where finished selections are copied (PRIMARY on Linux X11/Wayland only, ignored elsewhere) | `primary` |
 | `keybindings` | table of `"chord" = "action"` (or `"none"`), merged over the defaults | see Key bindings |
 
 `--print-config` MUST print a documented sample that parses to exactly the
@@ -296,17 +296,20 @@ Actions MUST have stable snake_case names: `zoom_in`, `zoom_out`,
 `reset_zoom`, `scroll_page_up`, `scroll_page_down`, `scroll_to_top`,
 `scroll_to_bottom`, `new_tab`, `close_tab`, `next_tab`, `previous_tab`,
 `goto_tab_1`..`goto_tab_9`, `command_palette`, `copy`, `paste`,
-`select_all` and `reload_config`, each with a title and a category for
+`select_all`, `copy_scrollback` and `reload_config`, each with a title and a category for
 listing. The defaults MUST be: Ctrl (Cmd on
 macOS) with `=` or `+` for `zoom_in`, `-` for `zoom_out` and `0` for
 `reset_zoom`; Shift+PageUp/PageDown/Home/End for the scroll actions;
 Ctrl+Shift+T/W for `new_tab`/`close_tab`; Ctrl+Tab and Ctrl+Shift+Tab for
 `next_tab`/`previous_tab`; Alt+1..9 for `goto_tab_N`; Ctrl+Shift+P for
 `command_palette`; Ctrl+Shift+C for `copy` and Ctrl+Shift+V for `paste`
-(Cmd+C and Cmd+V on macOS), plus Shift+Insert for `paste`. `select_all` and
-`reload_config` MUST be unbound by default. Ctrl+C and Ctrl+V MUST reach
-the shell. `copy` without a selection MUST do nothing, and MUST NOT write to
-the PTY.
+(Cmd+C and Cmd+V on macOS), plus Shift+Insert for `paste`; Ctrl+Shift+A
+(Cmd+A on macOS) for `select_all`. `copy_scrollback` and `reload_config`
+MUST be unbound by default. Ctrl+C, Ctrl+V and Ctrl+A MUST reach the shell.
+`copy` without a selection MUST do nothing, and MUST NOT write to the PTY.
+`copy_scrollback` MUST copy the focused pane's history and screen text to
+the clipboard (soft-wrapped lines joined, trailing blanks and blank rows
+below the output trimmed) without changing the selection.
 
 `[keybindings]` entries MUST be added over the defaults; `"none"` MUST
 remove a binding. Chords are modifiers (`ctrl`, `alt`, `shift`,
@@ -344,6 +347,17 @@ of its shortcut (e.g. `Ctrl+Shift+T`) MUST be listable.
 - WHEN Ctrl+C is pressed
 - THEN the shell receives ETX and the clipboard is unchanged
 - AND Ctrl+Shift+C copies the selected text
+
+#### Scenario: Copy the whole scrollback
+- GIVEN `[keybindings] "ctrl+shift+s" = "copy_scrollback"`, output in the history and a selection
+- WHEN Ctrl+Shift+S is pressed
+- THEN the clipboard holds the history and screen text
+- AND the selection is unchanged
+
+#### Scenario: Copy on select to the clipboard
+- GIVEN `[selection] copy_on_select = "clipboard"` on any system
+- WHEN a mouse selection ends
+- THEN the selected text is in the clipboard
 
 ### Requirement: Command-line interface
 

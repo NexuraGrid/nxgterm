@@ -87,12 +87,28 @@ impl Terminal {
 
     /// Selects every line, the history included.
     pub fn select_all(&mut self) {
+        let selection = self.everything();
+        self.state.select(selection);
+    }
+
+    /// The text of every line, the history included, as [`Self::select_all`]
+    /// would select it but without touching the selection, and without the
+    /// blank rows below the last output; `None` when it is all blank.
+    pub fn all_text(&self) -> Option<String> {
+        let span = self.everything().span(&self.state);
+        let text = selection::text(&span, &self.state);
+        let text = text.trim_end_matches('\n');
+        (!text.trim().is_empty()).then(|| text.to_owned())
+    }
+
+    /// A selection of every line, the history included.
+    fn everything(&self) -> Selection {
         let first = self.state.scrollback.dropped;
         let size = self.size();
         let last = self.state.screen_base() + u64::from(size.rows() - 1);
         let mut selection = Selection::new(SelectionKind::Simple, Point::new(first, 0));
         selection.update(Point::new(last, size.cols() - 1));
-        self.state.select(selection);
+        selection
     }
 
     pub fn clear_selection(&mut self) {
@@ -179,6 +195,26 @@ mod tests {
         assert_eq!(t.scrollback_len(), 2);
         t.select_all();
         assert_eq!(selected(&t).as_deref(), Some("abcdef\nxy\nz"));
+    }
+
+    #[test]
+    fn all_text_reads_the_history_and_screen_without_selecting() {
+        let mut t = term(3, 4);
+        t.advance(b"abcdef\r\nxy \r\nz\r\nw\r\nv");
+        assert_eq!(t.scrollback_len(), 2);
+        drag(&mut t, (0, 1), (0, 1));
+        let selection = t.selection();
+        assert_eq!(t.all_text().as_deref(), Some("abcdef\nxy\nz\nw\nv"));
+        assert_eq!(t.selection(), selection, "the selection is untouched");
+        assert_eq!(selected(&t).as_deref(), Some("z"));
+    }
+
+    #[test]
+    fn all_text_drops_trailing_blank_rows_and_is_none_when_blank() {
+        let mut t = term(5, 4);
+        assert_eq!(t.all_text(), None);
+        t.advance(b"a\r\nb");
+        assert_eq!(t.all_text().as_deref(), Some("a\nb"));
     }
 
     #[test]

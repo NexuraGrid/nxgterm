@@ -47,6 +47,9 @@ pub enum Action {
     Copy,
     Paste,
     SelectAll,
+    /// The whole history and screen of the focused pane to the clipboard,
+    /// leaving the selection alone.
+    CopyScrollback,
     NewTab,
     CloseTab,
     NextTab,
@@ -71,7 +74,7 @@ pub enum Action {
 }
 
 /// Name, title and category of every action, in listing order.
-const ACTIONS: [(Action, &str, &str, Category); 38] = [
+const ACTIONS: [(Action, &str, &str, Category); 39] = [
     (Action::ZoomIn, "zoom_in", "Zoom In", Category::Font),
     (Action::ZoomOut, "zoom_out", "Zoom Out", Category::Font),
     (
@@ -110,6 +113,12 @@ const ACTIONS: [(Action, &str, &str, Category); 38] = [
         Action::SelectAll,
         "select_all",
         "Select All",
+        Category::Clipboard,
+    ),
+    (
+        Action::CopyScrollback,
+        "copy_scrollback",
+        "Copy Scrollback",
         Category::Clipboard,
     ),
     (Action::NewTab, "new_tab", "New Tab", Category::Tabs),
@@ -569,7 +578,7 @@ impl<'de> Visitor<'de> for EntriesVisitor {
 /// macOS, and `CLIPBOARD` is Ctrl+Shift, or Cmd on macOS (Ctrl+C and
 /// Ctrl+V belong to the shell elsewhere). The pane focus and resize chords
 /// use `PRIMARY` too: Ctrl+Left/Right belong to Mission Control on macOS.
-const DEFAULTS: [(&str, Action); 37] = [
+const DEFAULTS: [(&str, Action); 38] = [
     ("PRIMARY+equal", Action::ZoomIn),
     ("PRIMARY+plus", Action::ZoomIn),
     ("PRIMARY+minus", Action::ZoomOut),
@@ -606,6 +615,7 @@ const DEFAULTS: [(&str, Action); 37] = [
     ("ctrl+shift+p", Action::CommandPalette),
     ("CLIPBOARD+c", Action::Copy),
     ("CLIPBOARD+v", Action::Paste),
+    ("CLIPBOARD+a", Action::SelectAll),
     ("shift+insert", Action::Paste),
 ];
 
@@ -730,6 +740,8 @@ mod tests {
         assert_eq!(Action::PreviousTab.name(), "previous_tab");
         assert_eq!(Action::GotoTab(3).name(), "goto_tab_3");
         assert_eq!(Action::CommandPalette.name(), "command_palette");
+        assert_eq!(Action::CopyScrollback.name(), "copy_scrollback");
+        assert_eq!(Action::CopyScrollback.category(), Category::Clipboard);
         assert_eq!(Action::from_name("New_Tab"), Some(Action::NewTab));
         assert_eq!(Action::from_name("goto_tab_0"), None);
         assert_eq!(Action::from_name("goto_tab_10"), None);
@@ -859,6 +871,8 @@ mod tests {
         assert_eq!(on("ctrl+shift+p"), Some(Action::CommandPalette));
         assert_eq!(on("ctrl+shift+c"), Some(Action::Copy));
         assert_eq!(on("ctrl+shift+v"), Some(Action::Paste));
+        assert_eq!(on("ctrl+shift+a"), Some(Action::SelectAll));
+        assert_eq!(on("ctrl+a"), None, "ctrl+a stays with the shell");
         assert_eq!(on("shift+insert"), Some(Action::Paste));
         assert_eq!(on("ctrl+c"), None, "ctrl+c stays an interrupt");
         assert_eq!(on("ctrl+v"), None);
@@ -877,6 +891,8 @@ mod tests {
         assert_eq!(b.action(&chord("ctrl+shift+t")), Some(Action::NewTab));
         assert_eq!(b.action(&chord("cmd+c")), Some(Action::Copy));
         assert_eq!(b.action(&chord("cmd+v")), Some(Action::Paste));
+        assert_eq!(b.action(&chord("cmd+a")), Some(Action::SelectAll));
+        assert_eq!(b.action(&chord("ctrl+shift+a")), None);
         assert_eq!(b.action(&chord("shift+insert")), Some(Action::Paste));
         assert_eq!(b.action(&chord("ctrl+shift+c")), None);
     }
@@ -985,7 +1001,7 @@ mod tests {
 
     #[test]
     fn pane_actions_have_names_titles_and_the_panes_category() {
-        assert_eq!(Action::ALL.len(), 38);
+        assert_eq!(Action::ALL.len(), 39);
         for (action, name, title) in PANE_ACTIONS {
             assert_eq!(action.name(), name);
             assert_eq!(action.title(), title);

@@ -501,7 +501,11 @@ mod tests {
 
     #[test]
     fn categories_and_names_match_too() {
-        assert_eq!(titles(&typed("scrollback")).len(), 4);
+        assert_eq!(
+            titles(&typed("scrollback")).len(),
+            5,
+            "4 scroll actions and Copy Scrollback"
+        );
         assert_eq!(titles(&typed("goto_tab_2")), ["Go to Tab 2"]);
         assert_eq!(titles(&typed("tab 9")), ["Go to Tab 9"]);
         assert!(titles(&typed("xyz")).is_empty());
@@ -680,7 +684,7 @@ mod tests {
         };
         let term = palette.render(rect, (1, 2, 3));
         assert_eq!(term.size(), TermSize::new(40, 5).unwrap());
-        assert_eq!(text(&term, 0), " Command Palette                   5/37 ");
+        assert_eq!(text(&term, 0), " Command Palette                   5/38 ");
         assert_eq!(text(&term, 1), " > zo                                   ");
         assert_eq!(text(&term, 2), " Font        Zoom In             Ctrl+= ");
         assert_eq!(text(&term, 3), " Font        Zoom Out            Ctrl+- ");

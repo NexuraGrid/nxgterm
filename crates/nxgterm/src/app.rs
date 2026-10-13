@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
-use nxg_config::{Backend, Bindings, Config, Decorations, FontConfig, TabBar};
+use nxg_config::{Backend, Bindings, Config, CopyOnSelect, Decorations, FontConfig, TabBar};
 use nxg_core::fallback::{self, Init};
 use nxg_core::mouse::{MouseAction, MouseButton, MouseEvent};
 use nxg_core::ports::{ChildProcess, Clipboard, ClipboardKind, PtyControl, RenderError, Renderer};
@@ -507,6 +507,10 @@ impl App {
                 self.select_all();
                 return true;
             }
+            Action::CopyScrollback => {
+                self.copy_scrollback();
+                return true;
+            }
             _ => {}
         }
         if let Some(command) = tab::command(action) {
@@ -559,6 +563,7 @@ impl App {
             Action::Copy
             | Action::Paste
             | Action::SelectAll
+            | Action::CopyScrollback
             | Action::CommandPalette
             | Action::ZoomIn
             | Action::ZoomOut
@@ -631,6 +636,21 @@ impl App {
     /// Copies the selection to the clipboard; nothing without one.
     fn copy(&mut self) {
         if let Some(text) = self.selected_text() {
+            if let Err(error) = self.clipboard.set_text(ClipboardKind::Clipboard, text) {
+                eprintln!("nxgterm: {error}");
+            }
+        }
+    }
+
+    /// Copies the whole history and screen of the focused pane to the
+    /// clipboard, leaving its selection alone.
+    fn copy_scrollback(&mut self) {
+        let text = self
+            .session
+            .as_ref()
+            .and_then(|session| tab::focused(&session.tabs))
+            .and_then(|pane| pane.terminal.all_text());
+        if let Some(text) = text {
             if let Err(error) = self.clipboard.set_text(ClipboardKind::Clipboard, text) {
                 eprintln!("nxgterm: {error}");
             }
@@ -1761,17 +1781,33 @@ fn spawn_pane(
     })
 }
 
-/// Copies the selection of `terminal` to the PRIMARY selection when the
-/// config asks for it and the system has one; failures only warn.
+/// Copies the selection of `terminal` to the selections the config names
+/// (see [`copy_on_select_kinds`]); failures only warn.
 fn copy_on_select(clipboard: &mut dyn Clipboard, config: &Config, terminal: &Terminal) {
-    if !(HAS_PRIMARY && config.selection.copy_on_select) {
+    let target = config.selection.copy_on_select;
+    let mut kinds = copy_on_select_kinds(target, HAS_PRIMARY).peekable();
+    if kinds.peek().is_none() {
         return;
     }
-    if let Some(text) = terminal.selection_text() {
-        if let Err(error) = clipboard.set_text(ClipboardKind::Primary, text) {
+    let Some(text) = terminal.selection_text() else {
+        return;
+    };
+    for kind in kinds {
+        if let Err(error) = clipboard.set_text(kind, text.clone()) {
             eprintln!("nxgterm: {error}");
         }
     }
+}
+
+/// The selections `target` copies to; PRIMARY only where the system has
+/// one (`has_primary`).
+fn copy_on_select_kinds(
+    target: CopyOnSelect,
+    has_primary: bool,
+) -> impl Iterator<Item = ClipboardKind> {
+    let primary = (has_primary && target.primary()).then_some(ClipboardKind::Primary);
+    let clipboard = target.clipboard().then_some(ClipboardKind::Clipboard);
+    primary.into_iter().chain(clipboard)
 }
 
 /// The renderer's cells inset by `padding` pixels. Takes the subtrait\n/// object directly: upcasting to `&dyn Renderer` needs Rust 1.86.
@@ -2030,6 +2066,26 @@ mod tests {
             resize: Throttle::default(),
         };
         (pane, resizes, written)
+    }
+
+    #[test]
+    fn copy_on_select_skips_primary_where_there_is_none() {
+        use nxg_config::CopyOnSelect::{Both, Clipboard, Off, Primary};
+        let kinds =
+            |target, has_primary| copy_on_select_kinds(target, has_primary).collect::<Vec<_>>();
+        assert_eq!(kinds(Off, true), []);
+        assert_eq!(kinds(Primary, true), [ClipboardKind::Primary]);
+        assert_eq!(
+            kinds(Primary, false),
+            [],
+            "true stays a no-op without PRIMARY"
+        );
+        assert_eq!(kinds(Clipboard, false), [ClipboardKind::Clipboard]);
+        assert_eq!(
+            kinds(Both, true),
+            [ClipboardKind::Primary, ClipboardKind::Clipboard]
+        );
+        assert_eq!(kinds(Both, false), [ClipboardKind::Clipboard]);
     }
 
     #[test]

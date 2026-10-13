@@ -39,7 +39,7 @@ Out of scope: rounded window corners/shadows, ligatures, HTML copy.
 ## Tasks
 
 - [x] T1 Drag and drop file paths into the terminal + tests
-- [ ] T2 Copy everything: SelectAll default binding, CopyScrollback, copy_on_select target + tests
+- [x] T2 Copy everything: SelectAll default binding, CopyScrollback, copy_on_select target + tests
 - [ ] T3 Built-in procedural box/block/sextant/powerline glyphs (CPU + GPU) + tests
 - [ ] T4 WezTerm-style configurable title bar + tests
 
@@ -69,8 +69,18 @@ decided by the user before any push.
   Unix, double-quoted on Windows, trailing space) + `WindowEvent::DroppedFile`
   arm in `app.rs` pasting through bracketed paste. RED observed (missing fn),
   GREEN after. Checks: cargo test --workspace 894 passed / 0 failed; clippy
-  clean; fmt clean.
+  clean; fmt clean. Commit a50bedb. Native review: granted, one lens
+  (reliability), approved and acknowledged (lineage review-bd97f9dfc4dd3ea6).
+  Reviewed boundary is now a50bedb.
+- T2 done (delegated writer): `Action::CopyScrollback` (`copy_scrollback`,
+  unbound, in palette), SelectAll default `ctrl+shift+a` / `cmd+a`,
+  `CopyOnSelect { Off, Primary, Clipboard, Both }` accepting bool or string,
+  `Terminal::all_text()` (history + screen, selection untouched), README and
+  openspec updated. RED observed (missing types/methods), GREEN after.
+  Writer checks: cargo test 899/0, clippy -D warnings clean, fmt clean.
+  Parent spot check: same results re-run. Note: with clipboard/both,
+  select_all also copies to the clipboard (shared copy-on-select path).
 
 ## Next step
 
-T2.
+T3.
