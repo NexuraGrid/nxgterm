@@ -829,6 +829,13 @@ impl ApplicationHandler<UserEvent> for App {
                 session.restyle(config);
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
+            WindowEvent::DroppedFile(path) => {
+                // One event per file: each path is pasted quoted and followed
+                // by a space, so agents (Claude Code...) and shells receive it.
+                let text = nxg_core::paste::dropped_path(&path.to_string_lossy(), cfg!(windows));
+                session.paste(&text);
+                session.window.focus_window();
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 let cell = layout(session.renderer.as_ref(), session.padding).cell;
                 let lines = session.wheel.lines(delta, cell.height);
