@@ -3,7 +3,7 @@
 # packaging/update-manifests.sh, then regenerate .SRCINFO.
 
 pkgname=nxgterm
-pkgver=0.8.0
+pkgver=0.9.0
 pkgrel=1
 pkgdesc="Fast, configurable, cross-platform terminal emulator"
 arch=('x86_64' 'aarch64')
@@ -23,7 +23,7 @@ optdepends=(
   'libglvnd: GPU renderer (OpenGL ES)'
 )
 source=("$url/releases/download/v$pkgver/nxgterm-$pkgver-source.tar.gz")
-sha256sums=('eeddfec310c67eefcb5f0f08113fc8f1b85ffc893d0263455e27c0930919de1f')
+sha256sums=('9873253462ed070ab9e6231185930147668d9f3f5cea293f9dc01a590c59d00c')
 
 prepare() {
   cd "$pkgname-$pkgver"
