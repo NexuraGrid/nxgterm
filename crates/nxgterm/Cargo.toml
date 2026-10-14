@@ -13,11 +13,15 @@ categories = ["command-line-utilities"]
 
 [dependencies]
 arboard.workspace = true
+flate2.workspace = true
 nxg-core.workspace = true
 nxg-pty.workspace = true
 nxg-render.workspace = true
 nxg-config.workspace = true
 notify.workspace = true
+sha2.workspace = true
+tar.workspace = true
+ureq.workspace = true
 winit.workspace = true
 
 # Drag and drop on Wayland, which winit leaves out: joins winit's
@@ -26,6 +30,7 @@ winit.workspace = true
 wayland-client = { version = "0.31.15", features = ["system", "dlopen"] }
 
 [target.'cfg(windows)'.dependencies]
+zip.workspace = true
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Storage_EnhancedStorage",

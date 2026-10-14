@@ -48,13 +48,17 @@ terminals in a sensible directory.
 
 - Strategy: `ask-on-risk`. Forecast about 1200 authored changed lines across
   three slices, one PR per task.
+- Chain strategy (user choice, 2026-10-14): `stacked-to-main`.
+  - Slice 1: `feat/working-directory` (T1: 89cc602, c0ccc37) → main.
+  - Slice 2: `feat/self-update` (T2) stacked on slice 1.
+  - Slice 3: T3 stacked on slice 2.
 
 ## Tasks
 
 - [x] T1 Start directory: `working_directory` config + `--working-directory`
       flag + `auto` resolution, pass the cwd to every spawned shell, document it.
       Route: delegated (writer trigger: config, cli, app, pty, docs).
-- [ ] T2 `nxgterm update` and `nxgterm update --check`: release lookup, asset
+- [x] T2 `nxgterm update` and `nxgterm update --check`: release lookup, asset
       selection, checksum verification, install-kind detection, apply.
       Route: delegated.
 - [ ] T3 `install.sh` / `install.ps1` and README install/update docs.
@@ -88,4 +92,13 @@ terminals in a sensible directory.
   follow-ups (non-blocking): lossy non-UTF-8 path round-trip in
   `working_dir.rs:64`, `~` rule repeated in `elevation.rs:112`, CLI-over-config
   precedence untested in `main.rs`, winpty cwd not exercised on real Windows.
-- Next step: T2.
+- T2 done: `crates/nxgterm/src/update/` (version, sums, kind, download, apply,
+  install). New deps: ureq 3.4.2 (rustls), sha2 0.10.9, tar 0.4.46, zip 4.6.1
+  (Windows only). Extra guards: cargo-install and dev builds only print
+  instructions. Checks: fmt, clippy (Linux), `cargo test --workspace` green;
+  parent re-ran `cargo test -p nxgterm update` (31 passed); `update --check`
+  against real GitHub reports 0.10.1 up to date. windows-gnu clippy needs a
+  mingw C compiler for `ring` locally (passes with clang stub env); CI builds
+  Windows natively. Not run: real MSI/zip swap on Windows, macOS bundle, real
+  deb/rpm installs. `cargo +1.87 check` fails in nxg-render (pre-existing).
+- Next step: T3.

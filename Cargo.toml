@@ -29,9 +29,16 @@ fontdue = "0.9"
 portable-pty = "0.9"
 pollster = "1"
 raw-window-handle = "0.6"
+# `nxgterm update`: SHA-256 of downloaded release assets.
+sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 softbuffer = "0.4"
+# `nxgterm update`: unpacks the .tar.gz release assets (no xattrs).
+tar = { version = "0.4", default-features = false }
 toml = "1"
+# `nxgterm update`: HTTPS with rustls and bundled Mozilla roots, no
+# native-tls; honours HTTPS_PROXY/HTTP_PROXY. 3.4 declares Rust 1.85.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 # Display width of characters: wide CJK/emoji, zero-width marks.
 unicode-width = "0.2"
 # Canonical composition of a base char and a combining mark (NFC).
@@ -52,6 +59,9 @@ windows = "0.62"
 # Raw Win32 bindings for the winpty adapter (ConPTY probe, winpty.dll).
 windows-sys = "0.61"
 winit = "0.30"
+# `nxgterm update` on Windows: reads the portable zip (deflate only).
+# 4.x declares Rust 1.82.
+zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

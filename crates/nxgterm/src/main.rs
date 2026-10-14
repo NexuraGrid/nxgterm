@@ -23,6 +23,7 @@ mod tab_bar;
 mod tabs;
 mod throttle;
 mod title_bar;
+mod update;
 mod watch;
 mod wayland_drop;
 
@@ -51,6 +52,12 @@ fn main() -> ExitCode {
         Command::Help => print!("{}", cli::USAGE),
         Command::Version => println!("nxgterm {}", env!("CARGO_PKG_VERSION")),
         Command::PrintConfig => print!("{DEFAULT_CONFIG_TOML}"),
+        Command::Update { check, force } => {
+            if let Err(error) = update::run(check, force) {
+                eprintln!("nxgterm: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
         Command::Run {
             config,
             elevate,
@@ -79,6 +86,7 @@ fn run(
     config_arg: Option<PathBuf>,
     working_directory: Option<WorkingDirectory>,
 ) -> Result<(), Box<dyn Error>> {
+    update::remove_stale_files();
     let env_var = |name: &str| env::var_os(name);
     let default_location = config_arg.is_none() && !nxg_config::has_env_override(env_var);
     let path = config_arg.or_else(|| nxg_config::config_path(Platform::current(), env_var));
