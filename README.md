@@ -603,6 +603,7 @@ winpty (Windows Server 2016) does not pass images through either.
 17. 0.9.2: OSC 52 clipboard writes (copy from ngmux, tmux, nvim) ✅
 18. 0.10.0: Open as Administrator on Windows (`--elevate`, jump list task, title marker) ✅
 19. 0.10.1: Fix the Windows startup crash from 0.10.0, and add a startup smoke test to CI and releases ✅
+20. 0.11.0: `nxgterm update`, one-line install scripts, and shells that start in the launch directory or home ✅
 
 Planned work is tracked in
 [`openspec/RECOMMENDATIONS.md`](openspec/RECOMMENDATIONS.md).
