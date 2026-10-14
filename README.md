@@ -42,6 +42,16 @@ irm https://raw.githubusercontent.com/NexuraGrid/nxgterm/main/install.ps1 | iex
 Running the script again reinstalls. After that, [`nxgterm update`](#update)
 keeps it up to date.
 
+> **Upgrading from an older manual install?** Earlier versions placed a real
+> `nxgterm` binary in `~/.local/bin`, and `install.sh` refuses to replace a
+> real file with its symlink. If the install fails or `nxgterm` still starts
+> the old version, remove the old binary and run the script again:
+>
+> ```sh
+> rm ~/.local/bin/nxgterm
+> curl -fsSL https://raw.githubusercontent.com/NexuraGrid/nxgterm/main/install.sh | sh
+> ```
+
 Packages are attached to each [GitHub Release](https://github.com/NexuraGrid/nxgterm/releases)
 together with a `SHA256SUMS` file. Replace `<v>` with the version.
 
