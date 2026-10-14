@@ -126,9 +126,11 @@ pub fn archive_root(dest: &Path, marker: &str) -> Result<PathBuf, String> {
 }
 
 /// Replaces the files of the portable install around `exe` with those
-/// under `new_root` (the unpacked archive): each file the release ships
-/// that also exists in the install. The archive's binary replaces `exe`
-/// whatever it is called. Returns how many files were replaced.
+/// under `new_root` (the unpacked archive). Runtime files (see
+/// [`is_runtime_file`]) are installed even when missing locally, so a
+/// release can add them; other files (docs, licenses) only replace a copy
+/// that still exists. The archive's binary replaces `exe` whatever it is
+/// called. Returns how many files were installed.
 pub fn replace_portable(new_root: &Path, exe: &Path) -> Result<usize, String> {
     let install_dir = exe.parent().ok_or("the executable has no directory")?;
     let mut plan = Vec::new();
@@ -137,13 +139,16 @@ pub fn replace_portable(new_root: &Path, exe: &Path) -> Result<usize, String> {
         .map_err(|error| format!("cannot read the unpacked release: {error}"))?
     {
         let relative = new.strip_prefix(new_root).unwrap_or(&new);
-        let target = if relative == Path::new(EXE_NAME) {
+        let (target, runtime) = if relative == Path::new(EXE_NAME) {
             has_exe = true;
-            exe.to_path_buf()
+            (exe.to_path_buf(), true)
         } else {
-            install_dir.join(relative)
+            (
+                install_dir.join(relative),
+                is_runtime_file(relative, cfg!(windows)),
+            )
         };
-        if target.is_file() {
+        if runtime || target.is_file() {
             plan.push((new, target));
         }
     }
@@ -152,6 +157,19 @@ pub fn replace_portable(new_root: &Path, exe: &Path) -> Result<usize, String> {
     }
     swap_files(&plan)?;
     Ok(plan.len())
+}
+
+/// Whether the release file at `relative` is needed to run nxgterm:
+/// anything under `profile/`, and on Windows every `*.dll` and `x64/**`.
+fn is_runtime_file(relative: &Path, windows: bool) -> bool {
+    let first = relative.components().next();
+    let under = |dir: &str| first.is_some_and(|c| c.as_os_str() == dir);
+    under("profile")
+        || (windows
+            && (under("x64")
+                || relative
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"))))
 }
 
 /// The regular files under `dir`, recursively (symlinks are skipped).
@@ -173,26 +191,87 @@ fn files_under(dir: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Moves each `(new, target)` into place: `target` is renamed to
-/// `target.old` first (Windows allows renaming a running exe or loaded
-/// DLL, not overwriting it), then `new` takes its name with the old
-/// file's permissions. Any failure undoes the swaps done so far. The
-/// `.old` files are then deleted where possible.
+/// One finished step of [`swap_files`], kept to undo it.
+enum Done<'a> {
+    /// `target` existed; its previous content is at `old`.
+    Replaced { target: &'a Path, old: PathBuf },
+    /// `target` is new; `dirs` were created for it, deepest first.
+    Added {
+        target: &'a Path,
+        dirs: Vec<PathBuf>,
+    },
+}
+
+/// Moves each `(new, target)` into place. An existing `target` keeps a
+/// rollback copy at `target.old` (see [`swap_one`]); a missing one is
+/// added, creating its directories. Any failure undoes the steps done so
+/// far. The `.old` files are then deleted where possible.
 fn swap_files(plan: &[(PathBuf, PathBuf)]) -> Result<(), String> {
-    let mut done: Vec<(&Path, PathBuf)> = Vec::new();
+    let mut done: Vec<Done> = Vec::new();
     for (new, target) in plan {
-        if let Err(error) = swap_one(new, target) {
-            undo(&done);
-            return Err(error);
+        let step = if target.exists() {
+            swap_one(new, target).map(|()| Done::Replaced {
+                target,
+                old: old_path(target),
+            })
+        } else {
+            add_one(new, target).map(|dirs| Done::Added { target, dirs })
+        };
+        match step {
+            Ok(step) => done.push(step),
+            Err(error) => {
+                undo(&done);
+                return Err(error);
+            }
         }
-        done.push((target, old_path(target)));
     }
-    for (_, old) in &done {
-        let _ = fs::remove_file(old);
+    for step in &done {
+        if let Done::Replaced { old, .. } = step {
+            let _ = fs::remove_file(old);
+        }
     }
     Ok(())
 }
 
+/// Installs `new` at the missing `target`, returning the directories it
+/// had to create (deepest first) so a rollback can remove them.
+fn add_one(new: &Path, target: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut dirs = Vec::new();
+    let mut dir = target.parent();
+    while let Some(path) = dir {
+        if path.exists() {
+            break;
+        }
+        dirs.push(path.to_path_buf());
+        dir = path.parent();
+    }
+    let install = || -> io::Result<()> {
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(new, target)
+    };
+    if let Err(error) = install() {
+        remove_dirs(&dirs);
+        return Err(format!("cannot install {}: {error}", target.display()));
+    }
+    Ok(dirs)
+}
+
+/// Removes the (now empty) directories an added file needed.
+fn remove_dirs(dirs: &[PathBuf]) {
+    for dir in dirs {
+        let _ = fs::remove_dir(dir);
+    }
+}
+
+/// Replaces the existing `target` with `new` (given the old file's
+/// permissions), leaving its previous content at `target.old`.
+///
+/// On Unix the old file is linked (or copied) to `.old` and `new` is then
+/// renamed over `target`, so `target` exists at every step. On Windows
+/// `target` is moved aside first, since a running exe or loaded DLL can be
+/// renamed but not overwritten.
 fn swap_one(new: &Path, target: &Path) -> Result<(), String> {
     let old = old_path(target);
     match fs::remove_file(&old) {
@@ -206,28 +285,66 @@ fn swap_one(new: &Path, target: &Path) -> Result<(), String> {
         }
     }
     #[cfg(unix)]
-    if let Ok(metadata) = fs::metadata(target) {
-        let _ = fs::set_permissions(new, metadata.permissions());
+    {
+        if let Ok(metadata) = fs::metadata(target) {
+            let _ = fs::set_permissions(new, metadata.permissions());
+        }
+        keep_rollback_copy(target, &old)
+            .map_err(|error| format!("cannot back up {}: {error}", target.display()))?;
+        if let Err(error) = fs::rename(new, target) {
+            let _ = fs::remove_file(&old);
+            return Err(format!("cannot install {}: {error}", target.display()));
+        }
     }
-    fs::rename(target, &old)
-        .map_err(|error| format!("cannot move {} aside: {error}", target.display()))?;
-    if let Err(error) = fs::rename(new, target) {
-        let _ = fs::rename(&old, target);
-        return Err(format!("cannot install {}: {error}", target.display()));
+    #[cfg(not(unix))]
+    {
+        fs::rename(target, &old)
+            .map_err(|error| format!("cannot move {} aside: {error}", target.display()))?;
+        if let Err(error) = fs::rename(new, target) {
+            let _ = fs::rename(&old, target);
+            return Err(format!("cannot install {}: {error}", target.display()));
+        }
     }
     Ok(())
 }
 
-/// Puts the `.old` files back, newest swap first.
-fn undo(done: &[(&Path, PathBuf)]) {
-    for (target, old) in done.iter().rev() {
-        let _ = fs::remove_file(target);
-        if let Err(error) = fs::rename(old, target) {
-            eprintln!(
-                "nxgterm: cannot restore {} from {}: {error}",
-                target.display(),
-                old.display()
-            );
+/// Makes `old` a copy of `target` without touching `target`: a hard link
+/// where the filesystem allows one, a full copy otherwise.
+#[cfg(unix)]
+fn keep_rollback_copy(target: &Path, old: &Path) -> io::Result<()> {
+    if fs::hard_link(target, old).is_ok() {
+        return Ok(());
+    }
+    if let Err(error) = fs::copy(target, old) {
+        let _ = fs::remove_file(old);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Undoes the finished steps, newest first: `.old` files are put back
+/// and added files (with the directories made for them) removed.
+fn undo(done: &[Done]) {
+    for step in done.iter().rev() {
+        match step {
+            Done::Replaced { target, old } => {
+                // On Unix the rename replaces `target` atomically.
+                #[cfg(not(unix))]
+                let _ = fs::remove_file(target);
+                if let Err(error) = fs::rename(old, target) {
+                    eprintln!(
+                        "nxgterm: cannot restore {} from {}: {error}",
+                        target.display(),
+                        old.display()
+                    );
+                }
+            }
+            Done::Added { target, dirs } => {
+                if let Err(error) = fs::remove_file(target) {
+                    eprintln!("nxgterm: cannot remove {}: {error}", target.display());
+                }
+                remove_dirs(dirs);
+            }
         }
     }
 }
@@ -330,6 +447,84 @@ mod tests {
         assert_eq!(read(&a), "old a");
         assert_eq!(read(&b), "old b");
         assert!(!old_path(&a).exists() && !old_path(&b).exists());
+    }
+
+    #[test]
+    fn release_only_runtime_files_are_installed() {
+        let root = test_dir("portable-new-files");
+        let install = root.join("install");
+        let exe = install.join(EXE_NAME);
+        write(&exe, "old exe");
+        let new = root.join("new");
+        write(&new.join(EXE_NAME), "new exe");
+        write(&new.join("profile/extra/helper.sh"), "helper");
+        write(&new.join("LICENSE"), "license");
+
+        assert_eq!(replace_portable(&new, &exe), Ok(2));
+        assert_eq!(read(&install.join("profile/extra/helper.sh")), "helper");
+        assert!(!install.join("LICENSE").exists(), "docs stay opt-in");
+    }
+
+    #[test]
+    fn runtime_files_are_the_exe_profile_and_windows_libraries() {
+        for windows in [false, true] {
+            assert!(is_runtime_file(Path::new("profile/a/b.sh"), windows));
+            assert!(!is_runtime_file(Path::new("README.md"), windows));
+            assert!(!is_runtime_file(Path::new("LICENSE-THIRD-PARTY"), windows));
+            assert!(!is_runtime_file(Path::new("docs/profile"), windows));
+        }
+        assert!(is_runtime_file(Path::new("conpty.dll"), true));
+        assert!(is_runtime_file(Path::new("x64/OpenConsole.exe"), true));
+        assert!(!is_runtime_file(Path::new("conpty.dll"), false));
+        assert!(!is_runtime_file(Path::new("x64/OpenConsole.exe"), false));
+    }
+
+    #[test]
+    fn a_failed_swap_removes_added_files() {
+        let root = test_dir("rollback-added");
+        let added = root.join("sub/dir/added");
+        let b = root.join("b");
+        write(&b, "old b");
+        write(&root.join("new-added"), "added");
+        // `new-b` does not exist, so the second swap fails.
+        let plan = vec![
+            (root.join("new-added"), added.clone()),
+            (root.join("new-b"), b.clone()),
+        ];
+        swap_files(&plan).unwrap_err();
+        assert!(!added.exists());
+        assert!(
+            !root.join("sub").exists(),
+            "created directories are removed"
+        );
+        assert_eq!(read(&b), "old b");
+        assert!(!old_path(&b).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_keeps_the_target_in_place_until_one_rename() {
+        use std::os::unix::fs::MetadataExt;
+        let root = test_dir("unix-atomic");
+        let target = root.join("nxgterm");
+        let new = root.join("new");
+        write(&target, "old");
+        write(&new, "new");
+        let original = fs::metadata(&target).unwrap().ino();
+        let incoming = fs::metadata(&new).unwrap().ino();
+
+        // The rollback copy is made without touching the target.
+        keep_rollback_copy(&target, &old_path(&target)).unwrap();
+        assert_eq!(read(&target), "old");
+        assert_eq!(read(&old_path(&target)), "old");
+
+        // A full swap: the new file's inode takes the target's name (one
+        // rename), and the original stays reachable as `.old`.
+        fs::remove_file(old_path(&target)).unwrap();
+        swap_one(&new, &target).unwrap();
+        assert_eq!(fs::metadata(&target).unwrap().ino(), incoming);
+        assert_eq!(fs::metadata(old_path(&target)).unwrap().ino(), original);
+        assert!(!new.exists());
     }
 
     #[test]
