@@ -114,6 +114,9 @@ mod platform {
     use std::os::windows::ffi::OsStrExt;
     use std::path::Path;
 
+    use windows::Win32::System::Com::{
+        COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx,
+    };
     use windows_sys::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, GetLastError};
     use windows_sys::Win32::Security::{
         GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
@@ -154,6 +157,12 @@ mod platform {
         let parameters = wide(OsStr::new(parameters));
         let dir = dir.map(|dir| wide(dir.as_os_str()));
         let dir_ptr = dir.as_ref().map_or(std::ptr::null(), |dir| dir.as_ptr());
+        // ShellExecute may delegate to shell extensions that need COM, so
+        // initialise it first as Microsoft recommends. The result is ignored:
+        // an already initialised thread works too, and the process exits
+        // right after the relaunch, so it is never paired with CoUninitialize.
+        // SAFETY: plain COM initialisation of this thread.
+        let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
         // SAFETY: every string is NUL-terminated UTF-16 that outlives the
         // call; a null window handle and directory are allowed.
         let result = unsafe {
