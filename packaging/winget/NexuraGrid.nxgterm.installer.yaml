@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
 
 PackageIdentifier: NexuraGrid.nxgterm
-PackageVersion: 0.10.0
+PackageVersion: 0.10.1
 # Windows 10 1607 / Windows Server 2016 (winpty fallback).
 MinimumOSVersion: 10.0.14393.0
 InstallerType: wix
@@ -18,7 +18,7 @@ AppsAndFeaturesEntries:
 - UpgradeCode: '{C15C343E-7B1E-41F9-99D4-DC55B0492AB5}'
 Installers:
 - Architecture: x64
-  InstallerUrl: https://github.com/NexuraGrid/nxgterm/releases/download/v0.10.0/nxgterm-0.10.0-x86_64.msi
-  InstallerSha256: 9BA372DDA7530A1F088CD1D6FFFEC57D484BC29E41FE8B2E9C2CDB0CD7CC6209
+  InstallerUrl: https://github.com/NexuraGrid/nxgterm/releases/download/v0.10.1/nxgterm-0.10.1-x86_64.msi
+  InstallerSha256: 9C37EA7413DAD8C4405DB2BF761218C3E8A897BBD33F5AF8531465032E57FD45
 ManifestType: installer
 ManifestVersion: 1.10.0
