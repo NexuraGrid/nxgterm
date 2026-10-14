@@ -1,8 +1,8 @@
 # Cask for the tap NexuraGrid/homebrew-tap (Casks/nxgterm.rb).
 # Update version and sha256 with packaging/update-manifests.sh.
 cask "nxgterm" do
-  version "0.9.2"
-  sha256 "4a0413742c1cd2907f67c609a1d5b54737456d8d27a69215e39746b829217266"
+  version "0.10.0"
+  sha256 "ce4140f8ee14a363c179b47a942b713e78df5d1c8c864bbcece2a0b9905cf2ee"
 
   url "https://github.com/NexuraGrid/nxgterm/releases/download/v#{version}/nxgterm-#{version}-universal-macos.dmg"
   name "nxgterm"
