@@ -2,8 +2,11 @@
 //! relaunching through UAC for `--elevate`.
 
 use std::borrow::Cow;
+use std::ffi::OsString;
 use std::io;
 use std::path::Path;
+
+use nxg_config::WorkingDirectory;
 use std::sync::OnceLock;
 
 /// Whether this process runs elevated (as Administrator). Always false
@@ -23,27 +26,42 @@ pub fn window_title(label: &str, elevated: bool) -> Cow<'_, str> {
 }
 
 /// Starts this executable again as Administrator, which shows the UAC
-/// prompt, forwarding `config` (made absolute, since the elevated process
-/// may start elsewhere). Returns once the new process is launched.
+/// prompt, forwarding `config` and `working_directory` (made absolute,
+/// since the elevated process may start elsewhere). Returns once the new
+/// process is launched.
 #[cfg(windows)]
-pub fn relaunch_elevated(config: Option<&Path>) -> io::Result<()> {
-    let config = config.map(std::path::absolute).transpose()?;
-    let config = match &config {
-        Some(path) => Some(path.to_str().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "the --config path is not valid Unicode",
-            )
-        })?),
-        None => None,
+pub fn relaunch_elevated(
+    config: Option<&Path>,
+    working_directory: Option<&WorkingDirectory>,
+) -> io::Result<()> {
+    let unicode = |value: Option<OsString>, flag: &str| {
+        value
+            .map(|value| {
+                value.into_string().map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("the {flag} path is not valid Unicode"),
+                    )
+                })
+            })
+            .transpose()
     };
-    let exe = std::env::current_exe()?;
+    let config = config.map(std::path::absolute).transpose()?;
+    let config = unicode(config.map(Into::into), "--config")?;
     let dir = std::env::current_dir().ok();
-    platform::run_as(&exe, &relaunch_parameters(config), dir.as_deref())
+    let working_directory =
+        working_directory.map(|wanted| working_directory_arg(wanted, dir.as_deref()));
+    let working_directory = unicode(working_directory, "--working-directory")?;
+    let exe = std::env::current_exe()?;
+    let parameters = relaunch_parameters(config.as_deref(), working_directory.as_deref());
+    platform::run_as(&exe, &parameters, dir.as_deref())
 }
 
 #[cfg(not(windows))]
-pub fn relaunch_elevated(_config: Option<&Path>) -> io::Result<()> {
+pub fn relaunch_elevated(
+    _config: Option<&Path>,
+    _working_directory: Option<&WorkingDirectory>,
+) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "--elevate is only supported on Windows",
@@ -65,13 +83,37 @@ pub fn register_jump_list() {
 #[cfg(not(windows))]
 pub fn register_jump_list() {}
 
-/// The command-line parameters for the elevated relaunch: the config path,
-/// if any, and never `--elevate`, so the child cannot relaunch again.
+/// The command-line parameters for the elevated relaunch: the config path
+/// and the start directory, if any, and never `--elevate`, so the child
+/// cannot relaunch again.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn relaunch_parameters(config: Option<&str>) -> String {
-    match config {
-        Some(path) => format!("--config {}", quote_arg(path)),
-        None => String::new(),
+fn relaunch_parameters(config: Option<&str>, working_directory: Option<&str>) -> String {
+    let config = config.map(|path| format!("--config {}", quote_arg(path)));
+    let working_directory =
+        working_directory.map(|dir| format!("--working-directory {}", quote_arg(dir)));
+    [config, working_directory]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The `--working-directory` value for the elevated relaunch, which starts
+/// in System32: `inherit` and relative paths become absolute against
+/// `cwd`, this process's directory.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn working_directory_arg(wanted: &WorkingDirectory, cwd: Option<&Path>) -> OsString {
+    match (wanted, cwd) {
+        (WorkingDirectory::Auto, _) => "auto".into(),
+        (WorkingDirectory::Home, _) => "home".into(),
+        (WorkingDirectory::Inherit, Some(cwd)) => cwd.into(),
+        (WorkingDirectory::Inherit, None) => "inherit".into(),
+        (WorkingDirectory::Path(path), Some(cwd))
+            if path.is_relative() && !path.starts_with("~") =>
+        {
+            cwd.join(path).into()
+        }
+        (WorkingDirectory::Path(path), _) => path.into(),
     }
 }
 
@@ -339,14 +381,49 @@ mod tests {
 
     #[test]
     fn relaunch_forwards_the_config_but_not_elevate() {
-        assert_eq!(relaunch_parameters(None), "");
+        assert_eq!(relaunch_parameters(None, None), "");
         assert_eq!(
-            relaunch_parameters(Some(r"C:\x\a.toml")),
+            relaunch_parameters(Some(r"C:\x\a.toml"), None),
             r"--config C:\x\a.toml"
         );
         assert_eq!(
-            relaunch_parameters(Some(r"C:\My Files\a.toml")),
+            relaunch_parameters(Some(r"C:\My Files\a.toml"), None),
             r#"--config "C:\My Files\a.toml""#
+        );
+    }
+
+    #[test]
+    fn relaunch_forwards_the_working_directory() {
+        assert_eq!(
+            relaunch_parameters(None, Some("home")),
+            "--working-directory home"
+        );
+        assert_eq!(
+            relaunch_parameters(Some(r"C:\a.toml"), Some(r"D:\My Code")),
+            r#"--config C:\a.toml --working-directory "D:\My Code""#
+        );
+    }
+
+    #[test]
+    fn forwarded_working_directories_do_not_depend_on_the_cwd() {
+        let cwd = Some(Path::new("/work"));
+        let arg = |wanted: WorkingDirectory| working_directory_arg(&wanted, cwd);
+        assert_eq!(arg(WorkingDirectory::Auto), "auto");
+        assert_eq!(arg(WorkingDirectory::Home), "home");
+        assert_eq!(arg(WorkingDirectory::Inherit), "/work");
+        assert_eq!(
+            arg(WorkingDirectory::Path("sub".into())),
+            Path::new("/work").join("sub").into_os_string()
+        );
+        assert_eq!(arg(WorkingDirectory::Path("~/src".into())), "~/src");
+        let absolute = std::env::temp_dir();
+        assert_eq!(
+            arg(WorkingDirectory::Path(absolute.clone())),
+            absolute.into_os_string()
+        );
+        assert_eq!(
+            working_directory_arg(&WorkingDirectory::Inherit, None),
+            "inherit"
         );
     }
 
@@ -360,7 +437,7 @@ mod tests {
     fn non_windows_cannot_elevate() {
         if cfg!(not(windows)) {
             assert!(!is_elevated());
-            let error = relaunch_elevated(None).unwrap_err();
+            let error = relaunch_elevated(None, None).unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         }
     }

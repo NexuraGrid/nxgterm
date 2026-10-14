@@ -181,6 +181,22 @@ defaults.
 `nxgterm --config <path>` or `NXGTERM_CONFIG=<path>` uses another file
 (`--config` wins); such a file is never generated.
 
+Shells start in the directory picked by `[shell] working_directory`, or by
+`nxgterm --working-directory <VALUE>`, which wins over it (a relative path
+there is relative to the current directory):
+
+| Value | Shells start in |
+| --- | --- |
+| `auto` (default) | The directory nxgterm was started from, so `nxgterm` run from a shell opens there. When that is `/`, the nxgterm install directory or the Windows/System32 directory (where desktop launchers and the Start Menu start programs), or it is missing, the home directory. |
+| `inherit` | Always the directory nxgterm was started from. |
+| `home` | The home directory. |
+| a path | That directory; `~` is the home directory. |
+
+A directory that does not exist falls back to the home directory with a
+warning. Launchers that start programs in another directory (some run them
+from wherever they were started) still pass it on with `auto`; use
+`working_directory = "home"` there.
+
 Every key is optional:
 
 ```toml
@@ -228,6 +244,7 @@ theme = "catppuccin-mocha"  # a built-in theme, or themes/<name>.toml (see below
 [shell]
 program = "pwsh.exe"        # default: $SHELL on Unix; pwsh, powershell, cmd on Windows
 args = ["-NoLogo"]
+working_directory = "auto"  # auto | inherit | home | an absolute or ~ path
 
 [renderer]
 backend = "auto"            # auto | gpu | cpu
@@ -393,8 +410,8 @@ reach the shell; its output keeps showing underneath.
 
 `Ctrl+Shift+T` opens a tab next to the current one. Every tab runs the
 configured `[shell]` (or the default shell) on its own pty, starting in the
-directory nxgterm was started in (the shell's current directory is not
-tracked yet), with its own history and modes; background tabs keep running.
+[working directory](#configuration) chosen at startup (the shell's current
+directory is not tracked yet), with its own history and modes; background tabs keep running.
 A tab closes when its program exits or with `Ctrl+Shift+W`, and nxgterm
 exits with the last one. `Alt+N` goes to tab N (`Alt+9` past the last tab
 goes to the last).

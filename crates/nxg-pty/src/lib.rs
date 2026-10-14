@@ -12,6 +12,7 @@ mod winpty;
 use std::fmt;
 use std::io::{self, Write};
 use std::panic::{self, AssertUnwindSafe};
+use std::path::Path;
 
 use nxg_core::WinSize;
 use nxg_core::fallback::{self, Attempt, Init, Selected};
@@ -67,20 +68,29 @@ pub struct ShellCommand {
 }
 
 /// Spawns `shell` when given, otherwise the default shell (see
-/// [`spawn_shell`]), trying `backends` in order.
+/// [`spawn_shell`]), in `cwd`, trying `backends` in order. Without a `cwd`
+/// the native backend starts in the home directory and winpty in this
+/// process's working directory.
 pub fn spawn_shell_with(
     size: impl Into<WinSize>,
     shell: Option<&ShellCommand>,
+    cwd: Option<&Path>,
     backends: &[Backend],
 ) -> Result<Spawned, PtyError> {
     let size = size.into();
+    let in_cwd = |mut cmd: CommandBuilder| {
+        if let Some(cwd) = cwd {
+            cmd.cwd(cwd);
+        }
+        cmd
+    };
     match shell {
         Some(shell) => spawn(size, backends, || {
             let mut cmd = CommandBuilder::new(&shell.program);
             cmd.args(&shell.args);
-            cmd
+            in_cwd(cmd)
         }),
-        None => spawn(size, backends, default_shell),
+        None => spawn(size, backends, || in_cwd(default_shell())),
     }
 }
 
@@ -136,7 +146,7 @@ fn spawn(
 fn start(backend: Backend, size: WinSize, cmd: CommandBuilder) -> Result<PtySession, String> {
     panic::catch_unwind(AssertUnwindSafe(|| match backend {
         Backend::Native => spawn_native(size, cmd),
-        Backend::Winpty => winpty::spawn(size, cmd.get_argv(), &CHILD_ENV),
+        Backend::Winpty => winpty::spawn(size, cmd.get_argv(), cmd.get_cwd(), &CHILD_ENV),
     }))
     .unwrap_or_else(|payload| Err(backend::panic_message(payload.as_ref())))
 }

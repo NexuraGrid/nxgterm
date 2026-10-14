@@ -190,16 +190,19 @@ impl Drop for Owned {
 // each one is used by a single owner at a time.
 unsafe impl Send for Owned {}
 
-/// Starts `argv` (program first) in a new winpty console of `size`, with
-/// this process's environment plus `overrides`.
+/// Starts `argv` (program first) in a new winpty console of `size`, in
+/// `cwd` (this process's working directory when `None`), with this
+/// process's environment plus `overrides`.
 pub(crate) fn spawn(
     size: WinSize,
     argv: &[OsString],
+    cwd: Option<&OsString>,
     overrides: &[(&str, &str)],
 ) -> Result<PtySession, String> {
     let wide_argv: Vec<Vec<u16>> = argv.iter().map(|arg| arg.encode_wide().collect()).collect();
     let mut cmdline = command_line(&wide_argv)?;
     cmdline.push(0);
+    let cwd: Option<Vec<u16>> = cwd.map(|dir| dir.encode_wide().chain([0]).collect());
     let env = env_block(&child_env(std::env::vars_os(), overrides));
     let api = Api::get()?;
     let (cols, rows) = cells(size);
@@ -235,7 +238,7 @@ pub(crate) fn spawn(
             SPAWN_FLAG_AUTO_SHUTDOWN,
             ptr::null(),
             cmdline.as_ptr(),
-            ptr::null(),
+            cwd.as_ref().map_or(ptr::null(), |dir| dir.as_ptr()),
             env.as_ptr(),
             &mut error,
         )
