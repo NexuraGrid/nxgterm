@@ -51,7 +51,7 @@ terminals in a sensible directory.
 - Chain strategy (user choice, 2026-10-14): `stacked-to-main`.
   - Slice 1: `feat/working-directory` (T1: 89cc602, c0ccc37) → main.
   - Slice 2: `feat/self-update` (T2) stacked on slice 1.
-  - Slice 3: T3 stacked on slice 2.
+  - Slice 3: `feat/install-scripts` (T3) stacked on slice 2.
 
 ## Tasks
 
@@ -61,7 +61,7 @@ terminals in a sensible directory.
 - [x] T2 `nxgterm update` and `nxgterm update --check`: release lookup, asset
       selection, checksum verification, install-kind detection, apply.
       Route: delegated.
-- [ ] T3 `install.sh` / `install.ps1` and README install/update docs.
+- [x] T3 `install.sh` / `install.ps1` and README install/update docs.
       Route: delegated.
 
 ## Acceptance criteria
@@ -101,4 +101,25 @@ terminals in a sensible directory.
   mingw C compiler for `ring` locally (passes with clang stub env); CI builds
   Windows natively. Not run: real MSI/zip swap on Windows, macOS bundle, real
   deb/rpm installs. `cargo +1.87 check` fails in nxg-render (pre-existing).
-- Next step: T3.
+- T2 independent verification (review declined → high tier): fmt, clippy,
+  `cargo test --workspace`, live `update --check`, and a local-mirror e2e
+  (correct checksum swaps, wrong checksum and missing entry refuse, install
+  untouched) all passed. Two findings fixed in a follow-up commit on
+  `feat/self-update`: release-only runtime files are installed (and removed on
+  rollback); Unix swaps by hard-link `.old` + atomic rename. Parent ran Windows
+  target clippy for nxgterm (clean). Deferred: `NXGTERM_UPDATE_URL` accepts
+  plain http; pre-release deb/rpm names use `~`.
+- T3 done: `install.sh` (Linux/macOS, flat install in
+  `~/.local/share/nxgterm`, symlink in `~/.local/bin`, desktop entry) and
+  `install.ps1` (MSI by default, `NXGTERM_PORTABLE=1` for the zip in
+  `%LOCALAPPDATA%\Programs\nxgterm`), README + packaging/README docs. Checks:
+  `sh -n`, shellcheck clean, pwsh parse OK, sandboxed real install of 0.10.1
+  from GitHub + reinstall, tampered and missing checksum refuse. Not run: real
+  Windows (MSI, PATH, shortcut, PS 5.1), macOS, wget fallback.
+- Reviews: fix cb19a8a and T3 a1320c3 both high risk, consent granted, 4-lens
+  native reviews approved and acknowledged. Advisory follow-ups (non-blocking):
+  install.ps1:225-226 reports failure without a failing exit status (3 lenses);
+  install.sh:159-161 install-dir guard (2 lenses); no automated installer tests;
+  CRLF in SHA256SUMS; apply.rs hard-link-dependent test assertion and
+  case-sensitive Windows runtime dirs.
+- Next step: push and PRs (user decision).

@@ -8,6 +8,40 @@ Linux (Arch, Debian, Ubuntu, Fedora), macOS, and Windows 10 / Windows Server 201
 
 ## Install
 
+One command installs the latest release, checking its SHA-256 against the
+release's `SHA256SUMS` first:
+
+```sh
+# Linux, macOS (no sudo)
+curl -fsSL https://raw.githubusercontent.com/NexuraGrid/nxgterm/main/install.sh | sh
+```
+
+```powershell
+# Windows PowerShell 5.1 or PowerShell 7
+irm https://raw.githubusercontent.com/NexuraGrid/nxgterm/main/install.ps1 | iex
+```
+
+- Linux: the portable tarball goes to `~/.local/share/nxgterm`, with an
+  `nxgterm` symlink in `~/.local/bin` and a desktop entry and icon in
+  `~/.local/share`.
+- macOS: `nxgterm.app` goes to `/Applications` (or `~/Applications` when that
+  is not writable), with an `nxgterm` symlink in `~/.local/bin`.
+- Windows: the MSI is downloaded and run with `msiexec /passive` (it asks for
+  elevation). Set `$env:NXGTERM_PORTABLE = "1"` first to install the portable
+  zip in `%LOCALAPPDATA%\Programs\nxgterm` instead, with a user `PATH` entry
+  and a Start Menu shortcut, no Administrator needed.
+
+| Variable | Effect |
+|---|---|
+| `NXGTERM_VERSION` | install this version (e.g. `0.10.1`) instead of the latest |
+| `NXGTERM_INSTALL_URL` | directory holding `SHA256SUMS` and the assets, instead of the GitHub Release |
+| `NXGTERM_INSTALL_DIR` | Linux install directory (default `~/.local/share/nxgterm`) |
+| `NXGTERM_BIN_DIR` | where `install.sh` puts the symlink (default `~/.local/bin`) |
+| `NXGTERM_PORTABLE` | `1`: portable install on Windows |
+
+Running the script again reinstalls. After that, [`nxgterm update`](#update)
+keeps it up to date.
+
 Packages are attached to each [GitHub Release](https://github.com/NexuraGrid/nxgterm/releases)
 together with a `SHA256SUMS` file. Replace `<v>` with the version.
 
