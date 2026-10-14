@@ -83,4 +83,9 @@ terminals in a sensible directory.
   Checks: fmt, clippy (Linux + windows-gnu), `cargo test --workspace` all green;
   parent re-ran `cargo test -p nxg-pty --test spawn` (8 passed). Not run on real
   Windows yet. Config paths must be absolute or `~`; CLI paths may be relative.
+- T1 review: high risk, consent granted, 4-lens native review approved and
+  acknowledged (lineage review-2430ce3d46c3feff, commit 89cc602). Advisory
+  follow-ups (non-blocking): lossy non-UTF-8 path round-trip in
+  `working_dir.rs:64`, `~` rule repeated in `elevation.rs:112`, CLI-over-config
+  precedence untested in `main.rs`, winpty cwd not exercised on real Windows.
 - Next step: T2.
