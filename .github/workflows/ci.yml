@@ -26,6 +26,12 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
+      - name: Startup smoke test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build -p nxgterm
+          ./packaging/windows/smoke-start.ps1 -Exe target\debug\nxgterm.exe
 
   profile:
     name: Tools profile (${{ matrix.os }})
