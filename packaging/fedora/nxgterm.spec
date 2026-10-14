@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           nxgterm
-Version:        0.10.0
+Version:        0.10.1
 Release:        1%{?dist}
 Summary:        Fast, configurable, cross-platform terminal emulator
 
@@ -79,6 +79,9 @@ cargo test --release --locked --workspace
 %{_datadir}/%{name}/
 
 %changelog
+* Wed Oct 14 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.10.1-1
+- Fix the Windows startup crash from 0.10.0
+
 * Wed Oct 14 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.10.0-1
 - Open nxgterm as Administrator on Windows (--elevate, jump list task, title marker)
 

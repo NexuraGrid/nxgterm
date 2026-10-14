@@ -524,6 +524,7 @@ winpty (Windows Server 2016) does not pass images through either.
 16. 0.9.1: drag and drop on Wayland ✅
 17. 0.9.2: OSC 52 clipboard writes (copy from ngmux, tmux, nvim) ✅
 18. 0.10.0: Open as Administrator on Windows (`--elevate`, jump list task, title marker) ✅
+19. 0.10.1: Fix the Windows startup crash from 0.10.0, and add a startup smoke test to CI and releases ✅
 
 Planned work is tracked in
 [`openspec/RECOMMENDATIONS.md`](openspec/RECOMMENDATIONS.md).
