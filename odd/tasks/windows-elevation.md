@@ -55,6 +55,7 @@ Forecast is about 350 authored lines. Strategy: ask-on-risk, single PR.
 - T4 done, route delegated (writer), commit `26161be`. RED: `elevated_titles_get_a_suffix` failed (`"pwsh"` vs `"pwsh (Administrator)"`). GREEN: passed.
 - Checks after T4: `cargo fmt --all --check` ok; `cargo clippy --workspace --all-targets -- -D warnings` ok; `cargo test -p nxgterm` 258 passed; `cargo clippy -p nxgterm --target x86_64-pc-windows-gnu --all-targets -- -D warnings` ok.
 - MSRV: `cargo +1.87 check -p nxgterm` fails on main's pre-existing let-chain in `crates/nxg-render/src/font.rs:411`, which this feature does not touch. The new code uses nothing newer than 1.82. The 1.87 toolchain has no Windows target installed locally.
+- Native review (RDD, high risk: process_boundary): consent granted, 4 lenses, approved with 0 blocking findings, acknowledged (lineage review-61825ec9d2bcfab8). Advisory follow-up: call CoInitializeEx before ShellExecuteW (R3 WARNING, elevation.rs:151). The rest are suggestions.
 - Pending: manual Windows smoke test (UAC accept/cancel, jump list task, title suffix).
 
 ## Next step
