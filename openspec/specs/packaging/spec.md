@@ -84,6 +84,10 @@ window (Administrator)" that runs the same exe with `--elevate`, through
 the task attaches to the pinned or running icon. A failure to register it
 MUST only be logged.
 
+When the process runs elevated, the OS window title and the integrated
+title bar MUST read "<label> (Administrator)"; non-elevated windows MUST
+keep the plain label. Tab labels MUST NOT change.
+
 #### Scenario: Version from PowerShell
 - GIVEN the release `nxgterm.exe`
 - WHEN `nxgterm.exe --version` runs in PowerShell
@@ -93,6 +97,11 @@ MUST only be logged.
 - GIVEN nxgterm has run once and is pinned to the taskbar
 - WHEN the user right-clicks its taskbar icon and picks "New window (Administrator)"
 - THEN the UAC prompt appears and an elevated nxgterm window opens
+
+#### Scenario: Elevated window title
+- GIVEN nxgterm started with `--elevate` and UAC accepted
+- WHEN the focused pane's label is `pwsh`
+- THEN the window title reads `pwsh (Administrator)` and the tab still reads `pwsh`
 
 ### Requirement: macOS bundle
 

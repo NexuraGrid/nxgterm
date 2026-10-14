@@ -42,7 +42,8 @@ use crate::title_bar::{self, Button, ButtonColors, Chrome, Rect, Region};
 use crate::watch::ConfigWatcher;
 use crate::wayland_drop::DropTarget;
 use crate::{
-    appearance, bindings, choice, clipboard, dividers, icon, keys, mouse, reload, tab_bar,
+    appearance, bindings, choice, clipboard, dividers, elevation, icon, keys, mouse, reload,
+    tab_bar,
 };
 
 /// Events posted to the event loop from background threads.
@@ -202,7 +203,7 @@ impl App {
         // white until its first present: show the window after one frame.
         let show_after_first_frame = cfg!(windows) && transparent;
         let attributes = Window::default_attributes()
-            .with_title("nxgterm")
+            .with_title(elevation::window_title("nxgterm", elevation::is_elevated()))
             .with_visible(!show_after_first_frame)
             .with_window_icon(icon::window_icon())
             .with_theme(Some(appearance::window_theme(&config.colors.resolve())))
@@ -1684,7 +1685,7 @@ impl Session {
     }
 
     /// Gives the OS window (taskbar, window switcher) the label of the
-    /// focused pane, when it changed.
+    /// focused pane, when it changed, marked when running as Administrator.
     fn sync_window_title(&mut self) {
         let Some(tab) = self.tabs.active() else {
             return;
@@ -1692,7 +1693,8 @@ impl Session {
         let label = tab.focused().label();
         if label != self.window_title {
             self.window_title = label.to_owned();
-            self.window.set_title(label);
+            self.window
+                .set_title(&elevation::window_title(label, elevation::is_elevated()));
         }
     }
 
@@ -1725,10 +1727,10 @@ impl Session {
             shapes.extend(self.icon_shapes.iter().flat_map(|(_, icon)| icon.clone()));
         }
         if self.title_bar.show_title {
-            let title = self
-                .tabs
-                .active()
-                .map(|tab| tab.focused().label().to_owned());
+            let title = self.tabs.active().map(|tab| {
+                elevation::window_title(tab.focused().label(), elevation::is_elevated())
+                    .into_owned()
+            });
             let (left, right) = title_bar::title_room(icon, &buttons, self.scale);
             let cell = self.font.cell_size();
             let placed = title

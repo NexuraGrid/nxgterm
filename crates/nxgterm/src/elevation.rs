@@ -13,6 +13,15 @@ pub fn is_elevated() -> bool {
     *ELEVATED.get_or_init(platform::is_elevated)
 }
 
+/// The window title for a pane `label`, marked when the process is elevated.
+pub fn window_title(label: &str, elevated: bool) -> Cow<'_, str> {
+    if elevated {
+        Cow::Owned(format!("{label} (Administrator)"))
+    } else {
+        Cow::Borrowed(label)
+    }
+}
+
 /// Starts this executable again as Administrator, which shows the UAC
 /// prompt, forwarding `config` (made absolute, since the elevated process
 /// may start elsewhere). Returns once the new process is launched.
@@ -295,6 +304,12 @@ mod tests {
             relaunch_parameters(Some(r"C:\My Files\a.toml")),
             r#"--config "C:\My Files\a.toml""#
         );
+    }
+
+    #[test]
+    fn elevated_titles_get_a_suffix() {
+        assert_eq!(window_title("pwsh", false), "pwsh");
+        assert_eq!(window_title("pwsh", true), "pwsh (Administrator)");
     }
 
     #[test]
