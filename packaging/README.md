@@ -20,6 +20,14 @@ Everything here is published from a GitHub Release, which
 Running the workflow by hand (`workflow_dispatch`) builds the same files as
 the `release-assets` artifact without creating a release.
 
+The one-line installers [`install.sh`](../install.sh) (Linux, macOS) and
+[`install.ps1`](../install.ps1) (Windows) are served from `main` through
+raw.githubusercontent.com and download these assets: the Linux and macOS
+tarballs, the MSI, or the Windows zip. They read the latest version from the
+`nxgterm-<v>-source.tar.gz` entry of `SHA256SUMS`, so keep the asset names
+above stable. Test them against a local directory holding `SHA256SUMS` and
+the assets with `NXGTERM_INSTALL_URL=<dir>`.
+
 ## Release checklist
 
 1. Bump `version` in the root `Cargo.toml` and add a `<release>` to
