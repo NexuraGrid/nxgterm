@@ -280,6 +280,17 @@ mod platform {
 mod tests {
     use super::*;
 
+    // 0.10.0 freed the task title twice, and the heap corruption killed
+    // nxgterm on every start. Run the real path a few times: failing to
+    // register (no shell on the machine) is fine, crashing is not.
+    #[cfg(windows)]
+    #[test]
+    fn registering_the_jump_list_keeps_the_heap_intact() {
+        for _ in 0..3 {
+            let _ = jump_list::register();
+        }
+    }
+
     #[test]
     fn plain_arguments_are_left_alone() {
         assert_eq!(quote_arg(r"C:\x\a.toml"), r"C:\x\a.toml");
