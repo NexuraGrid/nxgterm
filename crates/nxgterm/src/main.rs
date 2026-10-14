@@ -31,7 +31,8 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use nxg_config::{Config, DEFAULT_CONFIG_TOML, Platform};
+use nxg_config::working_dir::{self, StartContext};
+use nxg_config::{Config, DEFAULT_CONFIG_TOML, Platform, WorkingDirectory};
 use winit::event_loop::{EventLoop, EventLoopProxy};
 
 use crate::app::{App, UserEvent};
@@ -50,16 +51,22 @@ fn main() -> ExitCode {
         Command::Help => print!("{}", cli::USAGE),
         Command::Version => println!("nxgterm {}", env!("CARGO_PKG_VERSION")),
         Command::PrintConfig => print!("{DEFAULT_CONFIG_TOML}"),
-        Command::Run { config, elevate } => {
+        Command::Run {
+            config,
+            elevate,
+            working_directory,
+        } => {
             // The elevated copy runs the terminal; this one just exits.
             if elevate && !elevation::is_elevated() {
-                if let Err(error) = elevation::relaunch_elevated(config.as_deref()) {
+                let relaunch =
+                    elevation::relaunch_elevated(config.as_deref(), working_directory.as_ref());
+                if let Err(error) = relaunch {
                     eprintln!("nxgterm: {error}");
                     return ExitCode::FAILURE;
                 }
                 return ExitCode::SUCCESS;
             }
-            if let Err(error) = run(config) {
+            if let Err(error) = run(config, working_directory) {
                 eprintln!("nxgterm: {error}");
                 return ExitCode::FAILURE;
             }
@@ -68,7 +75,10 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run(config_arg: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
+fn run(
+    config_arg: Option<PathBuf>,
+    working_directory: Option<WorkingDirectory>,
+) -> Result<(), Box<dyn Error>> {
     let env_var = |name: &str| env::var_os(name);
     let default_location = config_arg.is_none() && !nxg_config::has_env_override(env_var);
     let path = config_arg.or_else(|| nxg_config::config_path(Platform::current(), env_var));
@@ -78,6 +88,11 @@ fn run(config_arg: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         }
     }
     let (config, files) = path.as_deref().map(load_config).unwrap_or_default();
+    let start_dir = start_directory(
+        working_directory
+            .as_ref()
+            .unwrap_or(&config.shell.working_directory),
+    );
     elevation::register_jump_list();
 
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
@@ -86,7 +101,7 @@ fn run(config_arg: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     let watcher = path
         .as_deref()
         .and_then(|path| start_watcher(path, &files, proxy.clone()));
-    let mut app = App::new(proxy, config, path, watcher);
+    let mut app = App::new(proxy, config, path, watcher, start_dir);
     event_loop.run_app(&mut app)?;
     match app.take_error() {
         Some(error) => Err(error),
@@ -106,6 +121,33 @@ fn load_config(path: &Path) -> (Config, Vec<PathBuf>) {
             Default::default()
         }
     }
+}
+
+/// Where every shell of this run starts, for `wanted` (the
+/// `--working-directory` value, else the config's); never fails, a
+/// directory that cannot be used only warns. `None` lets the pty backend
+/// choose.
+fn start_directory(wanted: &WorkingDirectory) -> Option<PathBuf> {
+    let env_var = |name: &str| env::var_os(name);
+    let platform = Platform::current();
+    let cwd = env::current_dir().ok();
+    let exe_dir = env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let home = nxg_config::path::home_dir(platform, env_var);
+    let system_root = working_dir::system_root(env_var);
+    let start = StartContext {
+        platform,
+        cwd: cwd.as_deref(),
+        exe_dir: exe_dir.as_deref(),
+        home: home.as_deref(),
+        system_root: system_root.as_deref(),
+    };
+    let resolved = wanted.resolve(&start, Path::is_dir);
+    if let Some(warning) = resolved.warning {
+        eprintln!("nxgterm: {warning}");
+    }
+    resolved.dir
 }
 
 /// Writes the documented defaults to the default config location on first

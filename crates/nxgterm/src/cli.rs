@@ -3,16 +3,20 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use nxg_config::WorkingDirectory;
+
 /// Printed by `--help`.
 pub const USAGE: &str = "\
 Usage: nxgterm [OPTIONS]
 
 Options:
-  --config <PATH>   Use this config file instead of the default location
-  --elevate         Relaunch as Administrator (Windows)
-  --print-config    Print a documented default config and exit
-  -V, --version     Print the version and exit
-  -h, --help        Print this help and exit
+  --config <PATH>            Use this config file instead of the default location
+  --working-directory <DIR>  Start shells in DIR: auto, inherit, home or a path
+                             (overrides [shell] working_directory)
+  --elevate                  Relaunch as Administrator (Windows)
+  --print-config             Print a documented default config and exit
+  -V, --version              Print the version and exit
+  -h, --help                 Print this help and exit
 
 Environment:
   NXGTERM_CONFIG    Config file path (overridden by --config)
@@ -22,11 +26,13 @@ Environment:
 /// What the command line asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    /// Open the terminal, optionally with a specific config file;
-    /// `elevate` asks to relaunch as Administrator first (Windows).
+    /// Open the terminal, optionally with a specific config file and
+    /// start directory (which beats the config's); `elevate` asks to
+    /// relaunch as Administrator first (Windows).
     Run {
         config: Option<PathBuf>,
         elevate: bool,
+        working_directory: Option<WorkingDirectory>,
     },
     PrintConfig,
     Version,
@@ -34,11 +40,13 @@ pub enum Command {
 }
 
 /// Parses the arguments after the program name. `--help`, `--version` and
-/// `--print-config` act as soon as they are seen; `--config` takes the
-/// next argument or an `=` value, and the last one wins.
+/// `--print-config` act as soon as they are seen; `--config` and
+/// `--working-directory` take the next argument or an `=` value, and the
+/// last one wins.
 pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String> {
     let mut config = None;
     let mut elevate = false;
+    let mut working_directory = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let text = arg.to_string_lossy();
@@ -51,14 +59,43 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 let value = args.next().ok_or("--config needs a file path")?;
                 config = Some(PathBuf::from(value));
             }
-            _ => match text.strip_prefix("--config=") {
-                Some("") => return Err("--config needs a file path".into()),
-                Some(value) => config = Some(PathBuf::from(value)),
-                None => return Err(format!("unknown argument `{text}`")),
-            },
+            "--working-directory" => {
+                let value = args.next().ok_or(NEEDS_DIRECTORY)?;
+                working_directory = Some(start_directory(value));
+            }
+            _ => {
+                if let Some(value) = text.strip_prefix("--config=") {
+                    if value.is_empty() {
+                        return Err("--config needs a file path".into());
+                    }
+                    config = Some(PathBuf::from(value));
+                } else if let Some(value) = text.strip_prefix("--working-directory=") {
+                    if value.is_empty() {
+                        return Err(NEEDS_DIRECTORY.into());
+                    }
+                    working_directory = Some(WorkingDirectory::parse(value));
+                } else {
+                    return Err(format!("unknown argument `{text}`"));
+                }
+            }
         }
     }
-    Ok(Command::Run { config, elevate })
+    Ok(Command::Run {
+        config,
+        elevate,
+        working_directory,
+    })
+}
+
+const NEEDS_DIRECTORY: &str = "--working-directory needs auto, inherit, home or a directory";
+
+/// A `--working-directory` value; one that is not valid Unicode can only
+/// be a path, kept as given.
+fn start_directory(value: OsString) -> WorkingDirectory {
+    match value.to_str() {
+        Some(text) => WorkingDirectory::parse(text),
+        None => WorkingDirectory::Path(PathBuf::from(value)),
+    }
 }
 
 #[cfg(test)]
@@ -73,6 +110,7 @@ mod tests {
         Command::Run {
             config: Some(PathBuf::from(path)),
             elevate: false,
+            working_directory: None,
         }
     }
 
@@ -82,7 +120,8 @@ mod tests {
             run(&[]),
             Ok(Command::Run {
                 config: None,
-                elevate: false
+                elevate: false,
+                working_directory: None
             })
         );
     }
@@ -93,21 +132,24 @@ mod tests {
             run(&["--elevate"]),
             Ok(Command::Run {
                 config: None,
-                elevate: true
+                elevate: true,
+                working_directory: None
             })
         );
         assert_eq!(
             run(&["--elevate", "--config", "a.toml"]),
             Ok(Command::Run {
                 config: Some(PathBuf::from("a.toml")),
-                elevate: true
+                elevate: true,
+                working_directory: None
             })
         );
         assert_eq!(
             run(&["--config=a.toml", "--elevate"]),
             Ok(Command::Run {
                 config: Some(PathBuf::from("a.toml")),
-                elevate: true
+                elevate: true,
+                working_directory: None
             })
         );
     }
@@ -157,6 +199,51 @@ mod tests {
         assert!(run(&["file.toml"]).is_err());
     }
 
+    fn with_working_directory(value: WorkingDirectory) -> Command {
+        Command::Run {
+            config: None,
+            elevate: false,
+            working_directory: Some(value),
+        }
+    }
+
+    #[test]
+    fn working_directory_takes_a_separate_or_inline_value() {
+        assert_eq!(
+            run(&["--working-directory", "home"]),
+            Ok(with_working_directory(WorkingDirectory::Home))
+        );
+        assert_eq!(
+            run(&["--working-directory=inherit"]),
+            Ok(with_working_directory(WorkingDirectory::Inherit))
+        );
+        assert_eq!(
+            run(&["--working-directory", "auto"]),
+            Ok(with_working_directory(WorkingDirectory::Auto))
+        );
+        assert_eq!(
+            run(&[
+                "--working-directory=~/src",
+                "--working-directory",
+                "sub dir"
+            ]),
+            Ok(with_working_directory(WorkingDirectory::Path(
+                "sub dir".into()
+            )))
+        );
+        assert_eq!(
+            run(&["--working-directory", "-x"]),
+            Ok(with_working_directory(WorkingDirectory::Path("-x".into())))
+        );
+    }
+
+    #[test]
+    fn missing_working_directory_value_is_an_error() {
+        let error = run(&["--working-directory"]).unwrap_err();
+        assert!(error.contains("--working-directory"), "{error}");
+        assert!(run(&["--working-directory="]).is_err());
+    }
+
     #[cfg(unix)]
     #[test]
     fn non_utf8_config_paths_are_kept() {
@@ -167,7 +254,8 @@ mod tests {
             parse(args),
             Ok(Command::Run {
                 config: Some(PathBuf::from(path)),
-                elevate: false
+                elevate: false,
+                working_directory: None
             })
         );
     }

@@ -70,17 +70,23 @@ pub fn home_dir(platform: Platform, env: impl Fn(&str) -> Option<OsString>) -> O
 /// separator) is `home`, and a relative path is relative to `dir`, the
 /// directory of the importing file. Without a home, `~` stays as written.
 pub fn resolve_import(entry: &str, dir: &Path, home: Option<&Path>) -> PathBuf {
-    let rest = entry
-        .strip_prefix('~')
-        .filter(|rest| rest.is_empty() || rest.starts_with(['/', '\\']));
-    let path = match (rest, home) {
-        (Some(rest), Some(home)) => home.join(rest.trim_start_matches(['/', '\\'])),
-        _ => PathBuf::from(entry),
-    };
+    let path = expand_home(entry, home);
     if path.is_absolute() {
         path
     } else {
         dir.join(path)
+    }
+}
+
+/// `entry` with a leading `~` (alone or before a separator) replaced by
+/// `home`; unchanged without a home.
+pub fn expand_home(entry: &str, home: Option<&Path>) -> PathBuf {
+    let rest = entry
+        .strip_prefix('~')
+        .filter(|rest| rest.is_empty() || rest.starts_with(['/', '\\']));
+    match (rest, home) {
+        (Some(rest), Some(home)) => home.join(rest.trim_start_matches(['/', '\\'])),
+        _ => PathBuf::from(entry),
     }
 }
 

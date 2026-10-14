@@ -60,10 +60,14 @@ fn shell_override_runs_the_given_program_and_args() {
         program: "/bin/sh".into(),
         args: vec!["-c".into(), "echo override:$TERM; sleep 0.3".into()],
     };
-    let session =
-        nxg_pty::spawn_shell_with(TermSize::default(), Some(&shell), nxg_pty::auto_backends())
-            .expect("spawn override")
-            .backend;
+    let session = nxg_pty::spawn_shell_with(
+        TermSize::default(),
+        Some(&shell),
+        None,
+        nxg_pty::auto_backends(),
+    )
+    .expect("spawn override")
+    .backend;
     let output = read_all(session.reader);
     assert!(
         output.contains("override:xterm-256color"),
@@ -72,14 +76,38 @@ fn shell_override_runs_the_given_program_and_args() {
 }
 
 #[test]
+fn shell_starts_in_the_given_directory() {
+    let dir = std::env::temp_dir().canonicalize().expect("temp dir");
+    let shell = nxg_pty::ShellCommand {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "echo cwd:$(pwd -P); sleep 0.3".into()],
+    };
+    let session = nxg_pty::spawn_shell_with(
+        TermSize::default(),
+        Some(&shell),
+        Some(&dir),
+        nxg_pty::auto_backends(),
+    )
+    .expect("spawn in dir")
+    .backend;
+    let output = read_all(session.reader);
+    let expected = format!("cwd:{}", dir.display());
+    assert!(output.contains(&expected), "output was {output:?}");
+}
+
+#[test]
 fn missing_override_program_is_an_error() {
     let shell = nxg_pty::ShellCommand {
         program: "/definitely/missing/shell".into(),
         args: Vec::new(),
     };
-    let error =
-        nxg_pty::spawn_shell_with(TermSize::default(), Some(&shell), nxg_pty::auto_backends())
-            .unwrap_err();
+    let error = nxg_pty::spawn_shell_with(
+        TermSize::default(),
+        Some(&shell),
+        None,
+        nxg_pty::auto_backends(),
+    )
+    .unwrap_err();
     assert!(!error.attempts.is_empty());
 }
 

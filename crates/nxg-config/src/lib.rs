@@ -10,6 +10,7 @@ pub mod keybindings;
 pub mod load;
 pub mod path;
 pub mod theme;
+pub mod working_dir;
 
 use std::fmt;
 use std::io;
@@ -23,6 +24,7 @@ pub use keybindings::{Bindings, KeybindingsConfig};
 pub use load::Loaded;
 pub use path::{Platform, config_path, has_env_override};
 pub use theme::{Colors, THEMES, Theme, ThemeName};
+pub use working_dir::WorkingDirectory;
 
 /// Smallest and largest font size accepted, in points at scale 1.0.
 pub const MIN_FONT_SIZE: f32 = 6.0;
@@ -139,6 +141,12 @@ theme = "catppuccin-mocha"
 # then Windows PowerShell, then cmd.exe on Windows), and its arguments.
 # program = "pwsh.exe"
 # args = ["-NoLogo"]
+# Where shells start: "auto" (the directory nxgterm was started from, or the
+# home directory when started from a launcher or shortcut, that is from "/",
+# the nxgterm install directory or the Windows directory), "inherit" (always
+# the directory nxgterm was started from), "home", or a directory: absolute or
+# starting with "~". `nxgterm --working-directory <VALUE>` overrides it.
+working_directory = "auto"
 
 [renderer]
 # auto (GPU, falling back to CPU), gpu or cpu. NXGTERM_RENDERER overrides it.
@@ -422,6 +430,9 @@ pub struct ShellConfig {
     pub program: Option<String>,
     /// Arguments, used only with `program`.
     pub args: Vec<String>,
+    /// Where shells start; see [`WorkingDirectory::resolve`].
+    #[serde(deserialize_with = "working_dir::deserialize")]
+    pub working_directory: WorkingDirectory,
 }
 
 /// `[renderer]`
@@ -1106,6 +1117,32 @@ mod tests {
         assert_eq!(config.window.padding, 10);
         assert_eq!(config.window.columns.get(), 100);
         assert_eq!(config.font, FontConfig::default());
+    }
+
+    #[test]
+    fn working_directory_takes_a_keyword_or_a_home_or_absolute_path() {
+        let text = |value: &str| format!("[shell]\nworking_directory = {value:?}\n");
+        let working_directory = |value: &str| parse(&text(value)).unwrap().shell.working_directory;
+        assert_eq!(
+            Config::default().shell.working_directory,
+            WorkingDirectory::Auto
+        );
+        assert_eq!(working_directory("auto"), WorkingDirectory::Auto);
+        assert_eq!(working_directory(" "), WorkingDirectory::Auto);
+        assert_eq!(working_directory("inherit"), WorkingDirectory::Inherit);
+        assert_eq!(working_directory("home"), WorkingDirectory::Home);
+        assert_eq!(
+            working_directory("~/src"),
+            WorkingDirectory::Path("~/src".into())
+        );
+        let absolute = std::env::temp_dir();
+        assert_eq!(
+            working_directory(absolute.to_str().unwrap()),
+            WorkingDirectory::Path(absolute)
+        );
+        let error = parse_error(&text("projects/x"));
+        assert!(error.contains("projects/x"), "{error}");
+        assert!(parse("[shell]\nworking_directory = 1\n").is_err());
     }
 
     #[test]

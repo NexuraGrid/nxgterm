@@ -161,6 +161,9 @@ pub struct App {
     /// The system clipboard, kept for the whole run (X11 and Wayland
     /// serve copied text from it).
     clipboard: Box<dyn Clipboard>,
+    /// Where every new shell starts, resolved once at startup; `None` lets
+    /// the pty backend choose.
+    start_dir: Option<PathBuf>,
     error: Option<Box<dyn Error>>,
 }
 
@@ -174,6 +177,7 @@ impl App {
         config: Config,
         config_path: Option<PathBuf>,
         watcher: Option<ConfigWatcher>,
+        start_dir: Option<PathBuf>,
     ) -> Self {
         let bindings = config.keybindings.resolve(MACOS);
         Self {
@@ -185,6 +189,7 @@ impl App {
             bindings,
             modifiers: ModifiersState::empty(),
             clipboard: clipboard::system(),
+            start_dir,
             error: None,
         }
     }
@@ -279,7 +284,7 @@ impl App {
             palette: None,
             clicks: Clicks::default(),
         };
-        session.open_tab(config, &self.proxy)?;
+        session.open_tab(config, self.start_dir.as_deref(), &self.proxy)?;
         if show_after_first_frame {
             // Hidden windows get no redraw requests, so draw here.
             let drawn = session.redraw(config);
@@ -294,7 +299,7 @@ impl App {
         let Some(session) = &mut self.session else {
             return;
         };
-        match session.open_tab(&self.config, &self.proxy) {
+        match session.open_tab(&self.config, self.start_dir.as_deref(), &self.proxy) {
             Ok(_) => session.window.request_redraw(),
             Err(error) => eprintln!("nxgterm: cannot open a tab: {error}"),
         }
@@ -631,7 +636,9 @@ impl App {
         };
         let area = session.content_size();
         match command {
-            PaneCommand::Split(axis) => session.split(axis, &self.config, &self.proxy),
+            PaneCommand::Split(axis) => {
+                session.split(axis, &self.config, self.start_dir.as_deref(), &self.proxy)
+            }
             PaneCommand::Focus(dir) => {
                 if tab::focus_active(&mut session.tabs, dir, area) {
                     session.panes_changed();
@@ -1043,10 +1050,11 @@ impl Session {
     }
 
     /// Spawns the configured shell in a new tab next to the active one,
-    /// sized to the grid, and activates it.
+    /// sized to the grid and started in `cwd`, and activates it.
     fn open_tab(
         &mut self,
         config: &Config,
+        cwd: Option<&Path>,
         proxy: &EventLoopProxy<UserEvent>,
     ) -> Result<TabId, Box<dyn Error>> {
         let pixels = self.window.inner_size();
@@ -1058,7 +1066,7 @@ impl Session {
         };
         let pane = self.pane_ids.next();
         let id = self.tabs.add_with(|_| {
-            spawn_pane(pane, config, win_size, proxy).map(|spawned| Tab::new(pane, spawned))
+            spawn_pane(pane, config, cwd, win_size, proxy).map(|spawned| Tab::new(pane, spawned))
         })?;
         self.tab_switched();
         Ok(id)
@@ -1324,7 +1332,13 @@ impl Session {
     /// configured shell in the new pane at its final size. A pane that is
     /// too small, or a shell that does not start, leaves the layout as it
     /// was.
-    fn split(&mut self, axis: Axis, config: &Config, proxy: &EventLoopProxy<UserEvent>) {
+    fn split(
+        &mut self,
+        axis: Axis,
+        config: &Config,
+        cwd: Option<&Path>,
+        proxy: &EventLoopProxy<UserEvent>,
+    ) {
         let area = self.content_size();
         let layout = self.grid_layout();
         let cell = CellPixels::new(layout.cell.width, layout.cell.height);
@@ -1335,7 +1349,7 @@ impl Session {
                 cells,
                 cell: Some(cell),
             };
-            spawn_pane(id, config, win_size, proxy)
+            spawn_pane(id, config, cwd, win_size, proxy)
         });
         match split {
             Some(Ok(())) => self.panes_changed(),
@@ -1895,11 +1909,12 @@ impl Pane {
 }
 
 /// Starts the configured shell (or the platform default) on a new pty of
-/// `win_size` for pane `id`, with threads that post its output and exit.
-/// Every pane starts in the working directory nxgterm was started in.
+/// `win_size` for pane `id`, in `cwd`, with threads that post its output
+/// and exit.
 fn spawn_pane(
     id: PaneId,
     config: &Config,
+    cwd: Option<&Path>,
     win_size: WinSize,
     proxy: &EventLoopProxy<UserEvent>,
 ) -> Result<Pane, Box<dyn Error>> {
@@ -1908,7 +1923,7 @@ fn spawn_pane(
         args: config.shell.args.clone(),
     });
     let backends = nxg_pty::backends_from_env(env::var(nxg_pty::ENV_VAR).ok().as_deref());
-    let pty = nxg_pty::spawn_shell_with(win_size, shell.as_ref(), backends)?;
+    let pty = nxg_pty::spawn_shell_with(win_size, shell.as_ref(), cwd, backends)?;
     for attempt in &pty.skipped {
         eprintln!("nxgterm: skipped {}: {}", attempt.name, attempt.error);
     }

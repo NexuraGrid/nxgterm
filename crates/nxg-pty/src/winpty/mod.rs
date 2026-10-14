@@ -22,6 +22,7 @@ pub(crate) use session::spawn;
 pub(crate) fn spawn(
     _size: nxg_core::WinSize,
     _argv: &[std::ffi::OsString],
+    _cwd: Option<&std::ffi::OsString>,
     _env: &[(&str, &str)],
 ) -> Result<nxg_core::ports::PtySession, String> {
     Err("winpty is only bundled for x86_64 Windows".into())
