@@ -36,6 +36,33 @@ cargo install --locked --git https://github.com/NexuraGrid/nxgterm nxgterm
 Building needs no system libraries: X11, Wayland, xkbcommon and the GPU
 drivers are loaded at runtime. Maintainers: see [`packaging/`](packaging/README.md).
 
+### Update
+
+```sh
+nxgterm update --check   # print the current and latest versions
+nxgterm update           # install the latest release
+nxgterm update --force   # reinstall even when already up to date
+```
+
+`nxgterm update` reads the latest release's `SHA256SUMS`, picks the asset for
+how this copy was installed and verifies its SHA-256 against that file before
+using it: a download whose checksum does not match, or that is not listed, is
+refused and nothing is installed.
+
+| Installed with | What `nxgterm update` does |
+|---|---|
+| Portable tarball (Linux) or zip (Windows) | Replaces the files next to `nxgterm` that the release ships (the binary, `conpty.dll`, `x64\OpenConsole.exe`, `profile/`, ...). On Windows the running files are renamed to `*.old` and removed the next time nxgterm starts. A directory you cannot write needs `sudo` / an Administrator prompt. |
+| MSI (Program Files) | Downloads the `.msi` and starts `msiexec /i <msi> /passive /norestart`; close open nxgterm windows if the installer asks. |
+| `.deb` / `.rpm` | Downloads the package and runs `sudo apt install <file>` / `sudo dnf install <file>` (or `sudo rpm -U`). |
+| macOS app bundle | Replaces the whole `nxgterm.app` with the one from the universal tarball. |
+| AUR, Homebrew, `cargo install` | Changes nothing and prints the command to use (e.g. `yay -Syu nxgterm-bin`, `brew upgrade nxgterm`). |
+
+`--check` and up-to-date runs exit with status 0; only errors (no network, a
+checksum mismatch, a failed install) exit non-zero. `HTTPS_PROXY` /
+`HTTP_PROXY` / `NO_PROXY` are honoured. `NXGTERM_UPDATE_URL` points the
+command at another directory holding `SHA256SUMS` and the assets (for
+testing or a mirror).
+
 ## Tools profile
 
 nxgterm does not bundle any tools. An optional, separate installer sets up a

@@ -8,6 +8,7 @@ use nxg_config::WorkingDirectory;
 /// Printed by `--help`.
 pub const USAGE: &str = "\
 Usage: nxgterm [OPTIONS]
+       nxgterm update [--check] [--force]
 
 Options:
   --config <PATH>            Use this config file instead of the default location
@@ -18,9 +19,17 @@ Options:
   -V, --version              Print the version and exit
   -h, --help                 Print this help and exit
 
+Commands:
+  update                     Download, verify (SHA-256) and install the latest
+                             release, or print the package-manager command
+    --check                  Only print the current and latest versions
+    --force                  Reinstall even when already up to date
+
 Environment:
-  NXGTERM_CONFIG    Config file path (overridden by --config)
-  NXGTERM_RENDERER  auto, gpu or cpu (overrides [renderer] backend)
+  NXGTERM_CONFIG      Config file path (overridden by --config)
+  NXGTERM_RENDERER    auto, gpu or cpu (overrides [renderer] backend)
+  NXGTERM_UPDATE_URL  Directory with SHA256SUMS and the assets, instead of
+                      the latest GitHub release (for `update`)
 ";
 
 /// What the command line asks for.
@@ -34,12 +43,19 @@ pub enum Command {
         elevate: bool,
         working_directory: Option<WorkingDirectory>,
     },
+    /// `nxgterm update`: install the latest release, or with `check` only
+    /// report whether there is one; `force` reinstalls an up-to-date copy.
+    Update {
+        check: bool,
+        force: bool,
+    },
     PrintConfig,
     Version,
     Help,
 }
 
-/// Parses the arguments after the program name. `--help`, `--version` and
+/// Parses the arguments after the program name. A first argument of
+/// `update` selects that subcommand. `--help`, `--version` and
 /// `--print-config` act as soon as they are seen; `--config` and
 /// `--working-directory` take the next argument or an `=` value, and the
 /// last one wins.
@@ -47,7 +63,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
     let mut config = None;
     let mut elevate = false;
     let mut working_directory = None;
-    let mut args = args.into_iter();
+    let mut args = args.into_iter().peekable();
+    if args.peek().is_some_and(|arg| arg == "update") {
+        args.next();
+        return parse_update(args);
+    }
     while let Some(arg) = args.next() {
         let text = arg.to_string_lossy();
         match text.as_ref() {
@@ -85,6 +105,21 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         elevate,
         working_directory,
     })
+}
+
+/// The arguments after `update`.
+fn parse_update(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let mut check = false;
+    let mut force = false;
+    for arg in args {
+        match arg.to_string_lossy().as_ref() {
+            "-h" | "--help" => return Ok(Command::Help),
+            "--check" => check = true,
+            "--force" => force = true,
+            text => return Err(format!("unknown argument `{text}` for `update`")),
+        }
+    }
+    Ok(Command::Update { check, force })
 }
 
 const NEEDS_DIRECTORY: &str = "--working-directory needs auto, inherit, home or a directory";
@@ -242,6 +277,47 @@ mod tests {
         let error = run(&["--working-directory"]).unwrap_err();
         assert!(error.contains("--working-directory"), "{error}");
         assert!(run(&["--working-directory="]).is_err());
+    }
+
+    #[test]
+    fn update_is_a_subcommand() {
+        assert_eq!(
+            run(&["update"]),
+            Ok(Command::Update {
+                check: false,
+                force: false
+            })
+        );
+        assert_eq!(
+            run(&["update", "--check"]),
+            Ok(Command::Update {
+                check: true,
+                force: false
+            })
+        );
+        assert_eq!(
+            run(&["update", "--force", "--check"]),
+            Ok(Command::Update {
+                check: true,
+                force: true
+            })
+        );
+        assert_eq!(run(&["update", "--help"]), Ok(Command::Help));
+    }
+
+    #[test]
+    fn update_rejects_other_arguments() {
+        let error = run(&["update", "--config", "a.toml"]).unwrap_err();
+        assert!(error.contains("`--config`"), "{error}");
+        assert!(run(&["update", "now"]).is_err());
+        // Only the first argument names a subcommand.
+        assert!(run(&["--elevate", "update"]).is_err());
+    }
+
+    #[test]
+    fn usage_documents_update() {
+        assert!(USAGE.contains("nxgterm update [--check] [--force]"));
+        assert!(USAGE.contains("NXGTERM_UPDATE_URL"));
     }
 
     #[cfg(unix)]
