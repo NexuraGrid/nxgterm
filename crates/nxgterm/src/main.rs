@@ -78,6 +78,7 @@ fn run(config_arg: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         }
     }
     let (config, files) = path.as_deref().map(load_config).unwrap_or_default();
+    elevation::register_jump_list();
 
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();

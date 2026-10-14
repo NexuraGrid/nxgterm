@@ -41,6 +41,21 @@ pub fn relaunch_elevated(_config: Option<&Path>) -> io::Result<()> {
     ))
 }
 
+/// Adds a "New window (Administrator)" task, which runs this executable
+/// with `--elevate`, to the taskbar jump list. Failures are only logged:
+/// the jump list never stops the terminal from starting. Call it on the
+/// main thread before the event loop; it joins (or creates) the thread's
+/// single-threaded COM apartment, which winit uses too.
+#[cfg(windows)]
+pub fn register_jump_list() {
+    if let Err(error) = jump_list::register() {
+        eprintln!("nxgterm: cannot add the Administrator jump list task: {error}");
+    }
+}
+
+#[cfg(not(windows))]
+pub fn register_jump_list() {}
+
 /// The command-line parameters for the elevated relaunch: the config path,
 /// if any, and never `--elevate`, so the child cannot relaunch again.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -159,6 +174,80 @@ mod platform {
 
     fn wide(text: &OsStr) -> Vec<u16> {
         text.encode_wide().chain(Some(0)).collect()
+    }
+}
+
+#[cfg(windows)]
+mod jump_list {
+    use std::mem::ManuallyDrop;
+
+    use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+    use windows::Win32::Storage::EnhancedStorage::PKEY_Title;
+    use windows::Win32::System::Com::StructuredStorage::{
+        PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
+    };
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+    };
+    use windows::Win32::System::Variant::VT_LPWSTR;
+    use windows::Win32::UI::Shell::Common::{IObjectArray, IObjectCollection};
+    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+    use windows::Win32::UI::Shell::{
+        DestinationList, EnumerableObjectCollection, ICustomDestinationList, IShellLinkW, ShellLink,
+    };
+    use windows::core::{HSTRING, Interface, PWSTR, Result};
+
+    const TITLE: &str = "New window (Administrator)";
+
+    pub fn register() -> Result<()> {
+        // SAFETY: plain COM initialisation of this thread. COM stays
+        // initialised for the life of the process, so it is never paired
+        // with CoUninitialize.
+        let init = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        // S_FALSE (already initialised) is a success code; a different
+        // apartment already set up on this thread works as well.
+        if init.is_err() && init != RPC_E_CHANGED_MODE {
+            return Err(init.into());
+        }
+        let exe = HSTRING::from(std::env::current_exe()?.as_os_str());
+        // SAFETY: COM is initialised on this thread; every string passed
+        // below is a NUL-terminated HSTRING or buffer that outlives the
+        // call that reads it, and the shell copies what it keeps.
+        unsafe {
+            let list: ICustomDestinationList =
+                CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER)?;
+            let mut min_slots = 0;
+            let _removed: IObjectArray = list.BeginList(&mut min_slots)?;
+
+            let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+            link.SetPath(&exe)?;
+            link.SetArguments(&HSTRING::from("--elevate"))?;
+            link.SetIconLocation(&exe, 0)?;
+            link.SetDescription(&HSTRING::from("Open nxgterm as Administrator"))?;
+            // A task's visible name is the link's title property.
+            let title: Vec<u16> = TITLE.encode_utf16().chain(Some(0)).collect();
+            let value = PROPVARIANT {
+                Anonymous: PROPVARIANT_0 {
+                    Anonymous: ManuallyDrop::new(PROPVARIANT_0_0 {
+                        vt: VT_LPWSTR,
+                        Anonymous: PROPVARIANT_0_0_0 {
+                            pwszVal: PWSTR(title.as_ptr().cast_mut()),
+                        },
+                        ..Default::default()
+                    }),
+                },
+            };
+            let store: IPropertyStore = link.cast()?;
+            // `value` borrows `title` and is not cleared: SetValue copies it.
+            store.SetValue(&PKEY_Title, &value)?;
+            store.Commit()?;
+
+            let tasks: IObjectCollection =
+                CoCreateInstance(&EnumerableObjectCollection, None, CLSCTX_INPROC_SERVER)?;
+            tasks.AddObject(&link)?;
+            list.AddUserTasks(&tasks.cast::<IObjectArray>()?)?;
+            list.CommitList()
+        }
     }
 }
 
