@@ -291,13 +291,13 @@ mod tests {
     use super::*;
 
     // 0.10.0 freed the task title twice, and the heap corruption killed
-    // nxgterm on every start. Run the real path a few times: failing to
-    // register (no shell on the machine) is fine, crashing is not.
+    // nxgterm on every start. Run the whole real path a few times; it must
+    // succeed, so the test cannot pass by bailing out before the title.
     #[cfg(windows)]
     #[test]
     fn registering_the_jump_list_keeps_the_heap_intact() {
         for _ in 0..3 {
-            let _ = jump_list::register();
+            jump_list::register().unwrap();
         }
     }
 

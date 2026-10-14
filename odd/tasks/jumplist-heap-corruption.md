@@ -29,8 +29,8 @@ fmt, clippy (Linux and x86_64-pc-windows-gnu), `cargo test -p nxgterm`, and the 
 
 ## Tasks
 
-- [ ] T1 SHStrDupW title + Windows regression tests. Route: inline (one file, cause already understood).
-- [ ] T2 CI Windows startup smoke test. Route: inline (one workflow file).
+- [x] T1 SHStrDupW title + Windows regression tests. Route: inline (one file, cause already understood). Commits 35cfffb (RED: windows-latest died with 0xc0000374 STATUS_HEAP_CORRUPTION) and 0845322 (fix).
+- [x] T2 CI Windows startup smoke test (packaging/windows/smoke-start.ps1, used by ci.yml and release.yml). Route: inline. Commit 525041b. Hardened after the native review (approved, lineage review-ff2ffdf831b0012a): keeps the exit code, kills the process tree, and the register test must return Ok.
 - [ ] T3 Release 0.10.1. Route: inline (same flow as 0.10.0).
 
 ## Progress / Evidence

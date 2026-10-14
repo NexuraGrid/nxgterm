@@ -10,10 +10,12 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $app = Start-Process -FilePath $Exe -PassThru
-Start-Sleep -Seconds $Seconds
-if ($app.HasExited) {
+# Holding the handle keeps the exit code readable after the process is gone.
+$null = $app.Handle
+if ($app.WaitForExit($Seconds * 1000)) {
     Write-Error ("nxgterm exited during startup with code 0x{0:X8}" -f $app.ExitCode)
     exit 1
 }
-Stop-Process -Id $app.Id -Force
+# Stop the shell and console host nxgterm started along with it.
+taskkill /PID $app.Id /T /F | Out-Null
 Write-Host "nxgterm was still running after $Seconds seconds"
