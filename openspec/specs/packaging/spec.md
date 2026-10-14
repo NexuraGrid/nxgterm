@@ -78,10 +78,30 @@ to Program Files with a Start Menu shortcut, the profile scripts in
 The zip MUST contain the exe, licenses, README and `profile\`. The workflow
 MUST smoke-test `nxgterm.exe --version`.
 
+At startup the exe MUST register a taskbar jump list task titled "New
+window (Administrator)" that runs the same exe with `--elevate`, through
+`ICustomDestinationList` and without setting an explicit AppUserModelID, so
+the task attaches to the pinned or running icon. A failure to register it
+MUST only be logged.
+
+When the process runs elevated, the OS window title and the integrated
+title bar MUST read "<label> (Administrator)"; non-elevated windows MUST
+keep the plain label. Tab labels MUST NOT change.
+
 #### Scenario: Version from PowerShell
 - GIVEN the release `nxgterm.exe`
 - WHEN `nxgterm.exe --version` runs in PowerShell
 - THEN `nxgterm 0.1.0` appears in that console
+
+#### Scenario: Administrator jump list task
+- GIVEN nxgterm has run once and is pinned to the taskbar
+- WHEN the user right-clicks its taskbar icon and picks "New window (Administrator)"
+- THEN the UAC prompt appears and an elevated nxgterm window opens
+
+#### Scenario: Elevated window title
+- GIVEN nxgterm started with `--elevate` and UAC accepted
+- WHEN the focused pane's label is `pwsh`
+- THEN the window title reads `pwsh (Administrator)` and the tab still reads `pwsh`
 
 ### Requirement: macOS bundle
 

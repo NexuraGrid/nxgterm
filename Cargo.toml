@@ -47,6 +47,8 @@ wgpu = { version = "30", default-features = false, features = [
     "gles",
     "wgsl",
 ] }
+# COM bindings for the Windows taskbar jump list.
+windows = "0.62"
 # Raw Win32 bindings for the winpty adapter (ConPTY probe, winpty.dll).
 windows-sys = "0.61"
 winit = "0.30"

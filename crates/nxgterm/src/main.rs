@@ -12,6 +12,7 @@ mod cli;
 mod clipboard;
 mod command_palette;
 mod dividers;
+mod elevation;
 mod icon;
 mod keys;
 mod mouse;
@@ -49,7 +50,15 @@ fn main() -> ExitCode {
         Command::Help => print!("{}", cli::USAGE),
         Command::Version => println!("nxgterm {}", env!("CARGO_PKG_VERSION")),
         Command::PrintConfig => print!("{DEFAULT_CONFIG_TOML}"),
-        Command::Run { config } => {
+        Command::Run { config, elevate } => {
+            // The elevated copy runs the terminal; this one just exits.
+            if elevate && !elevation::is_elevated() {
+                if let Err(error) = elevation::relaunch_elevated(config.as_deref()) {
+                    eprintln!("nxgterm: {error}");
+                    return ExitCode::FAILURE;
+                }
+                return ExitCode::SUCCESS;
+            }
             if let Err(error) = run(config) {
                 eprintln!("nxgterm: {error}");
                 return ExitCode::FAILURE;
@@ -69,6 +78,7 @@ fn run(config_arg: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         }
     }
     let (config, files) = path.as_deref().map(load_config).unwrap_or_default();
+    elevation::register_jump_list();
 
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();

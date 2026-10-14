@@ -1263,6 +1263,7 @@ dependencies = [
  "nxg-pty",
  "nxg-render",
  "wayland-client",
+ "windows",
  "windows-sys 0.61.2",
  "winit",
  "winresource",
