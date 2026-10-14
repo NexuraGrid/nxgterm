@@ -210,10 +210,11 @@ mod jump_list {
     use windows::Win32::System::Variant::VT_LPWSTR;
     use windows::Win32::UI::Shell::Common::{IObjectArray, IObjectCollection};
     use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+    use windows::Win32::UI::Shell::SHStrDupW;
     use windows::Win32::UI::Shell::{
         DestinationList, EnumerableObjectCollection, ICustomDestinationList, IShellLinkW, ShellLink,
     };
-    use windows::core::{HSTRING, Interface, PWSTR, Result};
+    use windows::core::{HSTRING, Interface, Result};
 
     const TITLE: &str = "New window (Administrator)";
 
@@ -243,21 +244,9 @@ mod jump_list {
             link.SetIconLocation(&exe, 0)?;
             link.SetDescription(&HSTRING::from("Open nxgterm as Administrator"))?;
             // A task's visible name is the link's title property.
-            let title: Vec<u16> = TITLE.encode_utf16().chain(Some(0)).collect();
-            let value = PROPVARIANT {
-                Anonymous: PROPVARIANT_0 {
-                    Anonymous: ManuallyDrop::new(PROPVARIANT_0_0 {
-                        vt: VT_LPWSTR,
-                        Anonymous: PROPVARIANT_0_0_0 {
-                            pwszVal: PWSTR(title.as_ptr().cast_mut()),
-                        },
-                        ..Default::default()
-                    }),
-                },
-            };
+            let title = string_value(TITLE)?;
             let store: IPropertyStore = link.cast()?;
-            // `value` borrows `title` and is not cleared: SetValue copies it.
-            store.SetValue(&PKEY_Title, &value)?;
+            store.SetValue(&PKEY_Title, &title)?;
             store.Commit()?;
 
             let tasks: IObjectCollection =
@@ -266,6 +255,27 @@ mod jump_list {
             list.AddUserTasks(&tasks.cast::<IObjectArray>()?)?;
             list.CommitList()
         }
+    }
+
+    /// A `VT_LPWSTR` property value that owns its string. `PROPVARIANT`
+    /// frees the string with `PropVariantClear` when dropped, so it must
+    /// come from the COM allocator, as `InitPropVariantFromString` does with
+    /// `SHStrDupW`. Pointing it at a Rust buffer frees that buffer twice and
+    /// corrupts the heap.
+    pub(super) fn string_value(text: &str) -> Result<PROPVARIANT> {
+        let text = HSTRING::from(text);
+        // SAFETY: `text` is a NUL-terminated string that outlives the call;
+        // the copy is owned by the returned value from here on.
+        let copy = unsafe { SHStrDupW(&text)? };
+        Ok(PROPVARIANT {
+            Anonymous: PROPVARIANT_0 {
+                Anonymous: ManuallyDrop::new(PROPVARIANT_0_0 {
+                    vt: VT_LPWSTR,
+                    Anonymous: PROPVARIANT_0_0_0 { pwszVal: copy },
+                    ..Default::default()
+                }),
+            },
+        })
     }
 }
 
@@ -288,6 +298,20 @@ mod tests {
     fn registering_the_jump_list_keeps_the_heap_intact() {
         for _ in 0..3 {
             let _ = jump_list::register();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn string_values_own_and_free_their_string() {
+        use windows::Win32::System::Variant::VT_LPWSTR;
+
+        for _ in 0..100 {
+            let value = jump_list::string_value("New window (Administrator)").unwrap();
+            assert_eq!(value.vt(), VT_LPWSTR);
+            // SAFETY: a VT_LPWSTR value holds a NUL-terminated string.
+            let text = unsafe { value.Anonymous.Anonymous.Anonymous.pwszVal.to_string() };
+            assert_eq!(text.unwrap(), "New window (Administrator)");
         }
     }
 
