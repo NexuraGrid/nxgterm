@@ -259,18 +259,18 @@ fn in_cargo_bin(os: Os, parts: &[String], probe: &dyn Probe) -> bool {
     } else {
         "HOME"
     };
+    // Joined as text, not with `Path::join`, which uses the host's separator:
+    // [`components`] splits Unix paths on `/` only, and Windows paths on both.
     let bins = [
         probe
             .env("CARGO_HOME")
-            .map(|dir| PathBuf::from(dir).join("bin")),
+            .map(|dir| format!("{}/bin", dir.to_string_lossy())),
         probe
             .env(home)
-            .map(|dir| PathBuf::from(dir).join(".cargo").join("bin")),
+            .map(|dir| format!("{}/.cargo/bin", dir.to_string_lossy())),
     ];
     let dir = &parts[..parts.len().saturating_sub(1)];
-    bins.iter()
-        .flatten()
-        .any(|bin| components(os, &bin.to_string_lossy()) == dir)
+    bins.iter().flatten().any(|bin| components(os, bin) == dir)
 }
 
 /// A binary in a cargo `target/<profile>` directory.
