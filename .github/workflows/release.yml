@@ -153,6 +153,7 @@ jobs:
         shell: pwsh
         run: |
           .\target\release\nxgterm.exe --version
+          .\packaging\windows\smoke-start.ps1 -Exe .\target\release\nxgterm.exe
           # The zip must carry the bundled ConPTY in the layout conpty.dll expects.
           $name = "nxgterm-$env:VERSION-x86_64-windows"
           Add-Type -AssemblyName System.IO.Compression.FileSystem
