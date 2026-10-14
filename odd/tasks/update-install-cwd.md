@@ -116,4 +116,10 @@ terminals in a sensible directory.
   `sh -n`, shellcheck clean, pwsh parse OK, sandboxed real install of 0.10.1
   from GitHub + reinstall, tampered and missing checksum refuse. Not run: real
   Windows (MSI, PATH, shortcut, PS 5.1), macOS, wget fallback.
+- Reviews: fix cb19a8a and T3 a1320c3 both high risk, consent granted, 4-lens
+  native reviews approved and acknowledged. Advisory follow-ups (non-blocking):
+  install.ps1:225-226 reports failure without a failing exit status (3 lenses);
+  install.sh:159-161 install-dir guard (2 lenses); no automated installer tests;
+  CRLF in SHA256SUMS; apply.rs hard-link-dependent test assertion and
+  case-sensitive Windows runtime dirs.
 - Next step: push and PRs (user decision).
