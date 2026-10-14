@@ -9,6 +9,7 @@ Usage: nxgterm [OPTIONS]
 
 Options:
   --config <PATH>   Use this config file instead of the default location
+  --elevate         Relaunch as Administrator (Windows)
   --print-config    Print a documented default config and exit
   -V, --version     Print the version and exit
   -h, --help        Print this help and exit
@@ -21,9 +22,11 @@ Environment:
 /// What the command line asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    /// Open the terminal, optionally with a specific config file.
+    /// Open the terminal, optionally with a specific config file;
+    /// `elevate` asks to relaunch as Administrator first (Windows).
     Run {
         config: Option<PathBuf>,
+        elevate: bool,
     },
     PrintConfig,
     Version,
@@ -35,6 +38,7 @@ pub enum Command {
 /// next argument or an `=` value, and the last one wins.
 pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String> {
     let mut config = None;
+    let mut elevate = false;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let text = arg.to_string_lossy();
@@ -42,6 +46,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
             "--print-config" => return Ok(Command::PrintConfig),
+            "--elevate" => elevate = true,
             "--config" => {
                 let value = args.next().ok_or("--config needs a file path")?;
                 config = Some(PathBuf::from(value));
@@ -53,7 +58,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             },
         }
     }
-    Ok(Command::Run { config })
+    Ok(Command::Run { config, elevate })
 }
 
 #[cfg(test)]
@@ -67,12 +72,44 @@ mod tests {
     fn with_config(path: &str) -> Command {
         Command::Run {
             config: Some(PathBuf::from(path)),
+            elevate: false,
         }
     }
 
     #[test]
     fn no_arguments_runs_with_the_default_config() {
-        assert_eq!(run(&[]), Ok(Command::Run { config: None }));
+        assert_eq!(
+            run(&[]),
+            Ok(Command::Run {
+                config: None,
+                elevate: false
+            })
+        );
+    }
+
+    #[test]
+    fn elevate_combines_with_config() {
+        assert_eq!(
+            run(&["--elevate"]),
+            Ok(Command::Run {
+                config: None,
+                elevate: true
+            })
+        );
+        assert_eq!(
+            run(&["--elevate", "--config", "a.toml"]),
+            Ok(Command::Run {
+                config: Some(PathBuf::from("a.toml")),
+                elevate: true
+            })
+        );
+        assert_eq!(
+            run(&["--config=a.toml", "--elevate"]),
+            Ok(Command::Run {
+                config: Some(PathBuf::from("a.toml")),
+                elevate: true
+            })
+        );
     }
 
     #[test]
@@ -129,7 +166,8 @@ mod tests {
         assert_eq!(
             parse(args),
             Ok(Command::Run {
-                config: Some(PathBuf::from(path))
+                config: Some(PathBuf::from(path)),
+                elevate: false
             })
         );
     }

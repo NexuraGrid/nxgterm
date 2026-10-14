@@ -395,15 +395,33 @@ of its shortcut (e.g. `Ctrl+Shift+T`) MUST be listable.
 ### Requirement: Command-line interface
 
 nxgterm MUST accept `--config <path>` and `--config=<path>` (last wins; the
-value MAY start with `-`), `--print-config`, `-V`/`--version` and
-`-h`/`--help`. Informational flags MUST act as soon as they are seen. A
+value MAY start with `-`), `--elevate`, `--print-config`, `-V`/`--version`
+and `-h`/`--help`. Informational flags MUST act as soon as they are seen. A
 missing `--config` value or any unknown argument MUST print the error and
 usage and exit with status 2. Non-UTF-8 paths MUST be preserved on Unix.
+
+`--elevate` combines with `--config`. On Windows, a process that is not
+elevated MUST relaunch itself as Administrator through `ShellExecuteW` with
+the `runas` verb, forwarding `--config` as an absolute path but never
+`--elevate`, and exit with status 0; if UAC is cancelled or the launch
+fails it MUST print the error and exit with status 1. An already elevated
+process MUST just run. On other platforms `--elevate` MUST print that it
+is only supported on Windows and exit with status 1.
 
 #### Scenario: Unknown flag
 - GIVEN `nxgterm --colour`
 - WHEN it runs
 - THEN stderr shows ``unknown argument `--colour``` plus usage and the exit code is 2
+
+#### Scenario: Elevated relaunch
+- GIVEN a non-elevated Windows session
+- WHEN `nxgterm --elevate --config my.toml` runs and UAC is accepted
+- THEN an elevated nxgterm opens with the absolute path of `my.toml` and the first process exits with status 0
+
+#### Scenario: UAC cancelled
+- GIVEN a non-elevated Windows session
+- WHEN `nxgterm --elevate` runs and the UAC prompt is cancelled
+- THEN stderr shows `elevation was cancelled` and the exit code is 1
 
 ### Requirement: Panes section
 
