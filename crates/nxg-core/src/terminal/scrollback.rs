@@ -16,8 +16,8 @@ pub const DEFAULT_SCROLLBACK: usize = 10_000;
 /// A bounded history of lines plus the viewport position over it.
 #[derive(Debug)]
 pub(super) struct Scrollback {
-    /// Oldest first. Each line keeps the width it had when it left the
-    /// screen; a resize does not rewrap it.
+    /// Oldest first. A line keeps the width it had when it left the
+    /// screen until a resize changes the width (see `resize`).
     lines: VecDeque<Box<[Cell]>>,
     limit: usize,
     /// Lines ever dropped from the front (or never kept, with a zero
@@ -48,6 +48,11 @@ impl Scrollback {
     }
 
     pub fn push(&mut self, line: &[Cell]) {
+        self.push_owned(line.into());
+    }
+
+    /// [`Scrollback::push`] for a line already boxed.
+    pub fn push_owned(&mut self, line: Box<[Cell]>) {
         if self.limit == 0 {
             self.dropped += 1;
             return;
@@ -56,7 +61,18 @@ impl Scrollback {
             self.lines.pop_front();
             self.dropped += 1;
         }
-        self.lines.push_back(line.into());
+        self.lines.push_back(line);
+    }
+
+    /// Takes every line out, oldest first, to rewrap them; the limit and
+    /// the count of dropped lines stay.
+    pub fn take(&mut self) -> Vec<Box<[Cell]>> {
+        std::mem::take(&mut self.lines).into()
+    }
+
+    /// Takes the newest line back out (a resize that shows it again).
+    pub fn pop(&mut self) -> Option<Box<[Cell]>> {
+        self.lines.pop_back()
     }
 
     pub fn set_limit(&mut self, limit: usize) {
@@ -332,17 +348,16 @@ mod tests {
     }
 
     #[test]
-    fn resize_resets_the_viewport_and_old_lines_keep_their_width() {
+    fn resize_resets_the_viewport_and_rewraps_the_history() {
         let mut t = term(6, 1);
-        t.advance(b"abcdef\r\nx");
+        t.advance(b"ab\r\nabcdef\r\nx");
         t.scroll_display(1);
         t.resize(TermSize::new(3, 1).unwrap());
         assert_eq!(t.display_offset(), 0);
-        t.scroll_display(1);
-        assert_eq!(t.display_row(0).len(), 3, "wider lines are cut to the grid");
-        assert_eq!(shown(&t, 0), "abc");
+        assert_eq!(history(&mut t), ["ab", "abc", "def"]);
         t.resize(TermSize::new(9, 1).unwrap());
-        t.scroll_display(1);
-        assert_eq!(t.display_row(0).len(), 6, "narrower lines stay short");
+        assert_eq!(history(&mut t), ["ab", "abcdef"]);
+        t.scroll_display(2);
+        assert_eq!(t.display_row(0).len(), 6, "a line that fit keeps its box");
     }
 }

@@ -259,6 +259,19 @@ pub fn fatal(message: &str) {
     show(&format!("nxgterm could not continue:\n\n{message}"));
 }
 
+/// Logs a diagnostic that is no crash (e.g. a failed pty write) under
+/// the heading `kind`; nothing is shown.
+pub fn note(kind: &str, message: &str) {
+    write(&Entry {
+        kind,
+        time: now(),
+        thread: None,
+        message,
+        location: None,
+        backtrace: None,
+    });
+}
+
 /// Shows an error that ends the process but is no crash (e.g. the
 /// elevated relaunch failed) on Windows; nothing is logged.
 pub fn error(message: &str) {

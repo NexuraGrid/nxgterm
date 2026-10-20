@@ -110,12 +110,17 @@ bounded scrollback, ~1,040 tests.
   not parse all fallbacks (~100 MiB on Windows); update README GL-fallback
   text; test fallback_families and the backend loop
 - [x] T5 Phase 3 — keyboard and input (S3, S4, S5)
-- [ ] T5b Phase 3 review follow-ups: a stale IME preedit must not swallow keys
+- [x] T5b Phase 3 review follow-ups: a stale IME preedit must not swallow keys
   (clear on focus loss / empty preedit / timeout); bound the PTY input queue
   (backpressure or drop with notice); report PTY write failures; validate
   cmap table length against file size before allocating; scope AltGr
   detection to Windows (or document); fix Ctrl-code doc
-- [ ] T6 Phase 4 — resize without losing content (S2)
+- [x] T6 Phase 4 — resize without losing content (S2)
+- [ ] T6b Phase 4 review follow-ups (advisory): the dropped-input notice is
+  injected into the parse stream (may land inside an app escape sequence);
+  pending-input counter can leak when the writer thread ends; image placements
+  are not moved on reflow; redraw request ignored after some resizes; test
+  image scroll on height change
 - [ ] T7 Phase 5 — per-frame CPU (R4, R6, R8)
 - [ ] T8 Phase 6 — sequences, ConPTY passthrough, notices, fuzzing (S7–S11, R5, R7)
 
@@ -303,6 +308,53 @@ bounded scrollback, ~1,040 tests.
   --workspace` (1119) pass. Not run on a native window (WSLg): the
   IME path, AltGr on Windows and macOS IME are untested by hand.
 
+- 2026-10-20: T5b done (delegated (writer trigger: 2+ non-trivial
+  files)), four commits. IME: `ime::Composition` ties the preedit to
+  the pane it was composed for; it ends on an empty preedit, `Commit`,
+  `Disabled` and window focus loss, and a preedit from another pane (or
+  tab) is neither drawn nor allowed to take keys (dropped on the next
+  key). PTY input: `Input` counts pending bytes and holds at most 8 MiB
+  (`input::LIMIT`); a `send` that does not fit is dropped whole (so a
+  bracketed paste never loses its closing marker) and the pane shows
+  one "N KiB of input dropped" notice until input fits again; keys go
+  through whenever there is room; the UI never blocks. A failed write
+  calls a callback once (the thread then ends): `eprintln!` plus a
+  `crash::note` "input error" entry in the crash log. Font: every range
+  read from a fallback's table directory is checked against the file
+  size and the cmap against 16 MiB before a buffer is allocated. Keys:
+  the Ctrl+Alt printable-text AltGr rule is Windows only (`AltGr`
+  const from `cfg!(windows)`, passed into `encode_char` for tests);
+  Ctrl-code docs corrected (digits 2-8 are VT220 codes). RED observed
+  (IME stale-pane test with the old non-clearing behavior; cmap reader
+  asked for 2 GiB; compile RED for the new `Input` and AltGr APIs) then
+  GREEN; fmt, clippy `-D warnings` (also x86_64-pc-windows-gnu),
+  `cargo test --workspace` pass after each commit.
+
+- 2026-10-20: T6 done (delegated (writer trigger: 2+ non-trivial
+  files)), two commits. New `terminal/resize.rs`; only the main screen
+  (active or dormant) changes, the alternate screen is still cut and
+  clamped. Height: blank rows below the cursor go first, then the top
+  rows move into the history, but only as far as the cursor (then rows
+  below it are cut); growing pulls history rows back at the top. The
+  saved cursor and image placements move with their rows. Width:
+  history and used screen rows are rewrapped (runs joined by WRAPLINE,
+  trailing blanks trimmed but never before the cursor, attributes and
+  marks kept); a wide char that does not fit moves whole to the next
+  row behind a new `Flags::WIDE_LEADER` blank (print now writes it too)
+  which a reflow drops. Cursor and saved cursor keep their offset in
+  their line (a pending wrap stays pending only in the last column);
+  the cursor's line keeps its first screen row when it can, so widening
+  pulls history down and narrowing pushes it up. Unwrapped lines that
+  fit keep their box, so the cost is the rows that change (release
+  build, 10k lines of 150 cols at 200 cols: ~16 ms to narrow to 80,
+  ~5 ms back). The history limit counts rows, so narrowing can drop
+  the oldest lines (as in Alacritty). Placements are not moved on a
+  reflow; the selection is still cleared. RED observed (6 height tests,
+  8 reflow tests incl. a seeded random-resize test of logical lines)
+  then GREEN (3000 seeds checked once); fmt, clippy `-D warnings` (also
+  x86_64-pc-windows-gnu), `cargo test --workspace` (1145, replay
+  fixtures included) pass. Not tried in a window (WSLg).
+
 ## Delivery
 
 Strategy: `ask-on-risk`; chain strategy chosen 2026-10-20: `stacked-to-main`.
@@ -310,7 +362,8 @@ Slices (local branches, not pushed):
 - `feat/trust-baseline-1-stability`: main..b5163ad (T1–T3, T1b–T3c)
 - `feat/trust-baseline-2-memory`: b5163ad..1ba2576 (T4, T4b)
 - `feat/trust-baseline-3-input`: 1ba2576..9fbc454 (T5)
-Later phases stack on slice 3. Forecast for phase 1: ~400–600 authored lines.
+Slices 1–3 merged as #69, #70, #71; released as 0.12.0.
+- `feat/trust-baseline-4-resize`: 22eb1aa..HEAD (T5b, T6) Forecast for phase 1: ~400–600 authored lines.
 
 ## Review log
 
@@ -327,7 +380,9 @@ Later phases stack on slice 3. Forecast for phase 1: ~400–600 authored lines.
   Reviewed boundary: 14dc963.
 - T4b/T5 (1ba2576..6bc7840): high risk, consent granted, 4 lenses, approved
   and acknowledged. Reviewed boundary: 6bc7840.
+- T5b/T6 (737db6e..16f37f8): medium risk, consent granted, 1 lens, approved
+  and acknowledged. Reviewed boundary: 16f37f8.
 
 ## Next step
 
-Phase 4 (T6).
+Phase 5 (T7).

@@ -13,6 +13,7 @@ use unicode_width::UnicodeWidthChar;
 mod edit;
 mod modes;
 mod osc52;
+mod resize;
 mod screen;
 mod scrollback;
 mod selection;
@@ -499,6 +500,16 @@ impl vte::Perform for State {
             // Like xterm: a wide char that does not fit wraps early, or
             // without autowrap takes the last two columns.
             if self.autowrap {
+                // The cell left behind is a blank leader, so a reflow
+                // can tell it from text.
+                let col = usize::from(self.screen.col);
+                let blank = self.blank();
+                let cells = self.screen.grid.row_mut(self.screen.row);
+                if col > 0 && cells[col].flags.contains(Flags::WIDE_SPACER) {
+                    cells[col - 1].unwide();
+                }
+                cells[col] = blank;
+                cells[col].flags.insert(Flags::WIDE_LEADER);
                 self.wrap_line();
             } else {
                 self.screen.col -= 1;
@@ -1046,12 +1057,15 @@ mod tests {
     }
 
     #[test]
-    fn resize_keeps_content_and_clamps_cursor() {
+    fn resize_keeps_content_and_moves_the_cursor() {
         let mut t = term(10, 5);
-        t.advance(b"hello\x1b[5;10H");
+        t.advance(b"hello\x1b[2;3H");
         t.resize(TermSize::new(3, 2).unwrap());
         assert_eq!(t.size(), TermSize::new(3, 2).unwrap());
-        assert_eq!(text(&t, 0), "hel");
+        // "hello" rewraps; its first row goes into history so the cursor
+        // row stays on screen.
+        assert_eq!(text(&t, 0), "lo");
+        assert_eq!(t.scrollback_len(), 1);
         assert_eq!(pos(&t), (2, 1));
         t.advance(b"\r\nxy");
         assert_eq!(text(&t, 1), "xy");
@@ -1457,11 +1471,22 @@ mod tests {
     }
 
     #[test]
-    fn resizing_through_a_wide_char_blanks_its_left_half() {
+    fn resizing_through_a_wide_char_blanks_its_left_half_on_the_alternate_screen() {
         let mut t = term(4, 1);
-        t.advance("ab日".as_bytes());
+        t.advance("\x1b[?1049hab日".as_bytes());
         t.resize(TermSize::new(3, 1).unwrap());
         assert_eq!(cells(&t, 0), "ab");
+        t.state.assert_invariants();
+    }
+
+    #[test]
+    fn resizing_through_a_wide_char_moves_it_to_the_next_row_on_main() {
+        let mut t = term(4, 2);
+        t.advance("ab日".as_bytes());
+        t.resize(TermSize::new(3, 2).unwrap());
+        assert_eq!(cells(&t, 0), "ab");
+        assert!(t.row(0)[2].flags.contains(Flags::WIDE_LEADER));
+        assert_eq!(cells(&t, 1), "日+");
         t.state.assert_invariants();
     }
 

@@ -35,9 +35,9 @@ use crate::bindings::Action;
 use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
 use crate::crash::{self, Recoveries, Recovery};
-use crate::ime::Preedit;
+use crate::ime::{Composition, Preedit};
 use crate::inbox::{Consumer, Producer, Push};
-use crate::input::Input;
+use crate::input::{self, Dropped, Input};
 use crate::mouse::{Capture, Clicks, Drag, Pointer, ViewportScroll, Wheel, WheelAction};
 use crate::panes::{Axis, DividerPath, PaneId, SplitError};
 use crate::sync::Holds;
@@ -88,6 +88,9 @@ struct Pane {
     /// unparsed (so the reader never blocks) and input is dropped, so
     /// nothing is typed blind; the user closes it.
     stopped: bool,
+    /// Input was dropped (full queue) and the notice shown; reset once
+    /// input fits again, so a held key shows it only once.
+    input_dropped: bool,
 }
 
 /// Everything that exists once the window is up.
@@ -169,7 +172,7 @@ struct Session {
     backlog: Vec<PaneId>,
     /// The text an input method is composing, drawn at the cursor of the
     /// focused pane; keys go to the IME meanwhile.
-    preedit: Option<Preedit>,
+    preedit: Composition<PaneId>,
     /// The cursor cell last given to the IME (window pixels: x, y, width,
     /// height), to place its candidate window.
     ime_area: Option<(u32, u32, u32, u32)>,
@@ -318,7 +321,7 @@ impl App {
             clicks: Clicks::default(),
             holds: Holds::default(),
             backlog: Vec::new(),
-            preedit: None,
+            preedit: Composition::default(),
             ime_area: None,
         };
         session.open_tab(config, self.start_dir.as_deref(), &self.proxy)?;
@@ -523,8 +526,11 @@ impl App {
 
     /// Handles a key press: a bound action, or bytes for the pty.
     fn key_pressed(&mut self, event: &KeyEvent) {
-        if self.session.as_ref().is_some_and(|s| s.preedit.is_some()) {
-            return; // The input method is composing: the key is its own.
+        if let Some(session) = &mut self.session {
+            let focused = session.focused_id();
+            if session.preedit.takes_keys(focused) {
+                return; // The input method is composing: the key is its own.
+            }
         }
         if self.session.as_ref().is_some_and(|s| s.palette.is_some()) {
             self.palette_key(event);
@@ -566,14 +572,16 @@ impl App {
         match ime {
             Ime::Enabled => {}
             Ime::Preedit(text, caret) => {
-                session.preedit = Preedit::new(&text, caret.map(|(start, _)| start));
-                if session.preedit.is_some() {
+                let preedit = Preedit::new(&text, caret.map(|(start, _)| start));
+                let composing = preedit.is_some();
+                session.preedit.update(session.focused_id(), preedit);
+                if composing {
                     session.scroll_viewport(ViewportScroll::Bottom);
                 }
                 session.window.request_redraw();
             }
             Ime::Commit(text) => {
-                session.preedit = None;
+                session.preedit.clear();
                 session.window.request_redraw();
                 if session.palette.is_some() {
                     let key = Key::Character(text.as_str().into());
@@ -589,7 +597,7 @@ impl App {
                 session.send(text.as_bytes());
             }
             Ime::Disabled => {
-                session.preedit = None;
+                session.preedit.clear();
                 session.window.request_redraw();
             }
         }
@@ -1026,7 +1034,9 @@ impl ApplicationHandler<UserEvent> for App {
                             pane.send(&bytes.repeat(count as usize));
                         }
                     }
-                    Some(WheelAction::Keys(bytes)) => pane.send(&bytes),
+                    Some(WheelAction::Keys(bytes)) => {
+                        pane.send(&bytes);
+                    }
                     Some(WheelAction::Scroll(lines)) => {
                         session.scroll_pane(id, ViewportScroll::Lines(lines));
                     }
@@ -1042,6 +1052,8 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::Focused(false) => {
+                // A composition cannot outlive focus: it would eat keys.
+                session.preedit.clear();
                 session.flush_resizes();
                 session.pointer.reset();
             }
@@ -1186,12 +1198,28 @@ impl Pane {
     }
 
     /// Queues input for the child, unless the pane was stopped. Never
-    /// blocks (see [`Input`]).
-    fn send(&mut self, bytes: &[u8]) {
+    /// blocks (see [`Input`]): input that does not fit in the full queue
+    /// is dropped with a notice in the pane. Returns whether the notice
+    /// was written (the pane needs a redraw).
+    fn send(&mut self, bytes: &[u8]) -> bool {
         if self.stopped {
-            return;
+            return false;
         }
-        self.input.send(bytes);
+        match self.input.send(bytes) {
+            Ok(()) => {
+                self.input_dropped = false;
+                false
+            }
+            Err(Dropped) => {
+                let first = !self.input_dropped;
+                if first {
+                    self.input_dropped = true;
+                    self.terminal
+                        .advance(input::dropped_notice(bytes.len()).as_bytes());
+                }
+                first
+            }
+        }
     }
 }
 
@@ -1199,7 +1227,9 @@ impl Session {
     /// Writes input for the child of the focused pane.
     fn send(&mut self, bytes: &[u8]) {
         if let Some(pane) = tab::focused_mut(&mut self.tabs) {
-            pane.send(bytes);
+            if pane.send(bytes) {
+                self.window.request_redraw();
+            }
         }
     }
 
@@ -1586,10 +1616,15 @@ impl Session {
         self.window.request_redraw();
     }
 
+    /// The focused pane of the active tab.
+    fn focused_id(&self) -> Option<PaneId> {
+        self.tabs.active().map(|tab| tab.panes.focused().0)
+    }
+
     /// Moves the scrollback viewport of the focused pane, redrawing when it
     /// changed.
     fn scroll_viewport(&mut self, scroll: ViewportScroll) {
-        if let Some(id) = self.tabs.active().map(|tab| tab.panes.focused().0) {
+        if let Some(id) = self.focused_id() {
             self.scroll_pane(id, scroll);
         }
     }
@@ -1879,7 +1914,7 @@ impl Session {
             });
         let preedit = self
             .preedit
-            .as_ref()
+            .preedit(Some(tab.panes.focused().0))
             .zip(focused_cursor)
             .map(|(preedit, (col, row))| {
                 let col = crate::ime::column(col, preedit.width(), content.cols());
@@ -2174,7 +2209,17 @@ fn spawn_pane(
         eprintln!("nxgterm: conpty {host}");
     }
     let mut pty = pty.backend;
-    let input = Input::spawn(format!("pty-writer-{}", id.raw()), pty.control.writer()?)?;
+    let failed = move |error: std::io::Error| {
+        // Once per pane: the writer thread ends on the first failure.
+        let message = format!("pane {}: writing input failed: {error}", id.raw());
+        eprintln!("nxgterm: {message}");
+        crash::note("input error", &message);
+    };
+    let input = Input::spawn(
+        format!("pty-writer-{}", id.raw()),
+        pty.control.writer()?,
+        failed,
+    )?;
     let (producer, inbox) = inbox::channel(inbox::CAP);
     spawn_reader(id, pty.reader, producer, proxy.clone());
     spawn_waiter(id, pty.child, proxy.clone());
@@ -2198,6 +2243,7 @@ fn spawn_pane(
         inbox,
         recoveries: Recoveries::default(),
         stopped: false,
+        input_dropped: false,
     })
 }
 
@@ -2601,7 +2647,7 @@ mod tests {
             resizes: resizes.clone(),
             written: written.clone(),
         };
-        let input = Input::spawn("test".into(), pty.writer().unwrap()).unwrap();
+        let input = Input::spawn("test".into(), pty.writer().unwrap(), drop).unwrap();
         let pane = Pane {
             terminal: Terminal::new(size(cols, rows)),
             pty: Box::new(pty),
@@ -2611,6 +2657,7 @@ mod tests {
             inbox: inbox::channel(inbox::CAP).1,
             recoveries: Recoveries::default(),
             stopped: false,
+            input_dropped: false,
         };
         (pane, resizes, written)
     }
@@ -2933,7 +2980,7 @@ mod tests {
 
     /// Waits until everything `pane` queued for its child was written.
     fn flush_input(pane: &mut Pane) {
-        let sink = Input::spawn("sink".into(), Box::new(io::sink())).unwrap();
+        let sink = Input::spawn("sink".into(), Box::new(io::sink()), drop).unwrap();
         std::mem::replace(&mut pane.input, sink).close();
     }
 
@@ -2943,6 +2990,39 @@ mod tests {
         pane.send(b"ls\r");
         flush_input(&mut pane);
         assert_eq!(*written.lock().unwrap(), b"ls\r");
+    }
+
+    #[test]
+    fn input_that_does_not_fit_shows_one_notice() {
+        let (mut pane, _, written) = pane(80, 24);
+        let (_open, gate) = std::sync::mpsc::channel::<()>();
+        let blocked = Box::new(Blocked(gate));
+        let full = Input::spawn_bounded("full".into(), blocked, 4, drop).unwrap();
+        let input = std::mem::replace(&mut pane.input, full);
+        assert!(!pane.send(b"1234"), "fits");
+        assert!(pane.send(b"paste"), "dropped: the notice is drawn");
+        assert!(!pane.send(b"x"), "only one notice while it stays full");
+        let text: String = pane.terminal.row(1).iter().map(|cell| cell.ch).collect();
+        assert!(text.contains("1 KiB of input dropped"), "{text:?}");
+        pane.input = input;
+        assert!(!pane.send(b"ls\r"), "keys go through again");
+        assert!(!pane.input_dropped);
+        flush_input(&mut pane);
+        assert_eq!(*written.lock().unwrap(), b"ls\r");
+    }
+
+    /// A child that never reads: every write waits on a channel.
+    struct Blocked(std::sync::mpsc::Receiver<()>);
+
+    impl io::Write for Blocked {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.recv().map_err(|_| io::ErrorKind::BrokenPipe)?;
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     #[test]

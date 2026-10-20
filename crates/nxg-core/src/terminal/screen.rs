@@ -1,6 +1,7 @@
 //! One screen (main or alternate): grid plus everything the cursor owns.
 
 use super::State;
+use super::resize::resize_main;
 use crate::TermSize;
 use crate::cell::Cell;
 use crate::grid::{Grid, Region};
@@ -43,6 +44,8 @@ impl Screen {
         }
     }
 
+    /// Cuts the screen to `size` (the alternate screen; the main one goes
+    /// through `resize::resize_main`), clamping both cursors.
     pub fn resize(&mut self, size: TermSize) {
         self.grid.resize(size);
         self.region = Region::full(size.rows());
@@ -95,12 +98,32 @@ impl Screen {
 }
 
 impl State {
+    /// Resizes both screens: the main one keeps its rows in the history
+    /// (see `resize::resize_main`), the alternate one is cut. The
+    /// selection is cleared and the viewport shows the live screen.
     pub fn resize(&mut self, size: TermSize) {
         self.selection = None;
         self.scrollback.offset = 0;
-        self.screen.resize(size);
-        if let Some(dormant) = &mut self.dormant {
-            dormant.resize(size);
+        if self.alt_active {
+            self.screen.resize(size);
+            if let Some(main) = &mut self.dormant {
+                // Its placements are stashed; they stay where they were.
+                resize_main(main, &mut self.scrollback, size);
+            }
+            return;
+        }
+        let moved = resize_main(&mut self.screen, &mut self.scrollback, size);
+        // Placements move with their rows, like a scroll.
+        match u32::try_from(moved) {
+            Ok(0) => {}
+            Ok(up) => self.images.scroll_up(up, self.cell),
+            Err(_) => {
+                let down = u32::try_from(moved.unsigned_abs()).unwrap_or(u32::MAX);
+                self.images.scroll_region_down(0, size.rows() - 1, down);
+            }
+        }
+        if let Some(alt) = &mut self.dormant {
+            alt.resize(size);
         }
     }
 
