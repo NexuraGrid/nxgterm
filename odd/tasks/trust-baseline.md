@@ -83,6 +83,11 @@ bounded scrollback, ~1,040 tests.
 
 - [x] T1 Synchronized output (mode 2026): hold redraws while set, force a frame
   on reset or after ~1 s timeout; DECRQM reply for `CSI ? 2026 $p` + tests
+- [ ] T1b T1 review follow-ups (advisory, non-blocking): hold per pane instead
+  of window-wide (R3-shared-hold-across-panes); release the hold when 2026 is
+  reset inside the same chunk and set again (R3-hold-not-released-on-intra-chunk-frame-end,
+  R4-sync-chunk-boundary-starvation); clear mode 2026 on the 1 s timeout like
+  Ghostty; app-level hold test
 - [ ] T2 Panic hook writing a crash log (Windows `%LOCALAPPDATA%\nxgterm`,
   others the state/cache dir) with a visible message on Windows + tests
 - [ ] T3 Coalesce PTY output: shared bounded buffer + "wakeup pending" flag,
@@ -118,6 +123,11 @@ bounded scrollback, ~1,040 tests.
 ## Delivery
 
 Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
+
+## Review log
+
+- T1 (a1e7eb1..efb1f0c): high risk, consent granted, 4 lenses, approved and
+  acknowledged (lineage review-9e61d80f714c3330). Reviewed boundary: efb1f0c.
 
 ## Next step
 
