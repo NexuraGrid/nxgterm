@@ -377,6 +377,10 @@ impl PtyControl for WinptyControl {
         }
         Ok(())
     }
+
+    fn writer(&mut self) -> io::Result<Box<dyn Write + Send>> {
+        Ok(Box::new(self.conin.try_clone()?))
+    }
 }
 
 impl Drop for WinptyControl {

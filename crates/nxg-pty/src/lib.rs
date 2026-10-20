@@ -13,6 +13,7 @@ use std::fmt;
 use std::io::{self, Write};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use nxg_core::WinSize;
 use nxg_core::fallback::{self, Attempt, Init, Selected};
@@ -182,7 +183,7 @@ fn spawn_native(size: WinSize, mut cmd: CommandBuilder) -> Result<PtySession, St
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let control = NativeControl {
         master: pair.master,
-        writer,
+        writer: SharedWriter(Arc::new(Mutex::new(writer))),
         killer: child.clone_killer(),
     };
     Ok(PtySession {
@@ -204,8 +205,29 @@ fn pty_size(size: WinSize) -> PtySize {
 
 struct NativeControl {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer: SharedWriter,
     killer: Box<dyn ChildKiller + Send + Sync>,
+}
+
+/// The pty's one writer (portable-pty hands it out once), shared by the
+/// control and the handles [`PtyControl::writer`] gives.
+#[derive(Clone)]
+struct SharedWriter(Arc<Mutex<Box<dyn Write + Send>>>);
+
+impl Write for SharedWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .flush()
+    }
 }
 
 impl Write for NativeControl {
@@ -222,6 +244,10 @@ impl PtyControl for NativeControl {
     fn resize(&mut self, size: WinSize) -> io::Result<()> {
         self.master.resize(pty_size(size)).map_err(io::Error::other)
     }
+
+    fn writer(&mut self) -> io::Result<Box<dyn Write + Send>> {
+        Ok(Box::new(self.writer.clone()))
+    }
 }
 
 impl Drop for NativeControl {
@@ -236,5 +262,33 @@ struct NativeChild(Box<dyn portable_pty::Child + Send + Sync>);
 impl ChildProcess for NativeChild {
     fn wait(&mut self) -> io::Result<()> {
         self.0.wait().map(drop)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::io::Read;
+
+    use nxg_core::TermSize;
+
+    #[test]
+    fn a_writer_from_the_control_types_into_the_child_in_order() {
+        let mut session = super::spawn_command(
+            TermSize::default(),
+            "/bin/sh",
+            &["-c", "read a; read b; echo got:$a:$b"],
+        )
+        .expect("spawn /bin/sh");
+        let mut writer = session.control.writer().expect("writer");
+        let thread = std::thread::spawn(move || writer.write_all(b"one\r"));
+        thread.join().unwrap().unwrap();
+        session.control.write_all(b"two\r").unwrap();
+        let mut out = Vec::new();
+        let mut buf = [0u8; 1024];
+        while let Ok(n @ 1..) = session.reader.read(&mut buf) {
+            out.extend_from_slice(&buf[..n]);
+        }
+        let output = String::from_utf8_lossy(&out);
+        assert!(output.contains("got:one:two"), "output was {output:?}");
     }
 }
