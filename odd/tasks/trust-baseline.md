@@ -104,7 +104,11 @@ bounded scrollback, ~1,040 tests.
   (app.rs:872), broken TIMEOUT doc link (app.rs:1196), output doc omits the
   stopped state, misleading test name, tests for Exited full drain and
   stopped-pane drain, cap log growth when rotation keeps failing
-- [ ] T4 Phase 2 — Windows RAM (R2, R3)
+- [x] T4 Phase 2 — Windows RAM (R2, R3)
+- [x] T4b Fallback coverage index: check each fallback's cmap (ttf-parser)
+  before parsing it, so a glyph missing everywhere (e.g. Nerd Font icons) does
+  not parse all fallbacks (~100 MiB on Windows); update README GL-fallback
+  text; test fallback_families and the backend loop
 - [ ] T5 Phase 3 — keyboard and input (S3, S4, S5)
 - [ ] T6 Phase 4 — resize without losing content (S2)
 - [ ] T7 Phase 5 — per-frame CPU (R4, R6, R8)
@@ -215,6 +219,57 @@ bounded scrollback, ~1,040 tests.
   `-D warnings` (also x86_64-pc-windows-gnu), `cargo test --workspace`
   (1082) pass.
 
+- 2026-10-20: T4 R2 done (delegated (writer trigger: 2+ non-trivial
+  files)). `device::backend_order(os, WGPU_BACKEND)` gives DX12, Vulkan,
+  GL on Windows; Metal on macOS; Vulkan, GL elsewhere; a non-empty
+  `WGPU_BACKEND` is used as is. `GpuRenderer::new` builds one
+  `wgpu::Instance` per step (only that backend in the descriptor and in
+  `enumerate_adapters`) and stops at the first that gives an adapter,
+  device and surface format; a failed step's instance and surface drop
+  before the next loads. All failing still errors, so the CPU fallback
+  stays. Integrated-GPU preference and `MemoryHints::MemoryUsage` kept.
+  RED observed (compile: missing `backend_order`) then GREEN (6 tests);
+  fmt, clippy `-D warnings` (also x86_64-pc-windows-gnu), `cargo test
+  --workspace` (1088) pass. Not measured on Windows (no GUI here).
+
+- 2026-10-20: T4 R3 done (delegated (writer trigger: 2+ non-trivial
+  files)). `FontFaces` keeps the regular and bold file bytes as
+  `Arc<[u8]>` and parses them once per pixel size into an
+  `Arc<Primary>` shared, through a `Weak` memo, by every `Font` of that
+  size while one lives (fontdue tunes outlines to the parse size, so a
+  new size still parses its own and output stays identical). Fallbacks
+  became `FallbackFace`s holding the fontdb source (path or shared
+  bytes) and a `OnceLock`, parsed on the first glyph that reaches them
+  in the existing order; a read or parse failure is remembered and
+  skipped. `Font` clones share the faces and start with an empty glyph
+  cache, so the renderer and the title bar font share one parse. The
+  glyph cache is cleared before it would pass 4 MiB of coverage and
+  refills (the CPU renderer redraws from it, the GPU atlas copies once).
+  RED observed (compile: missing `FallbackFace`, `FontFaces::from_bytes`,
+  `shares_faces`, cache budget) then GREEN (5 new tests); fmt, clippy
+  `-D warnings` (also x86_64-pc-windows-gnu), `cargo test --workspace`
+  (1093) pass. Measured on Linux (counting allocator, system font at
+  28 px, style + clone + title font): 61.8 MiB to 16.3 MiB of heap.
+  Inferred on Windows: Segoe UI Symbol and Emoji parse to ~38 and
+  ~58 MiB (measured from the files), now deferred until needed.
+
+- 2026-10-20: T4b done (delegated (writer trigger: 2+ non-trivial
+  files)). Each `FallbackFace` first reads only its font header, table
+  directory and `cmap` table (seeking in the file, TTC index honored)
+  and keeps the mapped chars as sorted ranges (`Coverage`, the same
+  chars fontdue maps: every subtable, glyph 0 left out); a face is
+  parsed only when it maps the char, so a char no fallback has (e.g.
+  a Nerd Font icon without a Nerd Font) parses none. Order and
+  coverage are unchanged; an unreadable file or cmap is remembered as
+  failed. New dependency `ttf-parser` 0.25 (already in the tree via
+  fontdue/fontdb, default features off). The backend loop became
+  `device::first_connected` (tested: stops at the first success,
+  reports every failure in order). README describes the DX12, Vulkan,
+  OpenGL order. RED observed (compile: missing `first_connected`;
+  runtime: all three fallbacks parsed for an uncovered char) then
+  GREEN; fmt, clippy `-D warnings` (also x86_64-pc-windows-gnu),
+  `cargo test --workspace` (1100) pass.
+
 ## Delivery
 
 Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
@@ -229,7 +284,10 @@ Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
   acknowledged. Reviewed boundary: 564f8ed.
 - T1b/T2b/T3b (130f746..895907f): high risk, consent granted, 4 lenses,
   approved and acknowledged. Reviewed boundary: 895907f.
+- T3c/T4 (b5163ad..14dc963): medium risk, consent granted, 1 lens, approved
+  and acknowledged. Font heap measured 61.8 → 16.3 MiB (Linux, 28 px).
+  Reviewed boundary: 14dc963.
 
 ## Next step
 
-Phase 2 (T4).
+Phase 3 (T5).

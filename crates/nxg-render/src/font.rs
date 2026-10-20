@@ -3,9 +3,12 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
-use fontdb::{Database, Family, Query, Weight};
+use fontdb::{Database, Family, Query, Source, Weight};
 
 use crate::builtin;
 use crate::paint::CellSize;
@@ -73,8 +76,222 @@ pub struct Glyph {
     pub coverage: Vec<u8>,
 }
 
+/// Font coverage bitmaps kept per [`Font`] before its cache is cleared
+/// and refilled (the CPU renderer redraws from it; the GPU one copies
+/// glyphs into its atlas once).
+const GLYPH_CACHE_BYTES: usize = 4 << 20;
+
 /// Raw font file bytes plus the collection index of the face.
-type FaceData = (Vec<u8>, u32);
+type FaceData = (Arc<[u8]>, u32);
+
+/// The regular and bold faces of a family, parsed at one pixel size.
+///
+/// fontdue parses every outline of a face up front (several MiB for a
+/// monospace face), so each size is parsed once and shared by all the
+/// [`Font`]s at that size, and their clones.
+struct Primary {
+    regular: fontdue::Font,
+    bold: Option<fontdue::Font>,
+}
+
+impl Primary {
+    /// Parses `regular` and `bold` (dropped if it fails) at `px`.
+    fn parse(
+        regular: &[u8],
+        index: u32,
+        bold: Option<(&[u8], u32)>,
+        px: f32,
+    ) -> Result<Self, FontError> {
+        let parse = |data: &[u8], index: u32| {
+            let settings = fontdue::FontSettings {
+                collection_index: index,
+                scale: px,
+                ..fontdue::FontSettings::default()
+            };
+            fontdue::Font::from_bytes(data, settings).map_err(FontError::Invalid)
+        };
+        Ok(Self {
+            regular: parse(regular, index)?,
+            bold: bold.and_then(|(data, index)| parse(data, index).ok()),
+        })
+    }
+}
+
+/// A pixel size (as bits) and the primary faces parsed for it.
+type Parsed = (u32, Weak<Primary>);
+
+/// Where a fallback face is read from when first needed.
+#[derive(Clone)]
+enum FaceSource {
+    File(PathBuf),
+    Data(Arc<dyn AsRef<[u8]> + Send + Sync>),
+}
+
+/// A fallback face, parsed when a glyph it has is first needed and then
+/// shared by every [`Font`] of the family. Big symbol and emoji faces
+/// (Segoe UI Symbol and Emoji take tens of MiB once parsed) so cost
+/// nothing until a char only they have shows up: before parsing, the
+/// chars the face maps are read from its `cmap` table alone (see
+/// [`Coverage`]), so a char no fallback has parses none of them. A face
+/// that cannot be read or parsed is remembered as missing.
+pub struct FallbackFace {
+    source: FaceSource,
+    index: u32,
+    coverage: OnceLock<Option<Coverage>>,
+    face: OnceLock<Option<fontdue::Font>>,
+}
+
+impl fmt::Debug for FallbackFace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FallbackFace")
+            .field("index", &self.index)
+            .field("parsed", &self.is_parsed())
+            .field("failed", &self.failed())
+            .finish_non_exhaustive()
+    }
+}
+
+impl FallbackFace {
+    /// A face read from `data` when first needed.
+    pub fn from_bytes(data: Vec<u8>, index: u32) -> Self {
+        Self::new(FaceSource::Data(Arc::new(data)), index)
+    }
+
+    fn new(source: FaceSource, index: u32) -> Self {
+        Self {
+            source,
+            index,
+            coverage: OnceLock::new(),
+            face: OnceLock::new(),
+        }
+    }
+
+    /// The parsed face if it maps `ch`, checked from its cmap before it
+    /// is parsed, or `None`.
+    fn get_for(&self, ch: char) -> Option<&fontdue::Font> {
+        let coverage = self
+            .coverage
+            .get_or_init(|| Coverage::read(&self.source, self.index));
+        coverage
+            .as_ref()
+            .filter(|coverage| coverage.contains(ch))
+            .and_then(|_| self.get())
+    }
+
+    /// The parsed face, or `None` when it cannot be read or parsed.
+    fn get(&self) -> Option<&fontdue::Font> {
+        self.face
+            .get_or_init(|| {
+                let parse = |data: &[u8]| parse_face(data, self.index).ok();
+                match &self.source {
+                    FaceSource::File(path) => fs::read(path).ok().and_then(|data| parse(&data)),
+                    FaceSource::Data(data) => parse((**data).as_ref()),
+                }
+            })
+            .as_ref()
+    }
+
+    /// Whether the face was parsed.
+    pub fn is_parsed(&self) -> bool {
+        matches!(self.face.get(), Some(Some(_)))
+    }
+
+    /// Whether reading or parsing the face (or its cmap) failed.
+    pub fn failed(&self) -> bool {
+        matches!(self.coverage.get(), Some(None)) || matches!(self.face.get(), Some(None))
+    }
+}
+
+/// The chars a face maps to a glyph, as sorted, disjoint inclusive
+/// ranges: the same chars fontdue maps (every cmap subtable, glyph 0
+/// left out), a few KiB even for emoji faces.
+struct Coverage(Box<[(u32, u32)]>);
+
+impl Coverage {
+    /// The coverage of face `index` of `source`, reading only the font
+    /// header, its table directory and its cmap table, or `None` when
+    /// they cannot be read.
+    fn read(source: &FaceSource, index: u32) -> Option<Self> {
+        let cmap = match source {
+            FaceSource::Data(data) => {
+                let data = (**data).as_ref();
+                cmap_table(index, |offset, len| {
+                    let start = usize::try_from(offset).ok()?;
+                    data.get(start..start.checked_add(len)?).map(<[u8]>::to_vec)
+                })
+            }
+            FaceSource::File(path) => {
+                let mut file = File::open(path).ok()?;
+                cmap_table(index, |offset, len| {
+                    let mut buf = vec![0; len];
+                    file.seek(SeekFrom::Start(offset)).ok()?;
+                    file.read_exact(&mut buf).ok()?;
+                    Some(buf)
+                })
+            }
+        }?;
+        Self::from_cmap(&cmap)
+    }
+
+    fn from_cmap(data: &[u8]) -> Option<Self> {
+        let table = ttf_parser::cmap::Table::parse(data)?;
+        let mut chars = Vec::new();
+        for subtable in table.subtables {
+            subtable.codepoints(|cp| {
+                if subtable.glyph_index(cp).is_some_and(|glyph| glyph.0 != 0)
+                    && char::from_u32(cp).is_some()
+                {
+                    chars.push(cp);
+                }
+            });
+        }
+        chars.sort_unstable();
+        chars.dedup();
+        let mut ranges: Vec<(u32, u32)> = Vec::new();
+        for cp in chars {
+            match ranges.last_mut() {
+                Some((_, end)) if *end + 1 == cp => *end = cp,
+                _ => ranges.push((cp, cp)),
+            }
+        }
+        Some(Self(ranges.into()))
+    }
+
+    fn contains(&self, ch: char) -> bool {
+        let cp = u32::from(ch);
+        let after = self.0.partition_point(|&(start, _)| start <= cp);
+        after > 0 && self.0[after - 1].1 >= cp
+    }
+}
+
+/// The bytes of the cmap table of face `index` in an OpenType font or
+/// collection, through `read(offset, len)`.
+fn cmap_table(index: u32, mut read: impl FnMut(u64, usize) -> Option<Vec<u8>>) -> Option<Vec<u8>> {
+    let be32 = |b: &[u8], at: usize| -> Option<u32> {
+        Some(u32::from_be_bytes(b.get(at..at + 4)?.try_into().ok()?))
+    };
+    let header = read(0, 12)?;
+    let base = if header.starts_with(b"ttcf") {
+        let count = be32(&header, 8)?;
+        if index >= count {
+            return None;
+        }
+        let at = read(12 + 4 * u64::from(index), 4)?;
+        u64::from(be32(&at, 0)?)
+    } else if index == 0 {
+        0
+    } else {
+        return None;
+    };
+    let offsets = read(base, 12)?;
+    let tables = usize::from(u16::from_be_bytes(offsets.get(4..6)?.try_into().ok()?));
+    let records = read(base + 12, tables * 16)?;
+    let record = records
+        .chunks_exact(16)
+        .find(|record| record.starts_with(b"cmap"))?;
+    let (offset, len) = (be32(record, 8)?, be32(record, 12)?);
+    read(u64::from(offset), usize::try_from(len).ok()?)
+}
 
 /// The font files of one family (regular and, if any, bold) plus the
 /// fallback faces searched for glyphs that family lacks, loaded once so
@@ -88,8 +305,11 @@ pub struct FontFaces {
     regular: FaceData,
     bold: Option<FaceData>,
     fallback_families: Vec<String>,
-    /// Parsed once: fontdue rasterizes a face at any size.
-    fallbacks: Arc<[fontdue::Font]>,
+    /// Parsed on first use: fontdue rasterizes a face at any size.
+    fallbacks: Arc<[FallbackFace]>,
+    /// The primary faces parsed per pixel size (as bits), while a font
+    /// of that size lives.
+    parsed: Arc<Mutex<Vec<Parsed>>>,
 }
 
 impl fmt::Debug for FontFaces {
@@ -134,7 +354,7 @@ impl FontFaces {
             query(&[Family::Name(name)], Weight::NORMAL).is_some()
         });
         let families = family_order(requested);
-        let load = |id| db.with_face_data(id, |data, index| (data.to_vec(), index));
+        let load = |id| db.with_face_data(id, |data, index| (Arc::<[u8]>::from(data), index));
         let regular_id = query(&families, Weight::NORMAL).ok_or(FontError::NotFound)?;
         let regular = load(regular_id).ok_or(FontError::NotFound)?;
         let name = db
@@ -163,10 +383,14 @@ impl FontFaces {
                 continue;
             }
             seen.push(id);
-            // A face fontdue cannot parse is skipped like a missing one.
-            if let Some(face) = load(id).and_then(|(data, index)| parse_face(data, index).ok()) {
+            // Read and parsed on first use (see [`FallbackFace`]).
+            if let Some((source, index)) = db.face_source(id) {
+                let source = match source {
+                    Source::Binary(data) => FaceSource::Data(data),
+                    Source::File(path) | Source::SharedFile(path, _) => FaceSource::File(path),
+                };
                 fallback_families.push(candidate);
-                fallbacks.push(face);
+                fallbacks.push(FallbackFace::new(source, index));
             }
         }
         Ok(Self {
@@ -176,10 +400,27 @@ impl FontFaces {
             bold,
             fallback_families,
             fallbacks: fallbacks.into(),
+            parsed: Arc::default(),
         })
     }
 
-    /// The fallback families found, in lookup order.
+    /// Faces from font file bytes: `regular`, `bold` and `fallbacks`, in
+    /// lookup order.
+    #[cfg(test)]
+    fn from_bytes(regular: Vec<u8>, bold: Option<Vec<u8>>, fallbacks: Vec<FallbackFace>) -> Self {
+        Self {
+            family: "Test".into(),
+            requested: None,
+            regular: (regular.into(), 0),
+            bold: bold.map(|data| (data.into(), 0)),
+            fallback_families: Vec::new(),
+            fallbacks: fallbacks.into(),
+            parsed: Arc::default(),
+        }
+    }
+
+    /// The fallback families found, in lookup order. They are parsed on
+    /// first use; one that fails then is skipped.
     pub fn fallback_families(&self) -> &[String] {
         &self.fallback_families
     }
@@ -200,11 +441,28 @@ impl FontFaces {
         self.family.eq_ignore_ascii_case(name.trim())
     }
 
-    /// The faces rasterized at `px` pixels.
+    /// The faces rasterized at `px` pixels. Fonts of one size share the
+    /// faces parsed for the first of them while any of them lives; the
+    /// fallback faces are shared by every size.
     pub fn font(&self, px: f32) -> Result<Font, FontError> {
-        let (regular, index) = self.regular.clone();
-        Ok(Font::from_bytes(regular, index, self.bold.clone(), px)?
-            .with_fallbacks(self.fallbacks.clone()))
+        let mut parsed = self.parsed.lock().unwrap_or_else(PoisonError::into_inner);
+        parsed.retain(|(_, primary)| primary.strong_count() > 0);
+        let key = px.to_bits();
+        let shared = parsed
+            .iter()
+            .find(|(size, _)| *size == key)
+            .and_then(|(_, primary)| primary.upgrade());
+        let primary = match shared {
+            Some(primary) => primary,
+            None => {
+                let (regular, index) = &self.regular;
+                let bold = self.bold.as_ref().map(|(data, index)| (&**data, *index));
+                let primary = Arc::new(Primary::parse(regular, *index, bold, px)?);
+                parsed.push((key, Arc::downgrade(&primary)));
+                primary
+            }
+        };
+        Ok(Font::with_primary(primary, px)?.with_fallbacks(self.fallbacks.clone()))
     }
 }
 
@@ -257,7 +515,7 @@ fn nerd_font(installed: &[String]) -> Option<&String> {
 }
 
 /// Parses a fallback face; it can be rasterized at any size.
-pub(crate) fn parse_face(data: Vec<u8>, index: u32) -> Result<fontdue::Font, FontError> {
+fn parse_face(data: &[u8], index: u32) -> Result<fontdue::Font, FontError> {
     let settings = fontdue::FontSettings {
         collection_index: index,
         scale: DEFAULT_PX,
@@ -290,11 +548,12 @@ fn family_order(requested: Option<&str>) -> Vec<Family<'_>> {
 
 /// A monospace font at a fixed pixel size with cached glyphs. Glyphs
 /// missing from it come from fallback faces, fitted into its cells.
-#[derive(Clone)]
+///
+/// The parsed faces are shared: a clone is cheap and starts with an
+/// empty glyph cache.
 pub struct Font {
-    regular: fontdue::Font,
-    bold: Option<fontdue::Font>,
-    fallbacks: Arc<[fontdue::Font]>,
+    primary: Arc<Primary>,
+    fallbacks: Arc<[FallbackFace]>,
     px: f32,
     cell: CellSize,
     /// Distance from the cell top to the baseline in pixels.
@@ -303,6 +562,26 @@ pub struct Font {
     /// [`builtin`] instead of the faces.
     builtin: bool,
     cache: HashMap<(char, bool, bool), Glyph>,
+    /// Coverage bytes in `cache`.
+    cache_bytes: usize,
+    /// `cache` is cleared before it would pass this many bytes.
+    cache_budget: usize,
+}
+
+impl Clone for Font {
+    fn clone(&self) -> Self {
+        Self {
+            primary: Arc::clone(&self.primary),
+            fallbacks: Arc::clone(&self.fallbacks),
+            px: self.px,
+            cell: self.cell,
+            baseline: self.baseline,
+            builtin: self.builtin,
+            cache: HashMap::new(),
+            cache_bytes: 0,
+            cache_budget: self.cache_budget,
+        }
+    }
 }
 
 impl fmt::Debug for Font {
@@ -327,34 +606,42 @@ impl Font {
         bold: Option<(Vec<u8>, u32)>,
         px: f32,
     ) -> Result<Self, FontError> {
-        let parse = |data: Vec<u8>, index: u32| {
-            let settings = fontdue::FontSettings {
-                collection_index: index,
-                scale: px,
-                ..fontdue::FontSettings::default()
-            };
-            fontdue::Font::from_bytes(data, settings).map_err(FontError::Invalid)
-        };
-        let regular = parse(regular, index)?;
-        let bold = bold.and_then(|(data, index)| parse(data, index).ok());
-        let line = regular
+        let bold = bold.as_ref().map(|(data, index)| (data.as_slice(), *index));
+        Self::with_primary(Arc::new(Primary::parse(&regular, index, bold, px)?), px)
+    }
+
+    /// A font drawing with `primary`, parsed at `px`.
+    fn with_primary(primary: Arc<Primary>, px: f32) -> Result<Self, FontError> {
+        let line = primary
+            .regular
             .horizontal_line_metrics(px)
             .ok_or(FontError::Invalid("missing horizontal metrics"))?;
-        let advance = regular.metrics('M', px).advance_width;
+        let advance = primary.regular.metrics('M', px).advance_width;
         let cell = CellSize {
             width: (advance.round() as u32).max(1),
             height: (line.new_line_size.ceil() as u32).max(1),
         };
         Ok(Self {
-            regular,
-            bold,
+            primary,
             fallbacks: Arc::new([]),
             px,
             cell,
             baseline: line.ascent.ceil() as i32,
             builtin: true,
             cache: HashMap::new(),
+            cache_bytes: 0,
+            cache_budget: GLYPH_CACHE_BYTES,
         })
+    }
+
+    /// Whether `other` draws with the same parsed faces as this font.
+    pub fn shares_faces(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.primary, &other.primary)
+    }
+
+    fn clear_cache(&mut self) {
+        self.cache.clear();
+        self.cache_bytes = 0;
     }
 
     pub fn cell_size(&self) -> CellSize {
@@ -370,14 +657,14 @@ impl Font {
     /// the faces like any other char.
     pub fn with_builtin_glyphs(mut self, on: bool) -> Self {
         self.builtin = on;
-        self.cache.clear();
+        self.clear_cache();
         self
     }
 
     /// Searches `fallbacks`, in order, for glyphs this font lacks.
-    pub(crate) fn with_fallbacks(mut self, fallbacks: Arc<[fontdue::Font]>) -> Self {
+    pub(crate) fn with_fallbacks(mut self, fallbacks: Arc<[FallbackFace]>) -> Self {
         self.fallbacks = fallbacks;
-        self.cache.clear();
+        self.clear_cache();
         self
     }
 
@@ -391,12 +678,18 @@ impl Font {
     /// block, sextant and powerline chars are drawn by [`builtin`] to fill
     /// the cells exactly, unless turned off (see
     /// [`Font::with_builtin_glyphs`]); bold does not change them. The
-    /// result is cached per character.
+    /// result is cached per character; the cache is cleared before it
+    /// would pass 4 MiB and refills as glyphs are drawn.
     pub fn glyph(&mut self, ch: char, bold: bool, wide: bool) -> &Glyph {
         let bold = bold && !self.is_builtin(ch);
         let key = (ch, bold, wide);
         if !self.cache.contains_key(&key) {
             let glyph = self.rasterize(ch, bold, wide);
+            let size = glyph.coverage.len();
+            if self.cache_bytes + size > self.cache_budget {
+                self.clear_cache();
+            }
+            self.cache_bytes += size;
             self.cache.insert(key, glyph);
         }
         &self.cache[&key]
@@ -425,11 +718,15 @@ impl Font {
             return self.mark(ch, bold, 1 + u32::from(wide));
         }
         let has = |face: &fontdue::Font| face.lookup_glyph_index(ch) != 0;
-        if let Some(face) = [primary, &self.regular].into_iter().find(|face| has(face)) {
+        if let Some(face) = [primary, &self.primary.regular]
+            .into_iter()
+            .find(|face| has(face))
+        {
             return raster(face, ch, self.px, 0);
         }
         self.fallbacks
             .iter()
+            .filter_map(|face| face.get_for(ch))
             .filter(|face| has(face))
             .map(|face| self.fitted(face, ch, 1 + u32::from(wide)))
             .find(|glyph| glyph.coverage.iter().any(|&a| a > 0))
@@ -437,9 +734,9 @@ impl Font {
     }
 
     fn primary(&self, bold: bool) -> &fontdue::Font {
-        match (&self.bold, bold) {
+        match (&self.primary.bold, bold) {
             (Some(face), true) => face,
-            _ => &self.regular,
+            _ => &self.primary.regular,
         }
     }
 
@@ -451,9 +748,11 @@ impl Font {
     /// have. Invisible chars (joiners, variation selectors) and marks no
     /// face has draw nothing rather than a missing-glyph box.
     fn mark(&self, ch: char, bold: bool, cells: u32) -> Glyph {
-        let faces = [self.primary(bold), &self.regular]
+        // Invisible chars parse no fallback face.
+        let fallbacks = self.fallbacks.iter().take_while(|_| !is_invisible(ch));
+        let faces = [self.primary(bold), &self.primary.regular]
             .into_iter()
-            .chain(self.fallbacks.iter());
+            .chain(fallbacks.filter_map(|face| face.get_for(ch)));
         let mut glyph = faces
             .filter(|face| !is_invisible(ch) && face.lookup_glyph_index(ch) != 0)
             .map(|face| raster(face, ch, self.px, 0))
@@ -629,7 +928,9 @@ mod tests {
         let font = Font::from_bytes(test_font::box_font(primary, 600), 0, None, PX).unwrap();
         let faces = fallbacks
             .iter()
-            .map(|&(chars, advance)| parse_face(test_font::box_font(chars, advance), 0).unwrap())
+            .map(|&(chars, advance)| {
+                FallbackFace::from_bytes(test_font::box_font(chars, advance), 0)
+            })
             .collect();
         font.with_fallbacks(faces)
     }
@@ -665,8 +966,8 @@ mod tests {
 
     /// A face with `chars` drawn like a combining mark: zero advance and
     /// 200 units (4 px) of ink 300..100 units left of the pen.
-    fn mark_face(chars: &[char]) -> fontdue::Font {
-        parse_face(test_font::ink_font(chars, 0, -300, -100), 0).unwrap()
+    fn mark_face(chars: &[char]) -> FallbackFace {
+        FallbackFace::from_bytes(test_font::ink_font(chars, 0, -300, -100), 0)
     }
 
     #[test]
@@ -768,6 +1069,173 @@ mod tests {
         assert_eq!((full.xmin, full.width), (2, 8), "the font's own box");
         let mut font = font.with_builtin_glyphs(true);
         assert_eq!(font.glyph('█', false, false).xmin, 0);
+    }
+
+    /// Faces of box glyphs: `primary` with a bold face, plus one
+    /// fallback per `fallbacks` entry.
+    fn box_faces(primary: &[char], fallbacks: &[&[char]]) -> FontFaces {
+        let faces = fallbacks
+            .iter()
+            .map(|&chars| FallbackFace::from_bytes(test_font::box_font(chars, 600), 0))
+            .collect();
+        FontFaces::from_bytes(
+            test_font::box_font(primary, 600),
+            Some(test_font::box_font(primary, 600)),
+            faces,
+        )
+    }
+
+    #[test]
+    fn fonts_of_one_size_share_the_faces_parsed_once() {
+        let faces = box_faces(&['M'], &[]);
+        let (a, b) = (faces.font(PX).unwrap(), faces.font(PX).unwrap());
+        assert!(a.shares_faces(&b), "parsed once for both");
+        let larger = faces.font(PX * 2.0).unwrap();
+        assert!(!a.shares_faces(&larger), "another size parses its own");
+        assert!(larger.cell_size().width > a.cell_size().width);
+        drop((a, b));
+        let again = faces.font(PX).unwrap();
+        assert!(again.shares_faces(&faces.font(PX).unwrap()));
+    }
+
+    #[test]
+    fn a_cloned_font_shares_its_faces_and_not_its_cache() {
+        let mut font = box_fonts(&['M'], &[]);
+        font.glyph('M', false, false);
+        let copy = font.clone();
+        assert!(copy.shares_faces(&font));
+        assert!(copy.cache.is_empty(), "the clone rasterizes on its own");
+    }
+
+    #[test]
+    fn fallback_faces_are_parsed_on_the_first_glyph_they_draw() {
+        let faces = box_faces(&['M'], &[&['x'], &[ICON]]);
+        let mut font = faces.font(PX).unwrap();
+        let parsed = |faces: &FontFaces| -> Vec<bool> {
+            faces
+                .fallbacks
+                .iter()
+                .map(FallbackFace::is_parsed)
+                .collect()
+        };
+        assert_eq!(parsed(&faces), [false, false], "none parsed up front");
+        font.glyph('M', false, false);
+        assert_eq!(parsed(&faces), [false, false], "the primary has M");
+        assert!(inked(font.glyph('x', false, false)));
+        assert_eq!(parsed(&faces), [true, false]);
+        assert!(inked(font.glyph(ICON, false, false)));
+        assert_eq!(parsed(&faces), [true, true]);
+        let other = faces.font(PX * 2.0).unwrap();
+        assert!(Arc::ptr_eq(&other.fallbacks, &font.fallbacks), "shared");
+    }
+
+    #[test]
+    fn a_fallback_face_that_fails_to_parse_is_skipped_and_remembered() {
+        let broken = FallbackFace::from_bytes(vec![0; 16], 0);
+        let good = FallbackFace::from_bytes(test_font::box_font(&[ICON], 600), 0);
+        let mut font = box_fonts(&['M'], &[]).with_fallbacks(vec![broken, good].into());
+        assert!(
+            inked(font.glyph(ICON, false, false)),
+            "the next face draws it"
+        );
+        assert!(font.fallbacks[0].failed());
+        assert!(!font.fallbacks[0].is_parsed());
+    }
+
+    #[test]
+    fn a_char_no_fallback_has_parses_none_of_them() {
+        let faces = box_faces(&['M'], &[&['x'], &['y'], &[ICON]]);
+        let mut font = faces.font(PX).unwrap();
+        assert!(!inked(font.glyph('\u{2603}', false, false)));
+        assert!(!inked(font.glyph(ACUTE, false, false)), "marks too");
+        assert!(
+            faces.fallbacks.iter().all(|face| !face.is_parsed()),
+            "{:?}",
+            faces.fallbacks
+        );
+        assert!(inked(font.glyph(ICON, false, false)));
+        let parsed: Vec<bool> = faces
+            .fallbacks
+            .iter()
+            .map(FallbackFace::is_parsed)
+            .collect();
+        assert_eq!(parsed, [false, false, true], "only the face that has it");
+    }
+
+    #[test]
+    fn a_fallback_file_that_cannot_be_read_is_remembered_as_failed() {
+        let missing = FallbackFace::new(
+            FaceSource::File(PathBuf::from("/nonexistent/nxgterm-test.ttf")),
+            0,
+        );
+        let good = FallbackFace::from_bytes(test_font::box_font(&[ICON], 600), 0);
+        let mut font = box_fonts(&['M'], &[]).with_fallbacks(vec![missing, good].into());
+        assert!(inked(font.glyph(ICON, false, false)));
+        assert!(font.fallbacks[0].failed());
+        assert!(!font.fallbacks[0].is_parsed());
+    }
+
+    #[test]
+    fn a_fallback_index_past_the_collection_is_remembered_as_failed() {
+        let face = FallbackFace::from_bytes(test_font::box_font(&[ICON], 600), 3);
+        let mut font = box_fonts(&['M'], &[]).with_fallbacks(vec![face].into());
+        assert!(!inked(font.glyph(ICON, false, false)));
+        assert!(font.fallbacks[0].failed());
+    }
+
+    #[test]
+    fn coverage_matches_the_chars_fontdue_maps() {
+        let mut faces = vec![FallbackFace::from_bytes(
+            test_font::box_font(&['a', 'b', 'c', 'x', ICON], 600),
+            0,
+        )];
+        // The first installed fallback, when there is one (a real cmap).
+        if let Ok(system) = FontFaces::system(&[], &[])
+            && let Some(face) = system.fallbacks.first()
+        {
+            faces.push(FallbackFace::new(face.source.clone(), face.index));
+        }
+        for face in &faces {
+            let coverage = Coverage::read(&face.source, face.index).unwrap();
+            let parsed = face.get().unwrap();
+            let mut mapped: Vec<u32> = parsed.chars().keys().map(|&ch| ch.into()).collect();
+            mapped.sort_unstable();
+            let covered: Vec<u32> = coverage.0.iter().flat_map(|&(a, b)| a..=b).collect();
+            assert_eq!(covered, mapped);
+            assert!(!coverage.contains('\u{10fffd}'));
+        }
+    }
+
+    #[test]
+    fn system_fallback_families_name_each_fallback_face_in_order() {
+        let Ok(faces) = FontFaces::system(&[], &[]) else {
+            return;
+        };
+        let families = faces.fallback_families();
+        assert_eq!(families.len(), faces.fallbacks.len());
+        let mut unique = families.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), families.len(), "each family once");
+        assert!(faces.fallbacks.iter().all(|face| !face.is_parsed()));
+    }
+
+    #[test]
+    fn the_glyph_cache_is_cleared_past_its_byte_budget() {
+        let chars: Vec<char> = ('a'..='z').collect();
+        let mut font = box_fonts(&chars, &[]);
+        let one = font.glyph('a', false, false).coverage.len();
+        font.cache_budget = one * 4;
+        for &ch in &chars {
+            let glyph = font.glyph(ch, false, false);
+            assert!(inked(glyph), "{ch}");
+            assert!(font.cache_bytes <= font.cache_budget, "{ch}");
+        }
+        assert!(font.cache.len() <= 4);
+        assert!(
+            font.cache.contains_key(&('z', false, false)),
+            "the last stays"
+        );
     }
 
     fn names(names: &[&str]) -> Vec<String> {
