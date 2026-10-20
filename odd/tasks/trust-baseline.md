@@ -94,7 +94,7 @@ bounded scrollback, ~1,040 tests.
   crash (main.rs:79) should be a plain error; throttle repeated parser panics in
   one pane (log churn, UI stall); rotation failure must not drop the entry;
   remove unused recovery flag; assert scrollback wiring in tests
-- [ ] T3 Coalesce PTY output: shared bounded buffer + "wakeup pending" flag,
+- [x] T3 Coalesce PTY output: shared bounded buffer + "wakeup pending" flag,
   one event per drain, reader waits when the buffer is full + tests
 - [ ] T4 Phase 2 — Windows RAM (R2, R3)
 - [ ] T5 Phase 3 — keyboard and input (S3, S4, S5)
@@ -136,6 +136,17 @@ bounded scrollback, ~1,040 tests.
   scrollback limit) with a notice naming the log. RED observed (8 tests) then
   GREEN; fmt, clippy `-D warnings` (also on x86_64-pc-windows-gnu),
   `cargo test --workspace` pass.
+- 2026-10-20: T3 done (delegated writer). New `inbox` module: per pane a
+  `Mutex` + `Condvar` buffer shared by the reader thread (`Producer`) and the
+  pane (`Consumer`). Only the first read after a full drain posts a
+  payload-free `UserEvent::Output(id)`; the reader waits past 4 MiB pending
+  (child blocks on write) and stops when the pane drops its consumer. Each
+  event parses at most 1 MiB in one `advance_guarded` call and re-posts
+  itself while bytes remain, so keys and redraws interleave; the two
+  buffers are swapped and reused, shrunk past 2x the cap. RED observed
+  (7 tests, incl. a 50 MiB flood with bounded pending) then GREEN; fmt,
+  clippy `-D warnings` (also on x86_64-pc-windows-gnu), `cargo test
+  --workspace` pass.
 
 ## Delivery
 
@@ -150,4 +161,4 @@ Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
 
 ## Next step
 
-T3.
+Phase 1 review + T1b/T2b follow-ups.

@@ -33,6 +33,7 @@ use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 use crate::bindings::Action;
 use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
+use crate::inbox::{Consumer, Producer, Push};
 use crate::mouse::{Capture, Clicks, Drag, Pointer, ViewportScroll, Wheel, WheelAction};
 use crate::panes::{Axis, DividerPath, PaneId, SplitError};
 use crate::sync::Hold;
@@ -43,15 +44,15 @@ use crate::title_bar::{self, Button, ButtonColors, Chrome, Rect, Region};
 use crate::watch::ConfigWatcher;
 use crate::wayland_drop::DropTarget;
 use crate::{
-    appearance, bindings, choice, clipboard, dividers, elevation, icon, keys, mouse, reload,
+    appearance, bindings, choice, clipboard, dividers, elevation, icon, inbox, keys, mouse, reload,
     tab_bar,
 };
 
 /// Events posted to the event loop from background threads.
 #[derive(Debug)]
 pub enum UserEvent {
-    /// A chunk of output from the child of a pane.
-    Output(PaneId, Vec<u8>),
+    /// Output from the child of a pane is waiting in its inbox.
+    Output(PaneId),
     /// The child of a pane exited or its output stream closed.
     Exited(PaneId),
     /// The config file changed on disk.
@@ -71,6 +72,8 @@ struct Pane {
     title: String,
     /// Sizes the pty has not been told yet while a divider is dragged.
     resize: Throttle<WinSize>,
+    /// The output of the child, filled by its reader thread.
+    inbox: Consumer,
 }
 
 /// Everything that exists once the window is up.
@@ -843,10 +846,14 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::Output(id, bytes) => {
+            UserEvent::Output(id) => {
                 if let Some(session) = &mut self.session {
                     let scrollback = self.config.scrollback.lines;
-                    session.output(id, &bytes, self.clipboard.as_mut(), scrollback);
+                    // The rest of a flood waits behind the events queued
+                    // meanwhile (keys, redraws), so Ctrl+C gets through.
+                    if session.output(id, self.clipboard.as_mut(), scrollback) {
+                        let _ = self.proxy.send_event(UserEvent::Output(id));
+                    }
                 }
             }
             UserEvent::Exited(id) => {
@@ -1091,23 +1098,23 @@ impl Session {
         }
     }
 
-    /// Feeds output to the pane `id` (ignored once it is closed), answering
-    /// the queries in it and setting the clipboard it asks for (OSC 52, on
-    /// screen or not); the window redraws only if the pane is on screen, and
-    /// not while its app is mid-frame (synchronized output).
-    /// A parser panic resets only this pane (see [`advance_guarded`]),
+    /// Feeds up to [`inbox::BUDGET`] pending bytes of the pane `id` (ignored
+    /// once it is closed) in one go, answering the queries in them and
+    /// setting the clipboard they ask for (OSC 52, on screen or not); the
+    /// window redraws only if the pane is on screen, and not while its app
+    /// is mid-frame (synchronized output). Returns whether bytes remain: the
+    /// caller then posts another [`UserEvent::Output`], as the reader will
+    /// not. A parser panic resets only this pane (see [`advance_guarded`]),
     /// whose fresh terminal keeps the `scrollback` limit.
-    fn output(
-        &mut self,
-        id: PaneId,
-        bytes: &[u8],
-        clipboard: &mut dyn Clipboard,
-        scrollback: usize,
-    ) {
+    fn output(&mut self, id: PaneId, clipboard: &mut dyn Clipboard, scrollback: usize) -> bool {
         let visible = tab::shows(&self.tabs, id);
         let Some(pane) = tab::pane_mut(&mut self.tabs, id) else {
-            return;
+            return false;
         };
+        let (bytes, more) = pane.inbox.drain(inbox::BUDGET);
+        if bytes.is_empty() {
+            return more;
+        }
         advance_guarded(&mut pane.terminal, scrollback, |terminal| {
             terminal.advance(bytes);
         });
@@ -1130,6 +1137,7 @@ impl Session {
         if redraw {
             self.window.request_redraw();
         }
+        more
     }
 
     /// The child of pane `id` ended: the pane leaves its tab, which closes
@@ -1963,7 +1971,8 @@ fn spawn_pane(
         eprintln!("nxgterm: conpty {host}");
     }
     let pty = pty.backend;
-    spawn_reader(id, pty.reader, proxy.clone());
+    let (producer, inbox) = inbox::channel(inbox::CAP);
+    spawn_reader(id, pty.reader, producer, proxy.clone());
     spawn_waiter(id, pty.child, proxy.clone());
 
     let mut terminal = Terminal::new(win_size.cells);
@@ -1981,6 +1990,7 @@ fn spawn_pane(
             cfg!(windows),
         ),
         resize: Throttle::default(),
+        inbox,
     })
 }
 
@@ -2239,24 +2249,34 @@ impl WindowRenderer for Detached {
     }
 }
 
-/// Drains the output of pane `id` on a background thread until EOF or
-/// error.
-fn spawn_reader(id: PaneId, mut reader: Box<dyn Read + Send>, proxy: EventLoopProxy<UserEvent>) {
+/// Drains the output of pane `id` into its inbox on a background thread
+/// until EOF or error, posting a wakeup only when the inbox had none
+/// pending. It waits while the inbox is full and stops once the pane is
+/// dropped.
+fn spawn_reader(
+    id: PaneId,
+    mut reader: Box<dyn Read + Send>,
+    inbox: Producer,
+    proxy: EventLoopProxy<UserEvent>,
+) {
     thread::spawn(move || {
         let mut buf = vec![0u8; 64 * 1024];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if proxy
-                        .send_event(UserEvent::Output(id, buf[..n].to_vec()))
-                        .is_err()
-                    {
-                        return; // Event loop is gone.
+                Ok(n) => match inbox.push(&buf[..n]) {
+                    Push::Wake => {
+                        if proxy.send_event(UserEvent::Output(id)).is_err() {
+                            return; // Event loop is gone.
+                        }
                     }
-                }
+                    Push::Queued => {}
+                    Push::Closed => return, // Pane is gone.
+                },
             }
         }
+        // Queued after the last wakeup, so the pane parses its final output
+        // (one budget of it) before it closes.
         let _ = proxy.send_event(UserEvent::Exited(id));
     });
 }
@@ -2330,6 +2350,7 @@ mod tests {
             }),
             title: "sh".into(),
             resize: Throttle::default(),
+            inbox: inbox::channel(inbox::CAP).1,
         };
         (pane, resizes, written)
     }
