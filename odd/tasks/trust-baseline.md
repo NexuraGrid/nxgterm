@@ -305,7 +305,12 @@ bounded scrollback, ~1,040 tests.
 
 ## Delivery
 
-Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
+Strategy: `ask-on-risk`; chain strategy chosen 2026-10-20: `stacked-to-main`.
+Slices (local branches, not pushed):
+- `feat/trust-baseline-1-stability`: main..b5163ad (T1–T3, T1b–T3c)
+- `feat/trust-baseline-2-memory`: b5163ad..1ba2576 (T4, T4b)
+- `feat/trust-baseline-3-input`: 1ba2576..9fbc454 (T5)
+Later phases stack on slice 3. Forecast for phase 1: ~400–600 authored lines.
 
 ## Review log
 
