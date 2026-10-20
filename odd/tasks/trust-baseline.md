@@ -90,6 +90,10 @@ bounded scrollback, ~1,040 tests.
   Ghostty; app-level hold test
 - [x] T2 Panic hook writing a crash log (Windows `%LOCALAPPDATA%\nxgterm`,
   others the state/cache dir) with a visible message on Windows + tests
+- [ ] T2b T2 review follow-ups (advisory): elevation relaunch failure shown as a
+  crash (main.rs:79) should be a plain error; throttle repeated parser panics in
+  one pane (log churn, UI stall); rotation failure must not drop the entry;
+  remove unused recovery flag; assert scrollback wiring in tests
 - [ ] T3 Coalesce PTY output: shared bounded buffer + "wakeup pending" flag,
   one event per drain, reader waits when the buffer is full + tests
 - [ ] T4 Phase 2 — Windows RAM (R2, R3)
@@ -141,6 +145,8 @@ Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
 
 - T1 (a1e7eb1..efb1f0c): high risk, consent granted, 4 lenses, approved and
   acknowledged (lineage review-9e61d80f714c3330). Reviewed boundary: efb1f0c.
+- T2 (ee43647): high risk, consent granted, 4 lenses, approved and
+  acknowledged (lineage review-1d380fb9f63e5491). Reviewed boundary: ee43647.
 
 ## Next step
 
