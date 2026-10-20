@@ -116,6 +116,11 @@ bounded scrollback, ~1,040 tests.
   cmap table length against file size before allocating; scope AltGr
   detection to Windows (or document); fix Ctrl-code doc
 - [x] T6 Phase 4 — resize without losing content (S2)
+- [ ] T6b Phase 4 review follow-ups (advisory): the dropped-input notice is
+  injected into the parse stream (may land inside an app escape sequence);
+  pending-input counter can leak when the writer thread ends; image placements
+  are not moved on reflow; redraw request ignored after some resizes; test
+  image scroll on height change
 - [ ] T7 Phase 5 — per-frame CPU (R4, R6, R8)
 - [ ] T8 Phase 6 — sequences, ConPTY passthrough, notices, fuzzing (S7–S11, R5, R7)
 
@@ -357,7 +362,8 @@ Slices (local branches, not pushed):
 - `feat/trust-baseline-1-stability`: main..b5163ad (T1–T3, T1b–T3c)
 - `feat/trust-baseline-2-memory`: b5163ad..1ba2576 (T4, T4b)
 - `feat/trust-baseline-3-input`: 1ba2576..9fbc454 (T5)
-Later phases stack on slice 3. Forecast for phase 1: ~400–600 authored lines.
+Slices 1–3 merged as #69, #70, #71; released as 0.12.0.
+- `feat/trust-baseline-4-resize`: 22eb1aa..HEAD (T5b, T6) Forecast for phase 1: ~400–600 authored lines.
 
 ## Review log
 
@@ -374,6 +380,8 @@ Later phases stack on slice 3. Forecast for phase 1: ~400–600 authored lines.
   Reviewed boundary: 14dc963.
 - T4b/T5 (1ba2576..6bc7840): high risk, consent granted, 4 lenses, approved
   and acknowledged. Reviewed boundary: 6bc7840.
+- T5b/T6 (737db6e..16f37f8): medium risk, consent granted, 1 lens, approved
+  and acknowledged. Reviewed boundary: 16f37f8.
 
 ## Next step
 
