@@ -28,6 +28,10 @@ impl Flags {
     pub const WIDE: Self = Self(1 << 5);
     /// The blank right half of the [`Flags::WIDE`] cell before it.
     pub const WIDE_SPACER: Self = Self(1 << 6);
+    /// The blank last cell of a soft-wrapped row that a wide char did not
+    /// fit in (it went to the next row). Not part of the text: a reflow
+    /// drops it.
+    pub const WIDE_LEADER: Self = Self(1 << 7);
 
     pub fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0

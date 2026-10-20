@@ -348,10 +348,12 @@ mod tests {
         assert_eq!(t.state.dormant.as_ref().unwrap().grid.size(), small);
         assert_eq!(pos(&t), (2, 1));
         t.advance(b"\x1b[?1049l");
-        // Main kept its cursor row on screen; "hello" went into history.
+        // Main kept its cursor row on screen; "hello" (rewrapped) and the
+        // rows down to the cursor (col 9: three rows of three) went into
+        // history.
         assert_eq!(text(&t, 0), "");
-        assert_eq!(t.scrollback_len(), 3);
-        assert_eq!(pos(&t), (2, 1), "the saved cursor was moved too");
+        assert_eq!(t.scrollback_len(), 7);
+        assert_eq!(pos(&t), (0, 1), "the saved cursor was moved too");
     }
 
     #[test]
