@@ -92,6 +92,9 @@ struct State {
     /// Synchronized output (2026): the app is mid-frame and asks the window
     /// not to draw until it resets the mode.
     synchronized: bool,
+    /// A synchronized frame ended since [`Terminal::take_frame_ended`] last
+    /// looked, even if another one began after it.
+    frame_ended: bool,
     /// The text selection, in absolute lines; see the `selection` module.
     selection: Option<selection::Selected>,
     /// The window title set by OSC 0/2 and its XTWINOPS stack.
@@ -124,6 +127,7 @@ impl Terminal {
                 mouse: MouseModes::default(),
                 bracketed_paste: false,
                 synchronized: false,
+                frame_ended: false,
                 selection: None,
                 titles: Titles::default(),
                 clipboard: osc52::Requests::default(),

@@ -36,7 +36,7 @@ use crate::command_palette::{self, CommandPalette, Outcome};
 use crate::inbox::{Consumer, Producer, Push};
 use crate::mouse::{Capture, Clicks, Drag, Pointer, ViewportScroll, Wheel, WheelAction};
 use crate::panes::{Axis, DividerPath, PaneId, SplitError};
-use crate::sync::Hold;
+use crate::sync::Holds;
 use crate::tab::{self, Exit, PaneCommand, PaneIds, Tab, Under};
 use crate::tabs::{TabId, Tabs};
 use crate::throttle::Throttle;
@@ -147,8 +147,9 @@ struct Session {
     palette: Option<CommandPalette>,
     /// Left-button presses, for double and triple clicks.
     clicks: Clicks,
-    /// The redraw held while an app on screen is mid-frame (mode 2026).
-    hold: Hold,
+    /// The redraws held while apps on screen are mid-frame (mode 2026),
+    /// per pane.
+    holds: Holds<PaneId>,
 }
 
 pub struct App {
@@ -289,7 +290,7 @@ impl App {
             bar_pointer: None,
             palette: None,
             clicks: Clicks::default(),
-            hold: Hold::default(),
+            holds: Holds::default(),
         };
         session.open_tab(config, self.start_dir.as_deref(), &self.proxy)?;
         if show_after_first_frame {
@@ -834,10 +835,8 @@ impl ApplicationHandler<UserEvent> for App {
         };
         let now = Instant::now();
         session.poll_resizes(now);
-        if session.hold.poll(now) {
-            session.window.request_redraw();
-        }
-        let due = [session.next_resize(), session.hold.deadline()];
+        session.poll_holds(now);
+        let due = [session.next_resize(), session.holds.deadline()];
         event_loop.set_control_flow(match due.into_iter().flatten().min() {
             Some(due) => ControlFlow::WaitUntil(due),
             None => ControlFlow::Wait,
@@ -1127,10 +1126,13 @@ impl Session {
             pane.terminal.take_clipboard_requests(),
             HAS_PRIMARY,
         );
+        let frame_ended = pane.terminal.take_frame_ended();
         let redraw = if visible {
-            self.hold
-                .output(pane.terminal.synchronized(), Instant::now())
+            let synchronized = pane.terminal.synchronized();
+            self.holds
+                .output(id, synchronized, frame_ended, Instant::now())
         } else {
+            self.holds.release(id);
             // A new title shows on the tab bar even for a pane off screen.
             pane.terminal.take_title_changed()
         };
@@ -1140,9 +1142,26 @@ impl Session {
         more
     }
 
+    /// Draws the panes whose app held a frame past [`crate::crate::sync::TIMEOUT`]
+    /// and ends synchronized output on their terminal, so an app that never
+    /// ends its frame is not held back again.
+    fn poll_holds(&mut self, now: Instant) {
+        let expired = self.holds.expired(now);
+        if expired.is_empty() {
+            return;
+        }
+        for id in expired {
+            if let Some(pane) = tab::pane_mut(&mut self.tabs, id) {
+                pane.terminal.end_synchronized();
+            }
+        }
+        self.window.request_redraw();
+    }
+
     /// The child of pane `id` ended: the pane leaves its tab, which closes
     /// with its last pane. With no tab left the caller exits.
     fn exited(&mut self, id: PaneId) {
+        self.holds.release(id);
         if tab::exit(&mut self.tabs, id) != Exit::Stale {
             self.tab_switched();
         }
@@ -1409,6 +1428,8 @@ impl Session {
     /// held button (and the pointer on a bar that went away), refits the
     /// grid and redraws.
     fn tab_switched(&mut self) {
+        // The panes on screen changed; the redraw below shows them.
+        self.holds.clear();
         self.pointer.reset();
         self.set_divider_hover(None);
         if !self.bar_visible(self.tabs.len()) {
@@ -2455,6 +2476,38 @@ mod tests {
         assert!(!advance_guarded(&mut terminal, 5, |terminal| {
             terminal.advance(b"fine");
         }));
+    }
+
+    /// What [`Session::output`] does with a parsed chunk, for one pane.
+    fn held(holds: &mut Holds<PaneId>, id: PaneId, terminal: &mut Terminal, now: Instant) -> bool {
+        let ended = terminal.take_frame_ended();
+        !holds.output(id, terminal.synchronized(), ended, now)
+    }
+
+    #[test]
+    fn a_chunk_that_ends_a_frame_and_begins_the_next_still_draws() {
+        let mut ids = PaneIds::default();
+        let (a, b) = (ids.next(), ids.next());
+        let mut holds = Holds::default();
+        let (mut ta, mut tb) = (Terminal::new(size(20, 2)), Terminal::new(size(20, 2)));
+        let now = Instant::now();
+        ta.advance(b"\x1b[?2026hhalf");
+        assert!(held(&mut holds, a, &mut ta, now));
+        tb.advance(b"plain");
+        assert!(!held(&mut holds, b, &mut tb, now), "pane b draws");
+        assert_eq!(
+            holds.deadline(),
+            Some(now + crate::sync::TIMEOUT),
+            "a still held"
+        );
+        ta.advance(b"\x1b[?2026l\x1b[?2026hnext");
+        assert!(!held(&mut holds, a, &mut ta, now), "the ended frame draws");
+        ta.advance(b"more");
+        assert!(held(&mut holds, a, &mut ta, now), "the next one holds");
+        assert_eq!(holds.expired(now + crate::sync::TIMEOUT), [a]);
+        ta.end_synchronized();
+        ta.advance(b"after");
+        assert!(!held(&mut holds, a, &mut ta, now), "no longer held");
     }
 
     #[test]

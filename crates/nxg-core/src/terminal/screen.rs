@@ -119,7 +119,7 @@ impl State {
         self.app_cursor_keys = false;
         self.mouse = Default::default();
         self.bracketed_paste = false;
-        self.synchronized = false;
+        self.end_sync();
         self.selection = None;
         self.last_char = None;
         self.sixel = None;
@@ -164,7 +164,7 @@ impl State {
         self.dormant = Some(alt);
         self.alt_active = true;
         // A frame begun on one screen does not carry over to the other.
-        self.synchronized = false;
+        self.end_sync();
         self.images.stash_placements();
     }
 
@@ -183,7 +183,7 @@ impl State {
         std::mem::swap(&mut self.screen, &mut *main);
         self.dormant = keep.then_some(main);
         self.alt_active = false;
-        self.synchronized = false;
+        self.end_sync();
         self.images.restore_placements();
     }
 }

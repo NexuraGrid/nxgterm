@@ -87,6 +87,20 @@ impl Terminal {
     pub fn synchronized(&self) -> bool {
         self.state.synchronized
     }
+
+    /// Whether a synchronized frame ended since the last call, even when
+    /// the app began the next one in the same batch: the window then draws
+    /// the frame that ended instead of holding on.
+    pub fn take_frame_ended(&mut self) -> bool {
+        std::mem::take(&mut self.state.frame_ended)
+    }
+
+    /// Ends synchronized output for an app that never did (the window gave
+    /// up waiting, like Ghostty does), so it is no longer held back. Not
+    /// reported by [`Self::take_frame_ended`]: the caller draws already.
+    pub fn end_synchronized(&mut self) {
+        self.state.synchronized = false;
+    }
 }
 
 impl State {
@@ -133,9 +147,15 @@ impl State {
             1007 => self.mouse.alternate_scroll = on,
             1015 => self.mouse.urxvt = on,
             2004 => self.bracketed_paste = on,
-            2026 => self.synchronized = on,
+            2026 if on => self.synchronized = true,
+            2026 => self.end_sync(),
             _ => {}
         }
+    }
+
+    /// Ends synchronized output, noting a frame that was open.
+    pub(super) fn end_sync(&mut self) {
+        self.frame_ended |= std::mem::take(&mut self.synchronized);
     }
 
     /// Whether private `mode` is set; `None` for a mode not supported.
@@ -583,6 +603,39 @@ mod tests {
         assert!(!t.synchronized(), "entering the alternate screen");
         t.advance(b"\x1b[?2026h\x1b[?1049l");
         assert!(!t.synchronized(), "leaving it");
+    }
+
+    #[test]
+    fn a_frame_ended_and_begun_again_in_one_batch_is_reported() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?2026hone\x1b[?2026l\x1b[?2026htw");
+        assert!(t.synchronized(), "the next frame is under way");
+        assert!(t.take_frame_ended(), "but one ended meanwhile");
+        assert!(!t.take_frame_ended(), "taken once");
+    }
+
+    #[test]
+    fn only_a_frame_that_was_open_ends() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?2026l");
+        assert!(!t.take_frame_ended(), "the mode was not set");
+        t.advance(b"\x1b[?2026h");
+        assert!(!t.take_frame_ended(), "still open");
+        t.advance(b"\x1bc");
+        assert!(t.take_frame_ended(), "RIS ends it");
+        t.advance(b"\x1b[?2026h\x1b[?1049h");
+        assert!(t.take_frame_ended(), "a screen switch ends it");
+    }
+
+    #[test]
+    fn ending_synchronized_output_from_outside_clears_the_mode() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?2026h");
+        t.end_synchronized();
+        assert!(!t.synchronized());
+        assert!(!t.take_frame_ended(), "the caller draws it already");
+        t.advance(b"\x1b[?2026$p");
+        assert_eq!(t.take_responses(), b"\x1b[?2026;2$y");
     }
 
     #[test]
