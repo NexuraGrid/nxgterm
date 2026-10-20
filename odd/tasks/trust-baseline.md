@@ -104,7 +104,7 @@ bounded scrollback, ~1,040 tests.
   (app.rs:872), broken TIMEOUT doc link (app.rs:1196), output doc omits the
   stopped state, misleading test name, tests for Exited full drain and
   stopped-pane drain, cap log growth when rotation keeps failing
-- [ ] T4 Phase 2 — Windows RAM (R2, R3)
+- [x] T4 Phase 2 — Windows RAM (R2, R3)
 - [ ] T5 Phase 3 — keyboard and input (S3, S4, S5)
 - [ ] T6 Phase 4 — resize without losing content (S2)
 - [ ] T7 Phase 5 — per-frame CPU (R4, R6, R8)
@@ -228,6 +228,27 @@ bounded scrollback, ~1,040 tests.
   fmt, clippy `-D warnings` (also x86_64-pc-windows-gnu), `cargo test
   --workspace` (1088) pass. Not measured on Windows (no GUI here).
 
+- 2026-10-20: T4 R3 done (delegated (writer trigger: 2+ non-trivial
+  files)). `FontFaces` keeps the regular and bold file bytes as
+  `Arc<[u8]>` and parses them once per pixel size into an
+  `Arc<Primary>` shared, through a `Weak` memo, by every `Font` of that
+  size while one lives (fontdue tunes outlines to the parse size, so a
+  new size still parses its own and output stays identical). Fallbacks
+  became `FallbackFace`s holding the fontdb source (path or shared
+  bytes) and a `OnceLock`, parsed on the first glyph that reaches them
+  in the existing order; a read or parse failure is remembered and
+  skipped. `Font` clones share the faces and start with an empty glyph
+  cache, so the renderer and the title bar font share one parse. The
+  glyph cache is cleared before it would pass 4 MiB of coverage and
+  refills (the CPU renderer redraws from it, the GPU atlas copies once).
+  RED observed (compile: missing `FallbackFace`, `FontFaces::from_bytes`,
+  `shares_faces`, cache budget) then GREEN (5 new tests); fmt, clippy
+  `-D warnings` (also x86_64-pc-windows-gnu), `cargo test --workspace`
+  (1093) pass. Measured on Linux (counting allocator, system font at
+  28 px, style + clone + title font): 61.8 MiB to 16.3 MiB of heap.
+  Inferred on Windows: Segoe UI Symbol and Emoji parse to ~38 and
+  ~58 MiB (measured from the files), now deferred until needed.
+
 ## Delivery
 
 Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
@@ -245,4 +266,4 @@ Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
 
 ## Next step
 
-Phase 2 (T4).
+Phase 3 (T5).

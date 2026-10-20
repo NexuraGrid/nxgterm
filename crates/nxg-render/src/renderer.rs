@@ -170,11 +170,11 @@ mod tests {
 
     #[test]
     fn draws_a_glyph_missing_from_the_font_from_a_fallback_face() {
-        use crate::font::parse_face;
+        use crate::font::FallbackFace;
         use crate::test_font::box_font;
         const ICON: char = '\u{e5ff}';
         let primary = || Font::from_bytes(box_font(&['M'], 600), 0, None, 20.0).unwrap();
-        let fallback = parse_face(box_font(&[ICON], 600), 0).unwrap();
+        let fallback = FallbackFace::from_bytes(box_font(&[ICON], 600), 0);
         let ink = |font: Font| {
             let mut renderer = CpuRenderer::new(Style {
                 font,
@@ -224,10 +224,10 @@ mod tests {
 
     #[test]
     fn combining_marks_are_drawn_centered_over_their_base_cells() {
-        use crate::font::parse_face;
+        use crate::font::FallbackFace;
         use crate::test_font::{box_font, ink_font};
         // 12 px cells; the mark is 4 px of ink drawn left of the pen.
-        let mark = parse_face(ink_font(&['\u{301}'], 0, -300, -100), 0).unwrap();
+        let mark = FallbackFace::from_bytes(ink_font(&['\u{301}'], 0, -300, -100), 0);
         let font = Font::from_bytes(box_font(&['M'], 600), 0, None, 20.0)
             .unwrap()
             .with_fallbacks(vec![mark].into());
@@ -256,10 +256,10 @@ mod tests {
 
     #[test]
     fn a_wide_char_is_drawn_across_its_two_cells() {
-        use crate::font::parse_face;
+        use crate::font::FallbackFace;
         use crate::test_font::box_font;
         // 1200 units: exactly two 12 px cells, so it is not scaled.
-        let fallback = parse_face(box_font(&['日'], 1200), 0).unwrap();
+        let fallback = FallbackFace::from_bytes(box_font(&['日'], 1200), 0);
         let font = Font::from_bytes(box_font(&['M'], 600), 0, None, 20.0)
             .unwrap()
             .with_fallbacks(vec![fallback].into());
