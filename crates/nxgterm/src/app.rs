@@ -157,6 +157,9 @@ struct Session {
     /// The redraws held while apps on screen are mid-frame (mode 2026),
     /// per pane.
     holds: Holds<PaneId>,
+    /// Panes with output left after a drain's budget, parsed further in
+    /// `about_to_wait` (see there).
+    backlog: Vec<PaneId>,
 }
 
 pub struct App {
@@ -298,6 +301,7 @@ impl App {
             palette: None,
             clicks: Clicks::default(),
             holds: Holds::default(),
+            backlog: Vec::new(),
         };
         session.open_tab(config, self.start_dir.as_deref(), &self.proxy)?;
         if show_after_first_frame {
@@ -833,21 +837,29 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    /// Sends the pty sizes that waited out their interval, draws a frame
+    /// Parses one more budget of the output a flood left (see below),
+    /// sends the pty sizes that waited out their interval, draws a frame
     /// held too long by synchronized output, and sleeps until the next of
     /// them is due.
+    ///
+    /// The rest of a flood is parsed here, not by re-posting
+    /// [`UserEvent::Output`]: on Windows the proxy posts a thread message,
+    /// and Win32 hands out posted messages before input and `WM_PAINT`, so
+    /// a re-post loop could starve keys and redraws. This runs once the
+    /// queued events were handled; while bytes remain the loop polls, so
+    /// every round handles new input and redraws, then one budget.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let Some(session) = &mut self.session else {
             return;
         };
+        session.poll_backlog(self.clipboard.as_mut(), self.config.scrollback.lines);
         let now = Instant::now();
         session.poll_resizes(now);
         session.poll_holds(now);
-        let due = [session.next_resize(), session.holds.deadline()];
-        event_loop.set_control_flow(match due.into_iter().flatten().min() {
-            Some(due) => ControlFlow::WaitUntil(due),
-            None => ControlFlow::Wait,
-        });
+        event_loop.set_control_flow(control_flow(
+            !session.backlog.is_empty(),
+            [session.next_resize(), session.holds.deadline()],
+        ));
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
@@ -857,13 +869,17 @@ impl ApplicationHandler<UserEvent> for App {
                     let scrollback = self.config.scrollback.lines;
                     // The rest of a flood waits behind the events queued
                     // meanwhile (keys, redraws), so Ctrl+C gets through.
-                    if session.output(id, self.clipboard.as_mut(), scrollback) {
-                        let _ = self.proxy.send_event(UserEvent::Output(id));
+                    let clipboard = self.clipboard.as_mut();
+                    if session.output(id, clipboard, scrollback, inbox::BUDGET) {
+                        defer(&mut session.backlog, id);
                     }
                 }
             }
             UserEvent::Exited(id) => {
                 if let Some(session) = &mut self.session {
+                    // The final output, however long, goes in first.
+                    let scrollback = self.config.scrollback.lines;
+                    session.output(id, self.clipboard.as_mut(), scrollback, usize::MAX);
                     session.exited(id);
                     if session.tabs.is_empty() {
                         event_loop.exit();
@@ -1107,21 +1123,28 @@ impl Session {
         }
     }
 
-    /// Feeds up to [`inbox::BUDGET`] pending bytes of the pane `id` (ignored
-    /// once it is closed) in one go, answering the queries in them and
+    /// Feeds up to `budget` pending bytes of the pane `id` (ignored once it
+    /// is closed) in one go, answering the queries in them and
     /// setting the clipboard they ask for (OSC 52, on screen or not); the
     /// window redraws only if the pane is on screen, and not while its app
     /// is mid-frame (synchronized output). Returns whether bytes remain: the
-    /// caller then posts another [`UserEvent::Output`], as the reader will
-    /// not. A parser panic resets only this pane (see [`advance_guarded`]),
+    /// caller then adds the pane to the backlog, as the reader posts no
+    /// wakeup until the inbox runs empty. A parser panic resets only this pane (see [`advance_guarded`]),
     /// whose fresh terminal keeps the `scrollback` limit.
-    fn output(&mut self, id: PaneId, clipboard: &mut dyn Clipboard, scrollback: usize) -> bool {
+    fn output(
+        &mut self,
+        id: PaneId,
+        clipboard: &mut dyn Clipboard,
+        scrollback: usize,
+        budget: usize,
+    ) -> bool {
         let visible = tab::shows(&self.tabs, id);
         let Some(pane) = tab::pane_mut(&mut self.tabs, id) else {
             return false;
         };
-        let (bytes, more) = pane.inbox.drain(inbox::BUDGET);
+        let (bytes, more) = pane.inbox.drain(budget);
         if bytes.is_empty() || pane.stopped {
+            pane.inbox.trim();
             return more;
         }
         let now = Instant::now();
@@ -1132,6 +1155,7 @@ impl Session {
             now,
             |terminal| terminal.advance(bytes),
         );
+        pane.inbox.trim();
         if outcome == Guarded::Stopped {
             pane.stopped = true;
         }
@@ -1159,6 +1183,16 @@ impl Session {
         more
     }
 
+    /// Parses one more [`inbox::BUDGET`] of each pane in the backlog,
+    /// keeping those with bytes still left.
+    fn poll_backlog(&mut self, clipboard: &mut dyn Clipboard, scrollback: usize) {
+        for id in std::mem::take(&mut self.backlog) {
+            if self.output(id, clipboard, scrollback, inbox::BUDGET) {
+                defer(&mut self.backlog, id);
+            }
+        }
+    }
+
     /// Draws the panes whose app held a frame past [`crate::crate::sync::TIMEOUT`]
     /// and ends synchronized output on their terminal, so an app that never
     /// ends its frame is not held back again.
@@ -1179,6 +1213,7 @@ impl Session {
     /// with its last pane. With no tab left the caller exits.
     fn exited(&mut self, id: PaneId) {
         self.holds.release(id);
+        self.backlog.retain(|&pane| pane != id);
         if tab::exit(&mut self.tabs, id) != Exit::Stale {
             self.tab_switched();
         }
@@ -2034,6 +2069,25 @@ fn spawn_pane(
     })
 }
 
+/// Adds pane `id` to the `backlog` of panes with output left, once.
+fn defer(backlog: &mut Vec<PaneId>, id: PaneId) {
+    if !backlog.contains(&id) {
+        backlog.push(id);
+    }
+}
+
+/// How the event loop waits: it polls while a pane has output left
+/// (`backlogged`), else sleeps until the earliest `due` time, if any.
+fn control_flow(backlogged: bool, due: impl IntoIterator<Item = Option<Instant>>) -> ControlFlow {
+    if backlogged {
+        return ControlFlow::Poll;
+    }
+    match due.into_iter().flatten().min() {
+        Some(due) => ControlFlow::WaitUntil(due),
+        None => ControlFlow::Wait,
+    }
+}
+
 /// How [`advance_guarded`] went.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Guarded {
@@ -2338,8 +2392,7 @@ fn spawn_reader(
                 },
             }
         }
-        // Queued after the last wakeup, so the pane parses its final output
-        // (one budget of it) before it closes.
+        // The pane parses all of its pending output before it closes.
         let _ = proxy.send_event(UserEvent::Exited(id));
     });
 }
@@ -2585,6 +2638,29 @@ mod tests {
         ta.end_synchronized();
         ta.advance(b"after");
         assert!(!held(&mut holds, a, &mut ta, now), "no longer held");
+    }
+
+    #[test]
+    fn a_backlog_polls_and_otherwise_the_loop_sleeps_until_due() {
+        let soon = Instant::now();
+        let later = soon + std::time::Duration::from_secs(1);
+        assert_eq!(control_flow(false, [None, None]), ControlFlow::Wait);
+        assert_eq!(
+            control_flow(false, [Some(later), Some(soon)]),
+            ControlFlow::WaitUntil(soon)
+        );
+        assert_eq!(control_flow(true, [Some(soon), None]), ControlFlow::Poll);
+    }
+
+    #[test]
+    fn a_backlog_lists_each_pane_once() {
+        let mut ids = PaneIds::default();
+        let (a, b) = (ids.next(), ids.next());
+        let mut backlog = Vec::new();
+        defer(&mut backlog, a);
+        defer(&mut backlog, b);
+        defer(&mut backlog, a);
+        assert_eq!(backlog, [a, b]);
     }
 
     #[test]

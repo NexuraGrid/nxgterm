@@ -96,7 +96,7 @@ bounded scrollback, ~1,040 tests.
   remove unused recovery flag; assert scrollback wiring in tests
 - [x] T3 Coalesce PTY output: shared bounded buffer + "wakeup pending" flag,
   one event per drain, reader waits when the buffer is full + tests
-- [ ] T3b T3 review follow-ups (advisory): drain all pending output before
+- [x] T3b T3 review follow-ups (advisory): drain all pending output before
   handling `Exited` (R1/R3/R4 exit-truncates-tail); make the budget re-post
   actually yield to input (R4-repost-may-not-yield); release retained buffer
   capacity when idle (R3-buffer-retention); avoid front-drain memmove
@@ -178,6 +178,23 @@ bounded scrollback, ~1,040 tests.
   scrollback limit of the fresh terminal. RED observed (compile: missing
   API; runtime: rotation test) then GREEN; fmt, clippy `-D warnings` (also
   x86_64-pc-windows-gnu), `cargo test --workspace` (1071) pass.
+- 2026-10-20: T3b done (delegated writer). `Exited` first parses all
+  pending inbox bytes (budget `usize::MAX`), so the final output is never
+  cut. The budget re-post is gone: winit 0.30's Windows proxy uses
+  `PostMessageW`, and Win32 hands posted messages out before input and
+  `WM_PAINT`, so a re-post loop could starve keys. Panes left with bytes go
+  to a `backlog` parsed one budget per `about_to_wait`, with
+  `ControlFlow::Poll` only while it is non-empty, so each loop round
+  handles queued input and redraws first. The inbox keeps a read offset for
+  partial drains and compacts only past half the buffer; once it runs empty
+  buffers above 256 KiB (`IDLE_KEEP`) are freed (`Consumer::trim` after
+  parsing). Known limit: bytes still in the kernel pty buffer when the
+  waiter's `Exited` arrives before the reader's EOF are not read. RED
+  observed (compile: missing `IDLE_KEEP`, `trim`, `start`, `control_flow`,
+  `defer`) then GREEN; the unbounded-drain inbox test passed at once (the
+  drain already allowed it; the `Exited` wiring needs a window and is
+  untested). fmt, clippy `-D warnings` (also x86_64-pc-windows-gnu),
+  `cargo test --workspace` (1078) pass.
 
 ## Delivery
 
@@ -194,4 +211,4 @@ Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
 
 ## Next step
 
-Phase 1 review + T1b/T2b follow-ups.
+Phase 2 (T4).
