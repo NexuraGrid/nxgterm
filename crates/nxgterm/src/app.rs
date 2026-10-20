@@ -28,6 +28,7 @@ use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::ModifiersState;
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 
 use crate::bindings::Action;
@@ -525,6 +526,7 @@ impl App {
         let bytes = keys::encode(
             &event.logical_key,
             event.text.as_deref(),
+            event.text_with_all_modifiers(),
             self.modifiers,
             modes,
         );
