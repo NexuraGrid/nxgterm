@@ -105,6 +105,10 @@ bounded scrollback, ~1,040 tests.
   stopped state, misleading test name, tests for Exited full drain and
   stopped-pane drain, cap log growth when rotation keeps failing
 - [x] T4 Phase 2 — Windows RAM (R2, R3)
+- [ ] T4b Fallback coverage index: check each fallback's cmap (ttf-parser)
+  before parsing it, so a glyph missing everywhere (e.g. Nerd Font icons) does
+  not parse all fallbacks (~100 MiB on Windows); update README GL-fallback
+  text; test fallback_families and the backend loop
 - [ ] T5 Phase 3 — keyboard and input (S3, S4, S5)
 - [ ] T6 Phase 4 — resize without losing content (S2)
 - [ ] T7 Phase 5 — per-frame CPU (R4, R6, R8)
@@ -263,6 +267,9 @@ Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
   acknowledged. Reviewed boundary: 564f8ed.
 - T1b/T2b/T3b (130f746..895907f): high risk, consent granted, 4 lenses,
   approved and acknowledged. Reviewed boundary: 895907f.
+- T3c/T4 (b5163ad..14dc963): medium risk, consent granted, 1 lens, approved
+  and acknowledged. Font heap measured 61.8 → 16.3 MiB (Linux, 28 px).
+  Reviewed boundary: 14dc963.
 
 ## Next step
 
