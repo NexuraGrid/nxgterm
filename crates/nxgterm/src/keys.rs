@@ -14,9 +14,10 @@ const ESC: u8 = 0x1b;
 /// the terminal's current state: full-screen programs switch cursor keys to
 /// `ESC O x` and would misread the normal form.
 ///
-/// Windows reports AltGr as Ctrl+Alt: when both are held and `text_all`
-/// is printable, the key typed that text (`@` from AltGr+Q on a German
-/// layout) and it is sent as is, without an ESC prefix or a Ctrl code.
+/// Windows reports AltGr as Ctrl+Alt: there, when both are held and
+/// `text_all` is printable, the key typed that text (`@` from AltGr+Q on a
+/// German layout) and it is sent as is, without an ESC prefix or a Ctrl
+/// code (see [`AltGr`]).
 pub fn encode(
     key: &Key,
     text: Option<&str>,
@@ -26,10 +27,28 @@ pub fn encode(
 ) -> Option<Vec<u8>> {
     match key {
         Key::Named(named) => encode_named(*named, mods, modes),
-        Key::Character(chars) => encode_char(chars, text, text_all, mods),
+        Key::Character(chars) => encode_char(chars, text, text_all, mods, ALTGR),
         _ => None,
     }
 }
+
+/// How the platform reports AltGr.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AltGr {
+    /// As Ctrl+Alt (Windows): Ctrl+Alt with printable text is AltGr.
+    CtrlAlt,
+    /// As a modifier of its own, so Ctrl+Alt is always Ctrl and Alt: X11
+    /// and Wayland (ISO Level 3 shift, never reported as Ctrl or Alt) and
+    /// macOS (Option is Alt; its text is not trusted with Ctrl held).
+    Distinct,
+}
+
+/// How this platform reports AltGr.
+const ALTGR: AltGr = if cfg!(windows) {
+    AltGr::CtrlAlt
+} else {
+    AltGr::Distinct
+};
 
 /// xterm's modifier parameter: 1 plus Shift 1, Alt 2 and Ctrl 4, or
 /// `None` without any of them.
@@ -101,11 +120,13 @@ fn encode_char(
     text: Option<&str>,
     text_all: Option<&str>,
     mods: ModifiersState,
+    altgr: AltGr,
 ) -> Option<Vec<u8>> {
     if mods.super_key() {
         return None; // Reserved for application shortcuts.
     }
-    if mods.control_key()
+    if altgr == AltGr::CtrlAlt
+        && mods.control_key()
         && mods.alt_key()
         && let Some(typed) = text_all.filter(|typed| is_printable(typed))
     {
@@ -135,9 +156,10 @@ fn single_char(chars: &str) -> Option<char> {
     }
 }
 
-/// The byte Ctrl+`c` sends in xterm: letters and `@ [ \ ] ^ _` to C0
-/// codes, `/` like `_`, `?` to DEL, and the digits 2 to 8 like the
-/// symbols above them on a US layout.
+/// The byte Ctrl+`c` sends in xterm: letters and `@ [ \ ] ^ _` to their
+/// C0 codes, Space like `@` (NUL), `/` like `_` (US), `?` to DEL, and the
+/// digits 2 to 8 to the VT220 codes NUL, ESC, FS, GS, RS, US and DEL (only
+/// 2 and 6 match the US-layout symbols above them).
 fn ctrl_code(c: char) -> Option<u8> {
     Some(match c {
         'a'..='z' | 'A'..='Z' => c.to_ascii_lowercase() as u8 - b'a' + 1,
@@ -423,16 +445,28 @@ mod tests {
         assert_eq!(ch("9", CTRL).unwrap(), b"9");
     }
 
-    /// A key that typed `text` with Ctrl+Alt held, where `text_all` is
-    /// what the layout made of it with every modifier.
+    /// A key that typed `text` with Ctrl+Alt held on Windows, where
+    /// `text_all` is what the layout made of it with every modifier.
     fn ctrl_alt(c: &str, text_all: Option<&str>) -> Option<Vec<u8>> {
-        encode(
-            &Key::Character(c.into()),
-            Some(c),
-            text_all,
-            CTRL | ALT,
-            Modes::default(),
-        )
+        encode_char(c, Some(c), text_all, CTRL | ALT, AltGr::CtrlAlt)
+    }
+
+    #[test]
+    fn ctrl_alt_is_no_altgr_off_windows() {
+        // X11, Wayland and macOS report AltGr (Option) as a modifier of
+        // its own: Ctrl+Alt+1 is ESC 1 there, even though "1" prints.
+        let bytes = encode_char("1", Some("1"), Some("1"), CTRL | ALT, AltGr::Distinct);
+        assert_eq!(bytes.unwrap(), b"\x1b1");
+        let bytes = encode_char("a", Some("a"), Some("a"), CTRL | ALT, AltGr::Distinct);
+        assert_eq!(bytes.unwrap(), b"\x1b\x01");
+        assert_eq!(
+            ALTGR,
+            if cfg!(windows) {
+                AltGr::CtrlAlt
+            } else {
+                AltGr::Distinct
+            }
+        );
     }
 
     #[test]
