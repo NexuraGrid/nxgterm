@@ -215,6 +215,19 @@ bounded scrollback, ~1,040 tests.
   `-D warnings` (also x86_64-pc-windows-gnu), `cargo test --workspace`
   (1082) pass.
 
+- 2026-10-20: T4 R2 done (delegated (writer trigger: 2+ non-trivial
+  files)). `device::backend_order(os, WGPU_BACKEND)` gives DX12, Vulkan,
+  GL on Windows; Metal on macOS; Vulkan, GL elsewhere; a non-empty
+  `WGPU_BACKEND` is used as is. `GpuRenderer::new` builds one
+  `wgpu::Instance` per step (only that backend in the descriptor and in
+  `enumerate_adapters`) and stops at the first that gives an adapter,
+  device and surface format; a failed step's instance and surface drop
+  before the next loads. All failing still errors, so the CPU fallback
+  stays. Integrated-GPU preference and `MemoryHints::MemoryUsage` kept.
+  RED observed (compile: missing `backend_order`) then GREEN (6 tests);
+  fmt, clippy `-D warnings` (also x86_64-pc-windows-gnu), `cargo test
+  --workspace` (1088) pass. Not measured on Windows (no GUI here).
+
 ## Delivery
 
 Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.

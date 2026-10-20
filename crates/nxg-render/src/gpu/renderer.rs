@@ -8,11 +8,19 @@ use raw_window_handle::HasDisplayHandle;
 use wgpu::CurrentSurfaceTexture;
 
 use super::GpuError;
-use super::device::Gpu;
+use super::device::{self, Gpu};
 use super::format;
 use super::painter::Painter;
 use crate::shape::Shape;
 use crate::style::{Header, Overlay, PaneView, Style, WindowRenderer};
+
+/// What [`GpuRenderer::connect`] found on one backend.
+type Connected = (
+    wgpu::Surface<'static>,
+    Gpu,
+    wgpu::SurfaceCapabilities,
+    wgpu::TextureFormat,
+);
 
 /// GPU renderer presenting to a window surface.
 #[derive(Debug)]
@@ -25,8 +33,9 @@ pub struct GpuRenderer {
 
 impl GpuRenderer {
     /// Creates a surface for `window` (`width x height` pixels) on the best
-    /// hardware adapter. Fails on software-only adapters so the caller can
-    /// fall back to the CPU renderer. When the style's background opacity
+    /// hardware adapter of the first backend that has one (see
+    /// `backend_order`). Fails on software-only adapters so the
+    /// caller can fall back to the CPU renderer. When the style's background opacity
     /// is below 1.0 it asks for a surface the system blends with what is
     /// behind the window; [`WindowRenderer::translucent`] tells whether it
     /// got one (the window itself must have been created transparent).
@@ -37,20 +46,21 @@ impl GpuRenderer {
         // Asking for a blending surface only when the window starts
         // translucent keeps opaque windows exactly as they were.
         let translucent = style.background_opacity < 1.0;
-        // The display handle lets EGL pick the right platform (Wayland).
-        let mut descriptor =
-            wgpu::InstanceDescriptor::new_with_display_handle(Box::new(window.clone()));
-        descriptor.backend_options.dx12.presentation_system =
-            format::dx12_presentation(translucent);
-        // The WGPU_* environment variables still override these choices.
-        let instance = wgpu::Instance::new(descriptor.with_env());
-        let surface = instance
-            .create_surface(window)
-            .map_err(|error| GpuError(format!("cannot create surface: {error}")))?;
-        let gpu = Gpu::new(&instance, Some(&surface), false)?;
-        let caps = surface.get_capabilities(&gpu.adapter);
-        let format = format::choose(&caps.formats)
-            .ok_or_else(|| GpuError(format!("{}: no surface formats", gpu.describe())))?;
+        let order = device::backend_order(std::env::consts::OS, wgpu::Backends::from_env());
+        let mut failures = Vec::new();
+        let mut found = None;
+        for backends in order {
+            // A backend that fails is dropped, with its instance, before
+            // the next one loads.
+            match Self::connect(window.clone(), backends, translucent) {
+                Ok(connected) => {
+                    found = Some(connected);
+                    break;
+                }
+                Err(error) => failures.push(format!("{backends:?}: {error}")),
+            }
+        }
+        let (surface, gpu, caps, format) = found.ok_or_else(|| GpuError(failures.join("; ")))?;
         let alpha_mode = format::alpha_mode(&caps.alpha_modes, translucent);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -76,6 +86,36 @@ impl GpuRenderer {
             Some(failure) => Err(GpuError(format!("{}: {failure}", renderer.gpu.describe()))),
             None => Ok(renderer),
         }
+    }
+
+    /// A surface for `window` on the best adapter of `backends`, in an
+    /// instance of its own, with its capabilities and chosen format.
+    fn connect<W>(
+        window: W,
+        backends: wgpu::Backends,
+        translucent: bool,
+    ) -> Result<Connected, GpuError>
+    where
+        W: wgpu::WindowHandle + HasDisplayHandle + Clone + fmt::Debug + 'static,
+    {
+        // The display handle lets EGL pick the right platform (Wayland).
+        let mut descriptor =
+            wgpu::InstanceDescriptor::new_with_display_handle(Box::new(window.clone()));
+        descriptor.backend_options.dx12.presentation_system =
+            format::dx12_presentation(translucent);
+        // The WGPU_* environment variables still override these choices;
+        // `WGPU_BACKEND` already chose `backends`.
+        let mut descriptor = descriptor.with_env();
+        descriptor.backends = backends;
+        let instance = wgpu::Instance::new(descriptor);
+        let surface = instance
+            .create_surface(window)
+            .map_err(|error| GpuError(format!("cannot create surface: {error}")))?;
+        let gpu = Gpu::new(&instance, backends, Some(&surface), false)?;
+        let caps = surface.get_capabilities(&gpu.adapter);
+        let format = format::choose(&caps.formats)
+            .ok_or_else(|| GpuError(format!("{}: no surface formats", gpu.describe())))?;
+        Ok((surface, gpu, caps, format))
     }
 
     /// Adapter name, backend and type, for logs.

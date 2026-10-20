@@ -22,9 +22,10 @@ use crate::style::{Header, Overlay, PaneView, Style};
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn headless_gpu() -> Option<Gpu> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    match Gpu::new(&instance, None, true) {
+    let descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+    let backends = descriptor.backends;
+    let instance = wgpu::Instance::new(descriptor);
+    match Gpu::new(&instance, backends, None, true) {
         Ok(gpu) => Some(gpu),
         Err(error) => {
             eprintln!("skipping GPU test: {error}");
