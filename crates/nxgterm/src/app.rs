@@ -35,7 +35,7 @@ use crate::bindings::Action;
 use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
 use crate::crash::{self, Recoveries, Recovery};
-use crate::ime::Preedit;
+use crate::ime::{Composition, Preedit};
 use crate::inbox::{Consumer, Producer, Push};
 use crate::input::Input;
 use crate::mouse::{Capture, Clicks, Drag, Pointer, ViewportScroll, Wheel, WheelAction};
@@ -169,7 +169,7 @@ struct Session {
     backlog: Vec<PaneId>,
     /// The text an input method is composing, drawn at the cursor of the
     /// focused pane; keys go to the IME meanwhile.
-    preedit: Option<Preedit>,
+    preedit: Composition<PaneId>,
     /// The cursor cell last given to the IME (window pixels: x, y, width,
     /// height), to place its candidate window.
     ime_area: Option<(u32, u32, u32, u32)>,
@@ -318,7 +318,7 @@ impl App {
             clicks: Clicks::default(),
             holds: Holds::default(),
             backlog: Vec::new(),
-            preedit: None,
+            preedit: Composition::default(),
             ime_area: None,
         };
         session.open_tab(config, self.start_dir.as_deref(), &self.proxy)?;
@@ -523,8 +523,11 @@ impl App {
 
     /// Handles a key press: a bound action, or bytes for the pty.
     fn key_pressed(&mut self, event: &KeyEvent) {
-        if self.session.as_ref().is_some_and(|s| s.preedit.is_some()) {
-            return; // The input method is composing: the key is its own.
+        if let Some(session) = &mut self.session {
+            let focused = session.focused_id();
+            if session.preedit.takes_keys(focused) {
+                return; // The input method is composing: the key is its own.
+            }
         }
         if self.session.as_ref().is_some_and(|s| s.palette.is_some()) {
             self.palette_key(event);
@@ -566,14 +569,16 @@ impl App {
         match ime {
             Ime::Enabled => {}
             Ime::Preedit(text, caret) => {
-                session.preedit = Preedit::new(&text, caret.map(|(start, _)| start));
-                if session.preedit.is_some() {
+                let preedit = Preedit::new(&text, caret.map(|(start, _)| start));
+                let composing = preedit.is_some();
+                session.preedit.update(session.focused_id(), preedit);
+                if composing {
                     session.scroll_viewport(ViewportScroll::Bottom);
                 }
                 session.window.request_redraw();
             }
             Ime::Commit(text) => {
-                session.preedit = None;
+                session.preedit.clear();
                 session.window.request_redraw();
                 if session.palette.is_some() {
                     let key = Key::Character(text.as_str().into());
@@ -589,7 +594,7 @@ impl App {
                 session.send(text.as_bytes());
             }
             Ime::Disabled => {
-                session.preedit = None;
+                session.preedit.clear();
                 session.window.request_redraw();
             }
         }
@@ -1042,6 +1047,8 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::Focused(false) => {
+                // A composition cannot outlive focus: it would eat keys.
+                session.preedit.clear();
                 session.flush_resizes();
                 session.pointer.reset();
             }
@@ -1586,10 +1593,15 @@ impl Session {
         self.window.request_redraw();
     }
 
+    /// The focused pane of the active tab.
+    fn focused_id(&self) -> Option<PaneId> {
+        self.tabs.active().map(|tab| tab.panes.focused().0)
+    }
+
     /// Moves the scrollback viewport of the focused pane, redrawing when it
     /// changed.
     fn scroll_viewport(&mut self, scroll: ViewportScroll) {
-        if let Some(id) = self.tabs.active().map(|tab| tab.panes.focused().0) {
+        if let Some(id) = self.focused_id() {
             self.scroll_pane(id, scroll);
         }
     }
@@ -1879,7 +1891,7 @@ impl Session {
             });
         let preedit = self
             .preedit
-            .as_ref()
+            .preedit(Some(tab.panes.focused().0))
             .zip(focused_cursor)
             .map(|(preedit, (col, row))| {
                 let col = crate::ime::column(col, preedit.width(), content.cols());

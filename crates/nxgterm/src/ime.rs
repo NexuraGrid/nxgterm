@@ -69,6 +69,52 @@ fn width_of(text: &str) -> u16 {
     if full { MAX_COLS } else { cursor }
 }
 
+/// The preedit being composed and the pane it was composed for. Keys go
+/// to the input method only while it lasts, so it must end whenever the
+/// composition can no longer be committed there: the IME ended it (an
+/// empty preedit, a commit, disabled), the window lost focus, or another
+/// pane (or tab) took focus. A stale preedit would swallow every key.
+pub struct Composition<K> {
+    current: Option<(K, Preedit)>,
+}
+
+impl<K: Copy + PartialEq> Default for Composition<K> {
+    fn default() -> Self {
+        Self { current: None }
+    }
+}
+
+impl<K: Copy + PartialEq> Composition<K> {
+    /// An `Ime::Preedit` for the `focused` pane: `None` (empty text or no
+    /// pane) ends the composition.
+    pub fn update(&mut self, focused: Option<K>, preedit: Option<Preedit>) {
+        self.current = focused.zip(preedit);
+    }
+
+    /// Ends the composition (commit, IME disabled, focus lost).
+    pub fn clear(&mut self) {
+        self.current = None;
+    }
+
+    /// The preedit to draw over the `focused` pane: none when it was
+    /// composed for another pane.
+    pub fn preedit(&self, focused: Option<K>) -> Option<&Preedit> {
+        match &self.current {
+            Some((pane, preedit)) if Some(*pane) == focused => Some(preedit),
+            _ => None,
+        }
+    }
+
+    /// Whether a key press goes to the input method instead of the
+    /// `focused` pane; a preedit left from another pane is dropped.
+    pub fn takes_keys(&mut self, focused: Option<K>) -> bool {
+        if self.preedit(focused).is_none() {
+            self.current = None;
+        }
+        self.current.is_some()
+    }
+}
+
 /// The first column of a preedit `width` cells wide that starts at the
 /// cursor column `col` of a grid `cols` wide: moved left so it fits.
 pub fn column(col: u16, width: u16, cols: u16) -> u16 {
@@ -132,6 +178,39 @@ mod tests {
         let text = "x".repeat(1000);
         let preedit = Preedit::new(&text, None).unwrap();
         assert_eq!(preedit.width(), MAX_COLS);
+    }
+
+    #[test]
+    fn a_composition_takes_keys_until_it_ends() {
+        let mut composition = Composition::default();
+        assert!(!composition.takes_keys(Some(1)));
+        composition.update(Some(1), Preedit::new("ka", None));
+        assert!(composition.takes_keys(Some(1)));
+        assert!(composition.preedit(Some(1)).is_some());
+        // An empty preedit ends it.
+        composition.update(Some(1), Preedit::new("", None));
+        assert!(!composition.takes_keys(Some(1)));
+        // A commit, the IME disabled or focus lost end it too.
+        composition.update(Some(1), Preedit::new("ka", None));
+        composition.clear();
+        assert!(!composition.takes_keys(Some(1)));
+        // No focused pane: nothing to compose for.
+        composition.update(None, Preedit::new("ka", None));
+        assert!(!composition.takes_keys(None));
+    }
+
+    #[test]
+    fn a_preedit_from_another_pane_never_swallows_keys() {
+        let mut composition = Composition::default();
+        composition.update(Some(1), Preedit::new("ka", None));
+        assert!(
+            composition.preedit(Some(2)).is_none(),
+            "not drawn elsewhere"
+        );
+        assert!(!composition.takes_keys(Some(2)));
+        // Dropped for good: focusing the first pane again types normally.
+        assert!(!composition.takes_keys(Some(1)));
+        assert!(composition.preedit(Some(1)).is_none());
     }
 
     #[test]
