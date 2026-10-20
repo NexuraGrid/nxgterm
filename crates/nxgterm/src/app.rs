@@ -25,9 +25,9 @@ use nxg_render::{
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::{ElementState, Ime, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
-use winit::keyboard::ModifiersState;
+use winit::keyboard::{Key, ModifiersState};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 
@@ -35,6 +35,7 @@ use crate::bindings::Action;
 use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
 use crate::crash::{self, Recoveries, Recovery};
+use crate::ime::Preedit;
 use crate::inbox::{Consumer, Producer, Push};
 use crate::mouse::{Capture, Clicks, Drag, Pointer, ViewportScroll, Wheel, WheelAction};
 use crate::panes::{Axis, DividerPath, PaneId, SplitError};
@@ -161,6 +162,12 @@ struct Session {
     /// Panes with output left after a drain's budget, parsed further in
     /// `about_to_wait` (see there).
     backlog: Vec<PaneId>,
+    /// The text an input method is composing, drawn at the cursor of the
+    /// focused pane; keys go to the IME meanwhile.
+    preedit: Option<Preedit>,
+    /// The cursor cell last given to the IME (window pixels: x, y, width,
+    /// height), to place its candidate window.
+    ime_area: Option<(u32, u32, u32, u32)>,
 }
 
 pub struct App {
@@ -250,6 +257,9 @@ impl App {
                 .with_title_hidden(integrated)
         };
         let window = Arc::new(event_loop.create_window(attributes)?);
+        // Composed input (CJK, dead keys through an IME) arrives as
+        // `WindowEvent::Ime`.
+        window.set_ime_allowed(true);
         let scale = window.scale_factor();
         let faces = load_faces(&config.font)?;
         let style = build_style(&faces, config, config.font.size, scale)?;
@@ -303,6 +313,8 @@ impl App {
             clicks: Clicks::default(),
             holds: Holds::default(),
             backlog: Vec::new(),
+            preedit: None,
+            ime_area: None,
         };
         session.open_tab(config, self.start_dir.as_deref(), &self.proxy)?;
         if show_after_first_frame {
@@ -506,6 +518,9 @@ impl App {
 
     /// Handles a key press: a bound action, or bytes for the pty.
     fn key_pressed(&mut self, event: &KeyEvent) {
+        if self.session.as_ref().is_some_and(|s| s.preedit.is_some()) {
+            return; // The input method is composing: the key is its own.
+        }
         if self.session.as_ref().is_some_and(|s| s.palette.is_some()) {
             self.palette_key(event);
             return;
@@ -534,6 +549,44 @@ impl App {
             // Typing shows what is being typed into.
             session.scroll_viewport(ViewportScroll::Bottom);
             session.send(&bytes);
+        }
+    }
+
+    /// Handles input method events: the preedit is drawn at the cursor and
+    /// committed text is typed into the focused pane (or the palette).
+    fn ime(&mut self, ime: Ime) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        match ime {
+            Ime::Enabled => {}
+            Ime::Preedit(text, caret) => {
+                session.preedit = Preedit::new(&text, caret.map(|(start, _)| start));
+                if session.preedit.is_some() {
+                    session.scroll_viewport(ViewportScroll::Bottom);
+                }
+                session.window.request_redraw();
+            }
+            Ime::Commit(text) => {
+                session.preedit = None;
+                session.window.request_redraw();
+                if session.palette.is_some() {
+                    let key = Key::Character(text.as_str().into());
+                    let input = command_palette::input(&key, Some(&text), ModifiersState::empty());
+                    let rows = session.palette_rect().map_or(0, |rect| rect.list_rows());
+                    if let (Some(input), Some(palette)) = (input, &mut session.palette) {
+                        let outcome = palette.handle(input, rows);
+                        self.palette_done(outcome);
+                    }
+                    return;
+                }
+                session.scroll_viewport(ViewportScroll::Bottom);
+                session.send(text.as_bytes());
+            }
+            Ime::Disabled => {
+                session.preedit = None;
+                session.window.request_redraw();
+            }
         }
     }
 
@@ -906,6 +959,10 @@ impl ApplicationHandler<UserEvent> for App {
             if self.session.as_ref().is_some_and(|s| s.tabs.is_empty()) {
                 event_loop.exit();
             }
+            return;
+        }
+        if let WindowEvent::Ime(ime) = event {
+            self.ime(ime);
             return;
         }
         if self.chrome_mouse(event_loop, &event) {
@@ -1808,11 +1865,46 @@ impl Session {
             color,
         );
         shapes.extend(band);
-        let overlay = palette.as_ref().map(|(terminal, rect)| Overlay {
-            terminal,
-            col: rect.col,
-            row: rect.row,
-        });
+        // The IME's preedit and candidate window go at the focused cursor.
+        let focused_cursor = tab::placements(tab, content)
+            .into_iter()
+            .find(|placed| placed.focused)
+            .and_then(|placed| {
+                let cursor = tab.panes.get(placed.id)?.terminal.cursor();
+                Some((placed.rect.col + cursor.col, placed.rect.row + cursor.row))
+            });
+        let preedit = self
+            .preedit
+            .as_ref()
+            .zip(focused_cursor)
+            .map(|(preedit, (col, row))| {
+                let col = crate::ime::column(col, preedit.width(), content.cols());
+                Overlay {
+                    terminal: preedit.terminal(),
+                    col,
+                    row,
+                }
+            });
+        let overlay = palette
+            .as_ref()
+            .map(|(terminal, rect)| Overlay {
+                terminal,
+                col: rect.col,
+                row: rect.row,
+            })
+            .or(preedit);
+        if let Some((col, row)) = focused_cursor {
+            let layout = self.grid_layout();
+            let (x, y) = layout.origin(u32::from(col), u32::from(row));
+            let area = (x, y, layout.cell.width, layout.cell.height);
+            if self.ime_area != Some(area) {
+                self.ime_area = Some(area);
+                self.window.set_ime_cursor_area(
+                    PhysicalPosition::new(x, y),
+                    PhysicalSize::new(area.2, area.3),
+                );
+            }
+        }
         let header = Header {
             top: self.band(),
             rows: bar.as_ref(),
