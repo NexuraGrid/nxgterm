@@ -90,7 +90,7 @@ bounded scrollback, ~1,040 tests.
   Ghostty; app-level hold test
 - [x] T2 Panic hook writing a crash log (Windows `%LOCALAPPDATA%\nxgterm`,
   others the state/cache dir) with a visible message on Windows + tests
-- [ ] T2b T2 review follow-ups (advisory): elevation relaunch failure shown as a
+- [x] T2b T2 review follow-ups (advisory): elevation relaunch failure shown as a
   crash (main.rs:79) should be a plain error; throttle repeated parser panics in
   one pane (log churn, UI stall); rotation failure must not drop the entry;
   remove unused recovery flag; assert scrollback wiring in tests
@@ -164,6 +164,20 @@ bounded scrollback, ~1,040 tests.
   RED observed (3 core tests, 7 hold tests: missing API) then GREEN, plus
   an app-level test with real terminals; fmt, clippy `-D warnings` (also
   x86_64-pc-windows-gnu), `cargo test --workspace` (1064) pass.
+- 2026-10-20: T2b done (delegated writer). A failed elevated relaunch
+  shows `crash::error` ("nxgterm could not start: ..."), nothing logged, no
+  "crashed". `crash::Recoveries` per pane: the 3rd parser panic within 10 s
+  stops the pane instead of resetting it (fresh terminal with a "kept
+  failing and was stopped; close it" notice; output drained unparsed so the
+  reader never blocks; input dropped so nothing is typed blind). Stop was
+  chosen over close so the failure stays visible and the last pane does not
+  silently end the window. Only a pane's first panic logs a backtrace
+  (thread-local `with_brief_reports` read by the hook). `append_bounded`
+  appends even when the rotation fails. The ignored `advance_guarded` bool
+  became a `Guarded` outcome that `Session::output` uses. Tests assert the
+  scrollback limit of the fresh terminal. RED observed (compile: missing
+  API; runtime: rotation test) then GREEN; fmt, clippy `-D warnings` (also
+  x86_64-pc-windows-gnu), `cargo test --workspace` (1071) pass.
 
 ## Delivery
 

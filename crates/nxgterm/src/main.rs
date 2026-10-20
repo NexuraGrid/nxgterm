@@ -76,8 +76,9 @@ fn run_command() -> ExitCode {
                 let relaunch =
                     elevation::relaunch_elevated(config.as_deref(), working_directory.as_ref());
                 if let Err(error) = relaunch {
+                    // No crash: the relaunch was refused or failed.
                     eprintln!("nxgterm: {error}");
-                    crash::fatal(&error.to_string());
+                    crash::error(&error.to_string());
                     return ExitCode::FAILURE;
                 }
                 return ExitCode::SUCCESS;

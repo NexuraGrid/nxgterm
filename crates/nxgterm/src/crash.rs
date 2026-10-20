@@ -9,6 +9,8 @@
 
 use std::any::Any;
 use std::backtrace::Backtrace;
+use std::cell::Cell;
+use std::collections::VecDeque;
 use std::env;
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
@@ -18,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::OnceLock;
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nxg_config::Platform;
 
@@ -30,6 +32,19 @@ const FILE: &str = "crash.log";
 
 /// Where the log goes, set once by [`install`].
 static LOG_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Panics of one pane within [`STOP_WINDOW`] after which it is stopped
+/// instead of reset again.
+const STOP_AFTER: usize = 3;
+
+/// See [`STOP_AFTER`].
+const STOP_WINDOW: Duration = Duration::from_secs(10);
+
+thread_local! {
+    /// Panics on this thread are logged without a backtrace (see
+    /// [`with_brief_reports`]).
+    static BRIEF: Cell<bool> = const { Cell::new(false) };
+}
 
 /// Operating systems with different log locations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,7 +125,8 @@ fn format(entry: &Entry<'_>) -> String {
 
 /// Appends `text` to the file at `path`, creating its directory; first
 /// moves a log that would grow past `limit` bytes to `<path>.old`,
-/// replacing the previous one, so the log stays bounded.
+/// replacing the previous one, so the log stays bounded. A rotation that
+/// fails still appends: the entry matters more than the bound.
 fn append_bounded(path: &Path, text: &str, limit: u64) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
@@ -119,7 +135,7 @@ fn append_bounded(path: &Path, text: &str, limit: u64) -> io::Result<()> {
     if size > 0 && size + text.len() as u64 > limit {
         let mut old = path.as_os_str().to_owned();
         old.push(".old");
-        fs::rename(path, old)?;
+        let _ = fs::rename(path, old);
     }
     OpenOptions::new()
         .create(true)
@@ -153,8 +169,74 @@ fn log_panic(info: &PanicHookInfo<'_>) {
         thread: Some(current.name().unwrap_or("<unnamed>")),
         message: &message,
         location: info.location().map(ToString::to_string),
-        backtrace: Some(Backtrace::force_capture().to_string()),
+        backtrace: (!is_brief()).then(|| Backtrace::force_capture().to_string()),
     });
+}
+
+/// Runs `f` with panics on this thread logged without a backtrace when
+/// `brief`: a pane that panicked once does not fill the log with the same
+/// trace again.
+pub fn with_brief_reports<R>(brief: bool, f: impl FnOnce() -> R) -> R {
+    let before = BRIEF.replace(brief);
+    // Restored even when `f` panics, as the caller catches it.
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BRIEF.set(self.0);
+        }
+    }
+    let _restore = Restore(before);
+    f()
+}
+
+fn is_brief() -> bool {
+    BRIEF.get()
+}
+
+/// What to do with a pane whose parser panicked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recovery {
+    /// Reset its terminal and go on.
+    Reset,
+    /// It keeps panicking: stop it, so it does not churn the log and stall
+    /// the window.
+    Stop,
+}
+
+/// The recent parser panics of one pane.
+#[derive(Debug, Default)]
+pub struct Recoveries {
+    /// When each panic within [`STOP_WINDOW`] happened.
+    recent: VecDeque<Instant>,
+    /// Panics so far.
+    total: u64,
+}
+
+impl Recoveries {
+    /// Notes a panic at `now`: the [`STOP_AFTER`]th within [`STOP_WINDOW`]
+    /// stops the pane.
+    pub fn record(&mut self, now: Instant) -> Recovery {
+        self.total += 1;
+        while self
+            .recent
+            .front()
+            .is_some_and(|&at| now.saturating_duration_since(at) >= STOP_WINDOW)
+        {
+            self.recent.pop_front();
+        }
+        self.recent.push_back(now);
+        if self.recent.len() >= STOP_AFTER {
+            Recovery::Stop
+        } else {
+            Recovery::Reset
+        }
+    }
+
+    /// Whether the next panic is logged briefly: only the first one of a
+    /// pane carries a backtrace.
+    pub fn brief(&self) -> bool {
+        self.total > 0
+    }
 }
 
 /// Logs a fatal error that ends the process (e.g. no renderer could start)
@@ -169,6 +251,16 @@ pub fn fatal(message: &str) {
         backtrace: None,
     });
     show(&format!("nxgterm could not continue:\n\n{message}"));
+}
+
+/// Shows an error that ends the process but is no crash (e.g. the
+/// elevated relaunch failed) on Windows; nothing is logged.
+pub fn error(message: &str) {
+    message_box(&error_text(message));
+}
+
+fn error_text(message: &str) -> String {
+    format!("nxgterm could not start:\n\n{message}")
 }
 
 /// Runs `main`; a panic escaping it (already logged by the hook) is shown
@@ -190,6 +282,16 @@ pub fn recovered_notice() -> String {
         ),
         None => "\r\n[nxgterm: recovered from an internal error]\r\n".to_owned(),
     }
+}
+
+/// The notice written into a pane stopped after repeated panics: its
+/// output is no longer shown and keys no longer reach it.
+pub fn stopped_notice() -> String {
+    let see = match log_path_in_use() {
+        Some(path) => format!(", see {}", path.display()),
+        None => String::new(),
+    };
+    format!("\r\n[nxgterm: this pane kept failing and was stopped{see}; close it to go on]\r\n")
 }
 
 /// Appends `entry` to the log; errors are ignored, as there is nowhere left
@@ -249,6 +351,8 @@ fn message_box(_text: &str) {}
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
 
     fn env(vars: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<OsString> {
@@ -393,5 +497,54 @@ mod tests {
             "second\n",
             "only the previous log is kept"
         );
+    }
+
+    #[test]
+    fn a_failed_rotation_still_appends_the_entry() {
+        let dir = TempDir::new("rotate-fails");
+        let path = dir.0.join("crash.log");
+        // A non-empty directory in the way of `crash.log.old`.
+        fs::create_dir_all(dir.0.join("crash.log.old").join("x")).unwrap();
+        append_bounded(&path, "first\n", 10).unwrap();
+        append_bounded(&path, "second\n", 10).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "first\nsecond\n");
+    }
+
+    #[test]
+    fn a_plain_error_is_not_reported_as_a_crash() {
+        let text = error_text("the elevation was cancelled");
+        assert!(text.contains("the elevation was cancelled"), "{text:?}");
+        assert!(!text.to_lowercase().contains("crash"), "{text:?}");
+        assert!(!text.contains("report"), "{text:?}");
+    }
+
+    #[test]
+    fn repeated_panics_stop_recovery_within_the_window() {
+        let base = Instant::now();
+        let at = |s: u64| base + Duration::from_secs(s);
+        let mut recoveries = Recoveries::default();
+        assert!(!recoveries.brief(), "the first panic is reported in full");
+        assert_eq!(recoveries.record(at(0)), Recovery::Reset);
+        assert!(recoveries.brief(), "later ones briefly");
+        assert_eq!(recoveries.record(at(1)), Recovery::Reset);
+        assert_eq!(recoveries.record(at(2)), Recovery::Stop);
+    }
+
+    #[test]
+    fn panics_spread_out_keep_recovering() {
+        let base = Instant::now();
+        let mut recoveries = Recoveries::default();
+        for s in [0, 6, 12, 18, 24, 30] {
+            let now = base + Duration::from_secs(s);
+            assert_eq!(recoveries.record(now), Recovery::Reset, "at {s} s");
+        }
+    }
+
+    #[test]
+    fn brief_reports_apply_only_inside_the_call() {
+        assert!(!is_brief());
+        assert!(with_brief_reports(true, is_brief));
+        assert!(!with_brief_reports(false, is_brief));
+        assert!(!is_brief(), "restored after");
     }
 }

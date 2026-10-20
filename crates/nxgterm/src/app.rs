@@ -33,6 +33,7 @@ use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 use crate::bindings::Action;
 use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
+use crate::crash::{self, Recoveries, Recovery};
 use crate::inbox::{Consumer, Producer, Push};
 use crate::mouse::{Capture, Clicks, Drag, Pointer, ViewportScroll, Wheel, WheelAction};
 use crate::panes::{Axis, DividerPath, PaneId, SplitError};
@@ -74,6 +75,12 @@ struct Pane {
     resize: Throttle<WinSize>,
     /// The output of the child, filled by its reader thread.
     inbox: Consumer,
+    /// Parser panics of this pane, to stop one that keeps panicking.
+    recoveries: Recoveries,
+    /// The pane panicked too often and was stopped: its output is drained
+    /// unparsed (so the reader never blocks) and input is dropped, so
+    /// nothing is typed blind; the user closes it.
+    stopped: bool,
 }
 
 /// Everything that exists once the window is up.
@@ -1050,8 +1057,11 @@ impl Pane {
         self.terminal.title().unwrap_or(&self.title)
     }
 
-    /// Writes input for the child.
+    /// Writes input for the child, unless the pane was stopped.
     fn send(&mut self, bytes: &[u8]) {
+        if self.stopped {
+            return;
+        }
         if let Err(error) = self.pty.write_all(bytes) {
             eprintln!("nxgterm: pty write failed: {error}");
         }
@@ -1111,12 +1121,20 @@ impl Session {
             return false;
         };
         let (bytes, more) = pane.inbox.drain(inbox::BUDGET);
-        if bytes.is_empty() {
+        if bytes.is_empty() || pane.stopped {
             return more;
         }
-        advance_guarded(&mut pane.terminal, scrollback, |terminal| {
-            terminal.advance(bytes);
-        });
+        let now = Instant::now();
+        let outcome = advance_guarded(
+            &mut pane.terminal,
+            scrollback,
+            &mut pane.recoveries,
+            now,
+            |terminal| terminal.advance(bytes),
+        );
+        if outcome == Guarded::Stopped {
+            pane.stopped = true;
+        }
         let responses = pane.terminal.take_responses();
         if !responses.is_empty() {
             pane.send(&responses);
@@ -1129,8 +1147,7 @@ impl Session {
         let frame_ended = pane.terminal.take_frame_ended();
         let redraw = if visible {
             let synchronized = pane.terminal.synchronized();
-            self.holds
-                .output(id, synchronized, frame_ended, Instant::now())
+            self.holds.output(id, synchronized, frame_ended, now)
         } else {
             self.holds.release(id);
             // A new title shows on the tab bar even for a pane off screen.
@@ -2012,29 +2029,54 @@ fn spawn_pane(
         ),
         resize: Throttle::default(),
         inbox,
+        recoveries: Recoveries::default(),
+        stopped: false,
     })
 }
 
-/// Runs `feed` on `terminal`. A panic in it (already logged by the crash
-/// hook) leaves the terminal in an unknown state, so it is replaced by a
-/// fresh one of the same size and cell pixels with the `scrollback` limit,
-/// showing a notice; the other panes and tabs live on. Returns whether it
-/// had to recover.
+/// How [`advance_guarded`] went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Guarded {
+    Fine,
+    /// It panicked; the terminal was reset.
+    Reset,
+    /// It panicked once too often (see [`Recoveries`]); the terminal only
+    /// shows that the pane was stopped.
+    Stopped,
+}
+
+/// Runs `feed` on `terminal`. A panic in it (logged by the crash hook, with
+/// a backtrace only for the first panic of the pane) leaves the terminal in
+/// an unknown state, so it is replaced by a fresh one of the same size and
+/// cell pixels with the `scrollback` limit, showing a notice; the other
+/// panes and tabs live on. Panics are noted in `recoveries` at `now`; past
+/// their limit the notice says the pane was stopped, and the caller stops
+/// feeding it.
 fn advance_guarded(
     terminal: &mut Terminal,
     scrollback: usize,
+    recoveries: &mut Recoveries,
+    now: Instant,
     feed: impl FnOnce(&mut Terminal),
-) -> bool {
-    let panicked = panic::catch_unwind(AssertUnwindSafe(|| feed(terminal))).is_err();
-    if panicked {
-        let cell = terminal.cell_pixels();
-        let mut fresh = Terminal::new(terminal.size());
-        fresh.set_cell_pixels(cell.width, cell.height);
-        fresh.set_scrollback_limit(scrollback);
-        fresh.advance(crate::crash::recovered_notice().as_bytes());
-        *terminal = fresh;
+) -> Guarded {
+    let brief = recoveries.brief();
+    let panicked = crash::with_brief_reports(brief, || {
+        panic::catch_unwind(AssertUnwindSafe(|| feed(terminal))).is_err()
+    });
+    if !panicked {
+        return Guarded::Fine;
     }
-    panicked
+    let (outcome, notice) = match recoveries.record(now) {
+        Recovery::Reset => (Guarded::Reset, crash::recovered_notice()),
+        Recovery::Stop => (Guarded::Stopped, crash::stopped_notice()),
+    };
+    let cell = terminal.cell_pixels();
+    let mut fresh = Terminal::new(terminal.size());
+    fresh.set_cell_pixels(cell.width, cell.height);
+    fresh.set_scrollback_limit(scrollback);
+    fresh.advance(notice.as_bytes());
+    *terminal = fresh;
+    outcome
 }
 
 /// Writes the clipboard `requests` of an application (OSC 52), skipping
@@ -2372,6 +2414,8 @@ mod tests {
             title: "sh".into(),
             resize: Throttle::default(),
             inbox: inbox::channel(inbox::CAP).1,
+            recoveries: Recoveries::default(),
+            stopped: false,
         };
         (pane, resizes, written)
     }
@@ -2457,25 +2501,58 @@ mod tests {
         let mut terminal = Terminal::new(size(60, 3));
         terminal.set_cell_pixels(9, 18);
         terminal.advance(b"old\x1b[?1049h\x1b[?2026h");
-        let recovered = advance_guarded(&mut terminal, 5, |terminal| {
+        let mut recoveries = Recoveries::default();
+        let now = Instant::now();
+        let outcome = advance_guarded(&mut terminal, 5, &mut recoveries, now, |terminal| {
             terminal.advance(b"\x1b[1mhalf");
             panic!("parser bug");
         });
-        assert!(recovered);
+        assert_eq!(outcome, Guarded::Reset);
         assert_eq!(terminal.size(), size(60, 3));
         assert_eq!(terminal.cell_pixels(), CellPixels::new(9, 18));
         assert!(!terminal.synchronized(), "a fresh terminal holds no frame");
-        let screen: String = (0..3)
-            .flat_map(|row| terminal.row(row).iter().map(|cell| cell.ch))
-            .collect();
+        let screen = screen_text(&terminal, 3);
         assert!(
             screen.contains("recovered from an internal error"),
             "{screen:?}"
         );
         assert!(!screen.contains("old") && !screen.contains("half"));
-        assert!(!advance_guarded(&mut terminal, 5, |terminal| {
-            terminal.advance(b"fine");
-        }));
+        let outcome = advance_guarded(&mut terminal, 5, &mut recoveries, now, |terminal| {
+            terminal.advance(&b"line\r\n".repeat(20));
+        });
+        assert_eq!(outcome, Guarded::Fine);
+        assert_eq!(terminal.scrollback_len(), 5, "keeps the scrollback limit");
+    }
+
+    #[test]
+    fn a_pane_that_keeps_panicking_is_stopped() {
+        let mut terminal = Terminal::new(size(60, 3));
+        let mut recoveries = Recoveries::default();
+        let now = Instant::now();
+        let mut panic_once = || {
+            advance_guarded(&mut terminal, 5, &mut recoveries, now, |_| {
+                panic!("parser bug");
+            })
+        };
+        assert_eq!(panic_once(), Guarded::Reset);
+        assert_eq!(panic_once(), Guarded::Reset);
+        assert_eq!(panic_once(), Guarded::Stopped);
+        let screen = screen_text(&terminal, 3);
+        assert!(screen.contains("stopped"), "{screen:?}");
+    }
+
+    #[test]
+    fn a_stopped_pane_parses_and_sends_nothing() {
+        let (mut pane, _, written) = pane(20, 2);
+        pane.stopped = true;
+        pane.send(b"rm -rf\r");
+        assert!(written.lock().unwrap().is_empty(), "no blind input");
+    }
+
+    fn screen_text(terminal: &Terminal, rows: u16) -> String {
+        (0..rows)
+            .flat_map(|row| terminal.row(row).iter().map(|cell| cell.ch))
+            .collect()
     }
 
     /// What [`Session::output`] does with a parsed chunk, for one pane.
