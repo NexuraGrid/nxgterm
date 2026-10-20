@@ -867,8 +867,9 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Output(id) => {
                 if let Some(session) = &mut self.session {
                     let scrollback = self.config.scrollback.lines;
-                    // The rest of a flood waits behind the events queued
-                    // meanwhile (keys, redraws), so Ctrl+C gets through.
+                    // The rest of a flood goes to the backlog, parsed one
+                    // budget per loop round after the queued keys and
+                    // redraws, so Ctrl+C gets through.
                     let clipboard = self.clipboard.as_mut();
                     if session.output(id, clipboard, scrollback, inbox::BUDGET) {
                         defer(&mut session.backlog, id);
@@ -877,9 +878,8 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::Exited(id) => {
                 if let Some(session) = &mut self.session {
-                    // The final output, however long, goes in first.
                     let scrollback = self.config.scrollback.lines;
-                    session.output(id, self.clipboard.as_mut(), scrollback, usize::MAX);
+                    session.output(id, self.clipboard.as_mut(), scrollback, EXIT_BUDGET);
                     session.exited(id);
                     if session.tabs.is_empty() {
                         event_loop.exit();
@@ -1066,11 +1066,59 @@ const MAX_FRAME_RETRIES: u8 = 3;
 /// title bar background toward its foreground.
 const WINDOWS_HOVER: f32 = 0.15;
 
+/// What [`Pane::parse`] did with the pending output.
+#[derive(Debug, PartialEq, Eq)]
+struct Parsed {
+    /// Bytes went through the parser.
+    advanced: bool,
+    /// Bytes remain past the budget.
+    more: bool,
+}
+
+/// The budget when a child exits: its final output, however long, is
+/// parsed before the pane goes.
+const EXIT_BUDGET: usize = usize::MAX;
+
 impl Pane {
     /// What the tab bar and the title bar show for the pane: the title
     /// the child set (OSC 0/2), else the program name.
     fn label(&self) -> &str {
         self.terminal.title().unwrap_or(&self.title)
+    }
+
+    /// Parses up to `budget` pending bytes in one go and answers the
+    /// queries in them. A parser panic resets only this pane (see
+    /// [`advance_guarded`]), whose fresh terminal keeps the `scrollback`
+    /// limit; one that keeps panicking stops it. A stopped pane drains its
+    /// bytes unparsed, so the reader never blocks.
+    fn parse(&mut self, scrollback: usize, budget: usize, now: Instant) -> Parsed {
+        let (bytes, more) = self.inbox.drain(budget);
+        if bytes.is_empty() || self.stopped {
+            self.inbox.trim();
+            return Parsed {
+                advanced: false,
+                more,
+            };
+        }
+        let outcome = advance_guarded(
+            &mut self.terminal,
+            scrollback,
+            &mut self.recoveries,
+            now,
+            |terminal| terminal.advance(bytes),
+        );
+        self.inbox.trim();
+        if outcome == Guarded::Stopped {
+            self.stopped = true;
+        }
+        let responses = self.terminal.take_responses();
+        if !responses.is_empty() {
+            self.send(&responses);
+        }
+        Parsed {
+            advanced: true,
+            more,
+        }
     }
 
     /// Writes input for the child, unless the pane was stopped.
@@ -1124,13 +1172,13 @@ impl Session {
     }
 
     /// Feeds up to `budget` pending bytes of the pane `id` (ignored once it
-    /// is closed) in one go, answering the queries in them and
-    /// setting the clipboard they ask for (OSC 52, on screen or not); the
-    /// window redraws only if the pane is on screen, and not while its app
-    /// is mid-frame (synchronized output). Returns whether bytes remain: the
-    /// caller then adds the pane to the backlog, as the reader posts no
-    /// wakeup until the inbox runs empty. A parser panic resets only this pane (see [`advance_guarded`]),
-    /// whose fresh terminal keeps the `scrollback` limit.
+    /// is closed) in one go (see [`Pane::parse`]), setting the clipboard
+    /// they ask for (OSC 52, on screen or not); the window redraws only if
+    /// the pane is on screen, and not while its app is mid-frame
+    /// (synchronized output). A stopped pane drains its bytes unparsed and
+    /// draws nothing. Returns whether bytes remain: the caller then adds the
+    /// pane to the backlog, as the reader posts no wakeup until the inbox
+    /// runs empty.
     fn output(
         &mut self,
         id: PaneId,
@@ -1142,26 +1190,10 @@ impl Session {
         let Some(pane) = tab::pane_mut(&mut self.tabs, id) else {
             return false;
         };
-        let (bytes, more) = pane.inbox.drain(budget);
-        if bytes.is_empty() || pane.stopped {
-            pane.inbox.trim();
-            return more;
-        }
         let now = Instant::now();
-        let outcome = advance_guarded(
-            &mut pane.terminal,
-            scrollback,
-            &mut pane.recoveries,
-            now,
-            |terminal| terminal.advance(bytes),
-        );
-        pane.inbox.trim();
-        if outcome == Guarded::Stopped {
-            pane.stopped = true;
-        }
-        let responses = pane.terminal.take_responses();
-        if !responses.is_empty() {
-            pane.send(&responses);
+        let Parsed { advanced, more } = pane.parse(scrollback, budget, now);
+        if !advanced {
+            return more;
         }
         set_clipboard(
             clipboard,
@@ -1193,7 +1225,7 @@ impl Session {
         }
     }
 
-    /// Draws the panes whose app held a frame past [`crate::crate::sync::TIMEOUT`]
+    /// Draws the panes whose app held a frame past [`crate::sync::TIMEOUT`]
     /// and ends synchronized output on their terminal, so an app that never
     /// ends its frame is not held back again.
     fn poll_holds(&mut self, now: Instant) {
@@ -2595,11 +2627,66 @@ mod tests {
     }
 
     #[test]
-    fn a_stopped_pane_parses_and_sends_nothing() {
+    fn a_stopped_pane_drops_input() {
         let (mut pane, _, written) = pane(20, 2);
         pane.stopped = true;
         pane.send(b"rm -rf\r");
         assert!(written.lock().unwrap().is_empty(), "no blind input");
+    }
+
+    /// A pane whose inbox is fed by the returned producer.
+    fn fed_pane(cols: u16, rows: u16) -> (Pane, Producer) {
+        let (mut pane, _, _) = pane(cols, rows);
+        let (producer, inbox) = inbox::channel(inbox::CAP);
+        pane.inbox = inbox;
+        (pane, producer)
+    }
+
+    #[test]
+    fn the_exit_drain_parses_all_pending_output() {
+        let (mut pane, producer) = fed_pane(20, 2);
+        producer.push(&vec![b'x'; 3 * inbox::BUDGET]);
+        producer.push(b"\r\nEND");
+        let parsed = pane.parse(5, EXIT_BUDGET, Instant::now());
+        assert_eq!(
+            parsed,
+            Parsed {
+                advanced: true,
+                more: false
+            }
+        );
+        assert!(screen_text(&pane.terminal, 2).contains("END"), "the tail");
+    }
+
+    #[test]
+    fn a_budget_leaves_the_rest_of_a_flood_pending() {
+        let (mut pane, producer) = fed_pane(20, 2);
+        producer.push(&vec![b'x'; 3 * inbox::BUDGET]);
+        let parsed = pane.parse(5, inbox::BUDGET, Instant::now());
+        assert_eq!(
+            parsed,
+            Parsed {
+                advanced: true,
+                more: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_stopped_pane_drains_its_output_unparsed() {
+        let (mut pane, producer) = fed_pane(20, 2);
+        pane.stopped = true;
+        producer.push(b"hello");
+        let parsed = pane.parse(5, inbox::BUDGET, Instant::now());
+        assert_eq!(
+            parsed,
+            Parsed {
+                advanced: false,
+                more: false
+            }
+        );
+        assert!(!screen_text(&pane.terminal, 2).contains("hello"));
+        assert_eq!(pane.inbox.drain(usize::MAX), (&[][..], false), "drained");
     }
 
     fn screen_text(terminal: &Terminal, rows: u16) -> String {

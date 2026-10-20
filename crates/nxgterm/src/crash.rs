@@ -126,16 +126,22 @@ fn format(entry: &Entry<'_>) -> String {
 /// Appends `text` to the file at `path`, creating its directory; first
 /// moves a log that would grow past `limit` bytes to `<path>.old`,
 /// replacing the previous one, so the log stays bounded. A rotation that
-/// fails still appends: the entry matters more than the bound.
+/// fails still appends (the entry matters more than the bound) until the
+/// log would pass twice the limit; then the entry is dropped.
 fn append_bounded(path: &Path, text: &str, limit: u64) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
     let size = fs::metadata(path).map_or(0, |meta| meta.len());
-    if size > 0 && size + text.len() as u64 > limit {
+    let grown = size + text.len() as u64;
+    if size > 0 && grown > limit {
         let mut old = path.as_os_str().to_owned();
         old.push(".old");
-        let _ = fs::rename(path, old);
+        // While the rotation keeps failing the entry is still appended,
+        // but only up to twice the limit, so the log cannot grow forever.
+        if fs::rename(path, old).is_err() && grown > limit.saturating_mul(2) {
+            return Ok(());
+        }
     }
     OpenOptions::new()
         .create(true)
@@ -508,6 +514,19 @@ mod tests {
         append_bounded(&path, "first\n", 10).unwrap();
         append_bounded(&path, "second\n", 10).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "first\nsecond\n");
+    }
+
+    #[test]
+    fn a_log_that_cannot_rotate_stops_growing_at_twice_the_limit() {
+        let dir = TempDir::new("rotate-keeps-failing");
+        let path = dir.0.join("crash.log");
+        fs::create_dir_all(dir.0.join("crash.log.old").join("x")).unwrap();
+        for _ in 0..10 {
+            append_bounded(&path, "entry\n", 10).unwrap();
+        }
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.len() <= 20, "{} bytes", text.len());
+        assert!(text.starts_with("entry\nentry\n"), "earlier entries kept");
     }
 
     #[test]

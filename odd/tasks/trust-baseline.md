@@ -100,7 +100,7 @@ bounded scrollback, ~1,040 tests.
   handling `Exited` (R1/R3/R4 exit-truncates-tail); make the budget re-post
   actually yield to input (R4-repost-may-not-yield); release retained buffer
   capacity when idle (R3-buffer-retention); avoid front-drain memmove
-- [ ] T3c Follow-up review leftovers (advisory, minor): stale flood comment
+- [x] T3c Follow-up review leftovers (advisory, minor): stale flood comment
   (app.rs:872), broken TIMEOUT doc link (app.rs:1196), output doc omits the
   stopped state, misleading test name, tests for Exited full drain and
   stopped-pane drain, cap log growth when rotation keeps failing
@@ -199,6 +199,21 @@ bounded scrollback, ~1,040 tests.
   drain already allowed it; the `Exited` wiring needs a window and is
   untested). fmt, clippy `-D warnings` (also x86_64-pc-windows-gnu),
   `cargo test --workspace` (1078) pass.
+
+- 2026-10-20: T3c done (delegated (writer trigger: 2+ non-trivial files)).
+  Flood comment now names the backlog; `crate::sync::TIMEOUT` doc link
+  fixed; the pane-side half of `Session::output` became `Pane::parse`
+  (window-free) returning `Parsed { advanced, more }`, and its docs and
+  `Session::output`'s cover the stopped state; `Exited` uses
+  `EXIT_BUDGET` (`usize::MAX`). New tests: exit drain parses a 3 MiB
+  flood plus its tail in one call, a budget leaves the rest pending, a
+  stopped pane drains unparsed; `a_stopped_pane_parses_and_sends_nothing`
+  renamed `a_stopped_pane_drops_input`. `append_bounded` drops an entry
+  once a failed rotation would let the log pass 2x the limit. RED
+  observed (compile: missing `Pane::parse`, `Parsed`, `EXIT_BUDGET`;
+  runtime: log grew to 60 bytes with limit 10) then GREEN; fmt, clippy
+  `-D warnings` (also x86_64-pc-windows-gnu), `cargo test --workspace`
+  (1082) pass.
 
 ## Delivery
 
