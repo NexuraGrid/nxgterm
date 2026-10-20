@@ -33,8 +33,11 @@ use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 use crate::bindings::Action;
 use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
+use crate::crash::{self, Recoveries, Recovery};
+use crate::inbox::{Consumer, Producer, Push};
 use crate::mouse::{Capture, Clicks, Drag, Pointer, ViewportScroll, Wheel, WheelAction};
 use crate::panes::{Axis, DividerPath, PaneId, SplitError};
+use crate::sync::Holds;
 use crate::tab::{self, Exit, PaneCommand, PaneIds, Tab, Under};
 use crate::tabs::{TabId, Tabs};
 use crate::throttle::Throttle;
@@ -42,15 +45,15 @@ use crate::title_bar::{self, Button, ButtonColors, Chrome, Rect, Region};
 use crate::watch::ConfigWatcher;
 use crate::wayland_drop::DropTarget;
 use crate::{
-    appearance, bindings, choice, clipboard, dividers, elevation, icon, keys, mouse, reload,
+    appearance, bindings, choice, clipboard, dividers, elevation, icon, inbox, keys, mouse, reload,
     tab_bar,
 };
 
 /// Events posted to the event loop from background threads.
 #[derive(Debug)]
 pub enum UserEvent {
-    /// A chunk of output from the child of a pane.
-    Output(PaneId, Vec<u8>),
+    /// Output from the child of a pane is waiting in its inbox.
+    Output(PaneId),
     /// The child of a pane exited or its output stream closed.
     Exited(PaneId),
     /// The config file changed on disk.
@@ -70,6 +73,14 @@ struct Pane {
     title: String,
     /// Sizes the pty has not been told yet while a divider is dragged.
     resize: Throttle<WinSize>,
+    /// The output of the child, filled by its reader thread.
+    inbox: Consumer,
+    /// Parser panics of this pane, to stop one that keeps panicking.
+    recoveries: Recoveries,
+    /// The pane panicked too often and was stopped: its output is drained
+    /// unparsed (so the reader never blocks) and input is dropped, so
+    /// nothing is typed blind; the user closes it.
+    stopped: bool,
 }
 
 /// Everything that exists once the window is up.
@@ -143,6 +154,12 @@ struct Session {
     palette: Option<CommandPalette>,
     /// Left-button presses, for double and triple clicks.
     clicks: Clicks,
+    /// The redraws held while apps on screen are mid-frame (mode 2026),
+    /// per pane.
+    holds: Holds<PaneId>,
+    /// Panes with output left after a drain's budget, parsed further in
+    /// `about_to_wait` (see there).
+    backlog: Vec<PaneId>,
 }
 
 pub struct App {
@@ -283,6 +300,8 @@ impl App {
             bar_pointer: None,
             palette: None,
             clicks: Clicks::default(),
+            holds: Holds::default(),
+            backlog: Vec::new(),
         };
         session.open_tab(config, self.start_dir.as_deref(), &self.proxy)?;
         if show_after_first_frame {
@@ -818,28 +837,49 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    /// Sends the pty sizes that waited out their interval and sleeps until
-    /// the next one is due.
+    /// Parses one more budget of the output a flood left (see below),
+    /// sends the pty sizes that waited out their interval, draws a frame
+    /// held too long by synchronized output, and sleeps until the next of
+    /// them is due.
+    ///
+    /// The rest of a flood is parsed here, not by re-posting
+    /// [`UserEvent::Output`]: on Windows the proxy posts a thread message,
+    /// and Win32 hands out posted messages before input and `WM_PAINT`, so
+    /// a re-post loop could starve keys and redraws. This runs once the
+    /// queued events were handled; while bytes remain the loop polls, so
+    /// every round handles new input and redraws, then one budget.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let Some(session) = &mut self.session else {
             return;
         };
-        session.poll_resizes(Instant::now());
-        event_loop.set_control_flow(match session.next_resize() {
-            Some(due) => ControlFlow::WaitUntil(due),
-            None => ControlFlow::Wait,
-        });
+        session.poll_backlog(self.clipboard.as_mut(), self.config.scrollback.lines);
+        let now = Instant::now();
+        session.poll_resizes(now);
+        session.poll_holds(now);
+        event_loop.set_control_flow(control_flow(
+            !session.backlog.is_empty(),
+            [session.next_resize(), session.holds.deadline()],
+        ));
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::Output(id, bytes) => {
+            UserEvent::Output(id) => {
                 if let Some(session) = &mut self.session {
-                    session.output(id, &bytes, self.clipboard.as_mut());
+                    let scrollback = self.config.scrollback.lines;
+                    // The rest of a flood goes to the backlog, parsed one
+                    // budget per loop round after the queued keys and
+                    // redraws, so Ctrl+C gets through.
+                    let clipboard = self.clipboard.as_mut();
+                    if session.output(id, clipboard, scrollback, inbox::BUDGET) {
+                        defer(&mut session.backlog, id);
+                    }
                 }
             }
             UserEvent::Exited(id) => {
                 if let Some(session) = &mut self.session {
+                    let scrollback = self.config.scrollback.lines;
+                    session.output(id, self.clipboard.as_mut(), scrollback, EXIT_BUDGET);
                     session.exited(id);
                     if session.tabs.is_empty() {
                         event_loop.exit();
@@ -1026,6 +1066,19 @@ const MAX_FRAME_RETRIES: u8 = 3;
 /// title bar background toward its foreground.
 const WINDOWS_HOVER: f32 = 0.15;
 
+/// What [`Pane::parse`] did with the pending output.
+#[derive(Debug, PartialEq, Eq)]
+struct Parsed {
+    /// Bytes went through the parser.
+    advanced: bool,
+    /// Bytes remain past the budget.
+    more: bool,
+}
+
+/// The budget when a child exits: its final output, however long, is
+/// parsed before the pane goes.
+const EXIT_BUDGET: usize = usize::MAX;
+
 impl Pane {
     /// What the tab bar and the title bar show for the pane: the title
     /// the child set (OSC 0/2), else the program name.
@@ -1033,8 +1086,46 @@ impl Pane {
         self.terminal.title().unwrap_or(&self.title)
     }
 
-    /// Writes input for the child.
+    /// Parses up to `budget` pending bytes in one go and answers the
+    /// queries in them. A parser panic resets only this pane (see
+    /// [`advance_guarded`]), whose fresh terminal keeps the `scrollback`
+    /// limit; one that keeps panicking stops it. A stopped pane drains its
+    /// bytes unparsed, so the reader never blocks.
+    fn parse(&mut self, scrollback: usize, budget: usize, now: Instant) -> Parsed {
+        let (bytes, more) = self.inbox.drain(budget);
+        if bytes.is_empty() || self.stopped {
+            self.inbox.trim();
+            return Parsed {
+                advanced: false,
+                more,
+            };
+        }
+        let outcome = advance_guarded(
+            &mut self.terminal,
+            scrollback,
+            &mut self.recoveries,
+            now,
+            |terminal| terminal.advance(bytes),
+        );
+        self.inbox.trim();
+        if outcome == Guarded::Stopped {
+            self.stopped = true;
+        }
+        let responses = self.terminal.take_responses();
+        if !responses.is_empty() {
+            self.send(&responses);
+        }
+        Parsed {
+            advanced: true,
+            more,
+        }
+    }
+
+    /// Writes input for the child, unless the pane was stopped.
     fn send(&mut self, bytes: &[u8]) {
+        if self.stopped {
+            return;
+        }
         if let Err(error) = self.pty.write_all(bytes) {
             eprintln!("nxgterm: pty write failed: {error}");
         }
@@ -1080,33 +1171,81 @@ impl Session {
         }
     }
 
-    /// Feeds output to the pane `id` (ignored once it is closed), answering
-    /// the queries in it and setting the clipboard it asks for (OSC 52, on
-    /// screen or not); the window redraws only if the pane is on screen.
-    fn output(&mut self, id: PaneId, bytes: &[u8], clipboard: &mut dyn Clipboard) {
+    /// Feeds up to `budget` pending bytes of the pane `id` (ignored once it
+    /// is closed) in one go (see [`Pane::parse`]), setting the clipboard
+    /// they ask for (OSC 52, on screen or not); the window redraws only if
+    /// the pane is on screen, and not while its app is mid-frame
+    /// (synchronized output). A stopped pane drains its bytes unparsed and
+    /// draws nothing. Returns whether bytes remain: the caller then adds the
+    /// pane to the backlog, as the reader posts no wakeup until the inbox
+    /// runs empty.
+    fn output(
+        &mut self,
+        id: PaneId,
+        clipboard: &mut dyn Clipboard,
+        scrollback: usize,
+        budget: usize,
+    ) -> bool {
         let visible = tab::shows(&self.tabs, id);
         let Some(pane) = tab::pane_mut(&mut self.tabs, id) else {
-            return;
+            return false;
         };
-        pane.terminal.advance(bytes);
-        let responses = pane.terminal.take_responses();
-        if !responses.is_empty() {
-            pane.send(&responses);
+        let now = Instant::now();
+        let Parsed { advanced, more } = pane.parse(scrollback, budget, now);
+        if !advanced {
+            return more;
         }
         set_clipboard(
             clipboard,
             pane.terminal.take_clipboard_requests(),
             HAS_PRIMARY,
         );
-        // A new title shows on the tab bar even for a pane off screen.
-        if visible || pane.terminal.take_title_changed() {
+        let frame_ended = pane.terminal.take_frame_ended();
+        let redraw = if visible {
+            let synchronized = pane.terminal.synchronized();
+            self.holds.output(id, synchronized, frame_ended, now)
+        } else {
+            self.holds.release(id);
+            // A new title shows on the tab bar even for a pane off screen.
+            pane.terminal.take_title_changed()
+        };
+        if redraw {
             self.window.request_redraw();
         }
+        more
+    }
+
+    /// Parses one more [`inbox::BUDGET`] of each pane in the backlog,
+    /// keeping those with bytes still left.
+    fn poll_backlog(&mut self, clipboard: &mut dyn Clipboard, scrollback: usize) {
+        for id in std::mem::take(&mut self.backlog) {
+            if self.output(id, clipboard, scrollback, inbox::BUDGET) {
+                defer(&mut self.backlog, id);
+            }
+        }
+    }
+
+    /// Draws the panes whose app held a frame past [`crate::sync::TIMEOUT`]
+    /// and ends synchronized output on their terminal, so an app that never
+    /// ends its frame is not held back again.
+    fn poll_holds(&mut self, now: Instant) {
+        let expired = self.holds.expired(now);
+        if expired.is_empty() {
+            return;
+        }
+        for id in expired {
+            if let Some(pane) = tab::pane_mut(&mut self.tabs, id) {
+                pane.terminal.end_synchronized();
+            }
+        }
+        self.window.request_redraw();
     }
 
     /// The child of pane `id` ended: the pane leaves its tab, which closes
     /// with its last pane. With no tab left the caller exits.
     fn exited(&mut self, id: PaneId) {
+        self.holds.release(id);
+        self.backlog.retain(|&pane| pane != id);
         if tab::exit(&mut self.tabs, id) != Exit::Stale {
             self.tab_switched();
         }
@@ -1373,6 +1512,8 @@ impl Session {
     /// held button (and the pointer on a bar that went away), refits the
     /// grid and redraws.
     fn tab_switched(&mut self) {
+        // The panes on screen changed; the redraw below shows them.
+        self.holds.clear();
         self.pointer.reset();
         self.set_divider_hover(None);
         if !self.bar_visible(self.tabs.len()) {
@@ -1935,7 +2076,8 @@ fn spawn_pane(
         eprintln!("nxgterm: conpty {host}");
     }
     let pty = pty.backend;
-    spawn_reader(id, pty.reader, proxy.clone());
+    let (producer, inbox) = inbox::channel(inbox::CAP);
+    spawn_reader(id, pty.reader, producer, proxy.clone());
     spawn_waiter(id, pty.child, proxy.clone());
 
     let mut terminal = Terminal::new(win_size.cells);
@@ -1953,7 +2095,74 @@ fn spawn_pane(
             cfg!(windows),
         ),
         resize: Throttle::default(),
+        inbox,
+        recoveries: Recoveries::default(),
+        stopped: false,
     })
+}
+
+/// Adds pane `id` to the `backlog` of panes with output left, once.
+fn defer(backlog: &mut Vec<PaneId>, id: PaneId) {
+    if !backlog.contains(&id) {
+        backlog.push(id);
+    }
+}
+
+/// How the event loop waits: it polls while a pane has output left
+/// (`backlogged`), else sleeps until the earliest `due` time, if any.
+fn control_flow(backlogged: bool, due: impl IntoIterator<Item = Option<Instant>>) -> ControlFlow {
+    if backlogged {
+        return ControlFlow::Poll;
+    }
+    match due.into_iter().flatten().min() {
+        Some(due) => ControlFlow::WaitUntil(due),
+        None => ControlFlow::Wait,
+    }
+}
+
+/// How [`advance_guarded`] went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Guarded {
+    Fine,
+    /// It panicked; the terminal was reset.
+    Reset,
+    /// It panicked once too often (see [`Recoveries`]); the terminal only
+    /// shows that the pane was stopped.
+    Stopped,
+}
+
+/// Runs `feed` on `terminal`. A panic in it (logged by the crash hook, with
+/// a backtrace only for the first panic of the pane) leaves the terminal in
+/// an unknown state, so it is replaced by a fresh one of the same size and
+/// cell pixels with the `scrollback` limit, showing a notice; the other
+/// panes and tabs live on. Panics are noted in `recoveries` at `now`; past
+/// their limit the notice says the pane was stopped, and the caller stops
+/// feeding it.
+fn advance_guarded(
+    terminal: &mut Terminal,
+    scrollback: usize,
+    recoveries: &mut Recoveries,
+    now: Instant,
+    feed: impl FnOnce(&mut Terminal),
+) -> Guarded {
+    let brief = recoveries.brief();
+    let panicked = crash::with_brief_reports(brief, || {
+        panic::catch_unwind(AssertUnwindSafe(|| feed(terminal))).is_err()
+    });
+    if !panicked {
+        return Guarded::Fine;
+    }
+    let (outcome, notice) = match recoveries.record(now) {
+        Recovery::Reset => (Guarded::Reset, crash::recovered_notice()),
+        Recovery::Stop => (Guarded::Stopped, crash::stopped_notice()),
+    };
+    let cell = terminal.cell_pixels();
+    let mut fresh = Terminal::new(terminal.size());
+    fresh.set_cell_pixels(cell.width, cell.height);
+    fresh.set_scrollback_limit(scrollback);
+    fresh.advance(notice.as_bytes());
+    *terminal = fresh;
+    outcome
 }
 
 /// Writes the clipboard `requests` of an application (OSC 52), skipping
@@ -2189,24 +2398,33 @@ impl WindowRenderer for Detached {
     }
 }
 
-/// Drains the output of pane `id` on a background thread until EOF or
-/// error.
-fn spawn_reader(id: PaneId, mut reader: Box<dyn Read + Send>, proxy: EventLoopProxy<UserEvent>) {
+/// Drains the output of pane `id` into its inbox on a background thread
+/// until EOF or error, posting a wakeup only when the inbox had none
+/// pending. It waits while the inbox is full and stops once the pane is
+/// dropped.
+fn spawn_reader(
+    id: PaneId,
+    mut reader: Box<dyn Read + Send>,
+    inbox: Producer,
+    proxy: EventLoopProxy<UserEvent>,
+) {
     thread::spawn(move || {
         let mut buf = vec![0u8; 64 * 1024];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if proxy
-                        .send_event(UserEvent::Output(id, buf[..n].to_vec()))
-                        .is_err()
-                    {
-                        return; // Event loop is gone.
+                Ok(n) => match inbox.push(&buf[..n]) {
+                    Push::Wake => {
+                        if proxy.send_event(UserEvent::Output(id)).is_err() {
+                            return; // Event loop is gone.
+                        }
                     }
-                }
+                    Push::Queued => {}
+                    Push::Closed => return, // Pane is gone.
+                },
             }
         }
+        // The pane parses all of its pending output before it closes.
         let _ = proxy.send_event(UserEvent::Exited(id));
     });
 }
@@ -2280,6 +2498,9 @@ mod tests {
             }),
             title: "sh".into(),
             resize: Throttle::default(),
+            inbox: inbox::channel(inbox::CAP).1,
+            recoveries: Recoveries::default(),
+            stopped: false,
         };
         (pane, resizes, written)
     }
@@ -2358,6 +2579,175 @@ mod tests {
         let mut clipboard = RecordingClipboard::default();
         set_clipboard(&mut clipboard, requests, false);
         assert_eq!(clipboard.0, [(ClipboardKind::Clipboard, "hi".to_string())]);
+    }
+
+    #[test]
+    fn a_parser_panic_resets_only_the_terminal_and_says_so() {
+        let mut terminal = Terminal::new(size(60, 3));
+        terminal.set_cell_pixels(9, 18);
+        terminal.advance(b"old\x1b[?1049h\x1b[?2026h");
+        let mut recoveries = Recoveries::default();
+        let now = Instant::now();
+        let outcome = advance_guarded(&mut terminal, 5, &mut recoveries, now, |terminal| {
+            terminal.advance(b"\x1b[1mhalf");
+            panic!("parser bug");
+        });
+        assert_eq!(outcome, Guarded::Reset);
+        assert_eq!(terminal.size(), size(60, 3));
+        assert_eq!(terminal.cell_pixels(), CellPixels::new(9, 18));
+        assert!(!terminal.synchronized(), "a fresh terminal holds no frame");
+        let screen = screen_text(&terminal, 3);
+        assert!(
+            screen.contains("recovered from an internal error"),
+            "{screen:?}"
+        );
+        assert!(!screen.contains("old") && !screen.contains("half"));
+        let outcome = advance_guarded(&mut terminal, 5, &mut recoveries, now, |terminal| {
+            terminal.advance(&b"line\r\n".repeat(20));
+        });
+        assert_eq!(outcome, Guarded::Fine);
+        assert_eq!(terminal.scrollback_len(), 5, "keeps the scrollback limit");
+    }
+
+    #[test]
+    fn a_pane_that_keeps_panicking_is_stopped() {
+        let mut terminal = Terminal::new(size(60, 3));
+        let mut recoveries = Recoveries::default();
+        let now = Instant::now();
+        let mut panic_once = || {
+            advance_guarded(&mut terminal, 5, &mut recoveries, now, |_| {
+                panic!("parser bug");
+            })
+        };
+        assert_eq!(panic_once(), Guarded::Reset);
+        assert_eq!(panic_once(), Guarded::Reset);
+        assert_eq!(panic_once(), Guarded::Stopped);
+        let screen = screen_text(&terminal, 3);
+        assert!(screen.contains("stopped"), "{screen:?}");
+    }
+
+    #[test]
+    fn a_stopped_pane_drops_input() {
+        let (mut pane, _, written) = pane(20, 2);
+        pane.stopped = true;
+        pane.send(b"rm -rf\r");
+        assert!(written.lock().unwrap().is_empty(), "no blind input");
+    }
+
+    /// A pane whose inbox is fed by the returned producer.
+    fn fed_pane(cols: u16, rows: u16) -> (Pane, Producer) {
+        let (mut pane, _, _) = pane(cols, rows);
+        let (producer, inbox) = inbox::channel(inbox::CAP);
+        pane.inbox = inbox;
+        (pane, producer)
+    }
+
+    #[test]
+    fn the_exit_drain_parses_all_pending_output() {
+        let (mut pane, producer) = fed_pane(20, 2);
+        producer.push(&vec![b'x'; 3 * inbox::BUDGET]);
+        producer.push(b"\r\nEND");
+        let parsed = pane.parse(5, EXIT_BUDGET, Instant::now());
+        assert_eq!(
+            parsed,
+            Parsed {
+                advanced: true,
+                more: false
+            }
+        );
+        assert!(screen_text(&pane.terminal, 2).contains("END"), "the tail");
+    }
+
+    #[test]
+    fn a_budget_leaves_the_rest_of_a_flood_pending() {
+        let (mut pane, producer) = fed_pane(20, 2);
+        producer.push(&vec![b'x'; 3 * inbox::BUDGET]);
+        let parsed = pane.parse(5, inbox::BUDGET, Instant::now());
+        assert_eq!(
+            parsed,
+            Parsed {
+                advanced: true,
+                more: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_stopped_pane_drains_its_output_unparsed() {
+        let (mut pane, producer) = fed_pane(20, 2);
+        pane.stopped = true;
+        producer.push(b"hello");
+        let parsed = pane.parse(5, inbox::BUDGET, Instant::now());
+        assert_eq!(
+            parsed,
+            Parsed {
+                advanced: false,
+                more: false
+            }
+        );
+        assert!(!screen_text(&pane.terminal, 2).contains("hello"));
+        assert_eq!(pane.inbox.drain(usize::MAX), (&[][..], false), "drained");
+    }
+
+    fn screen_text(terminal: &Terminal, rows: u16) -> String {
+        (0..rows)
+            .flat_map(|row| terminal.row(row).iter().map(|cell| cell.ch))
+            .collect()
+    }
+
+    /// What [`Session::output`] does with a parsed chunk, for one pane.
+    fn held(holds: &mut Holds<PaneId>, id: PaneId, terminal: &mut Terminal, now: Instant) -> bool {
+        let ended = terminal.take_frame_ended();
+        !holds.output(id, terminal.synchronized(), ended, now)
+    }
+
+    #[test]
+    fn a_chunk_that_ends_a_frame_and_begins_the_next_still_draws() {
+        let mut ids = PaneIds::default();
+        let (a, b) = (ids.next(), ids.next());
+        let mut holds = Holds::default();
+        let (mut ta, mut tb) = (Terminal::new(size(20, 2)), Terminal::new(size(20, 2)));
+        let now = Instant::now();
+        ta.advance(b"\x1b[?2026hhalf");
+        assert!(held(&mut holds, a, &mut ta, now));
+        tb.advance(b"plain");
+        assert!(!held(&mut holds, b, &mut tb, now), "pane b draws");
+        assert_eq!(
+            holds.deadline(),
+            Some(now + crate::sync::TIMEOUT),
+            "a still held"
+        );
+        ta.advance(b"\x1b[?2026l\x1b[?2026hnext");
+        assert!(!held(&mut holds, a, &mut ta, now), "the ended frame draws");
+        ta.advance(b"more");
+        assert!(held(&mut holds, a, &mut ta, now), "the next one holds");
+        assert_eq!(holds.expired(now + crate::sync::TIMEOUT), [a]);
+        ta.end_synchronized();
+        ta.advance(b"after");
+        assert!(!held(&mut holds, a, &mut ta, now), "no longer held");
+    }
+
+    #[test]
+    fn a_backlog_polls_and_otherwise_the_loop_sleeps_until_due() {
+        let soon = Instant::now();
+        let later = soon + std::time::Duration::from_secs(1);
+        assert_eq!(control_flow(false, [None, None]), ControlFlow::Wait);
+        assert_eq!(
+            control_flow(false, [Some(later), Some(soon)]),
+            ControlFlow::WaitUntil(soon)
+        );
+        assert_eq!(control_flow(true, [Some(soon), None]), ControlFlow::Poll);
+    }
+
+    #[test]
+    fn a_backlog_lists_each_pane_once() {
+        let mut ids = PaneIds::default();
+        let (a, b) = (ids.next(), ids.next());
+        let mut backlog = Vec::new();
+        defer(&mut backlog, a);
+        defer(&mut backlog, b);
+        defer(&mut backlog, a);
+        assert_eq!(backlog, [a, b]);
     }
 
     #[test]
