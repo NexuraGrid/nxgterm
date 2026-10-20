@@ -110,6 +110,11 @@ bounded scrollback, ~1,040 tests.
   not parse all fallbacks (~100 MiB on Windows); update README GL-fallback
   text; test fallback_families and the backend loop
 - [x] T5 Phase 3 — keyboard and input (S3, S4, S5)
+- [ ] T5b Phase 3 review follow-ups: a stale IME preedit must not swallow keys
+  (clear on focus loss / empty preedit / timeout); bound the PTY input queue
+  (backpressure or drop with notice); report PTY write failures; validate
+  cmap table length against file size before allocating; scope AltGr
+  detection to Windows (or document); fix Ctrl-code doc
 - [ ] T6 Phase 4 — resize without losing content (S2)
 - [ ] T7 Phase 5 — per-frame CPU (R4, R6, R8)
 - [ ] T8 Phase 6 — sequences, ConPTY passthrough, notices, fuzzing (S7–S11, R5, R7)
@@ -315,6 +320,8 @@ Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
 - T3c/T4 (b5163ad..14dc963): medium risk, consent granted, 1 lens, approved
   and acknowledged. Font heap measured 61.8 → 16.3 MiB (Linux, 28 px).
   Reviewed boundary: 14dc963.
+- T4b/T5 (1ba2576..6bc7840): high risk, consent granted, 4 lenses, approved
+  and acknowledged. Reviewed boundary: 6bc7840.
 
 ## Next step
 
