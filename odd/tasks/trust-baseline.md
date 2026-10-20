@@ -108,7 +108,7 @@ bounded scrollback, ~1,040 tests.
 ## Progress
 
 - 2026-10-20: audit done, document created, branch `feat/trust-baseline`.
-- 2026-10-20: T1 done (delegated writer). Core: mode 2026 flag, cleared by
+- 2026-10-20: T1 done (delegated writer; commit a1e7eb1, follow-up moves `mod sync` to main.rs). Core: mode 2026 flag, cleared by
   RIS and screen switches; DECRQM `CSI ? Ps $ p` answers every supported
   private mode (0 for unknown). App: `sync::Hold` holds redraws of visible
   panes while 2026 is set, draws on reset or after 1 s via

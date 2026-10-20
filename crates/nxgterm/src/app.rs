@@ -35,6 +35,7 @@ use crate::clipboard::HAS_PRIMARY;
 use crate::command_palette::{self, CommandPalette, Outcome};
 use crate::mouse::{Capture, Clicks, Drag, Pointer, ViewportScroll, Wheel, WheelAction};
 use crate::panes::{Axis, DividerPath, PaneId, SplitError};
+use crate::sync::Hold;
 use crate::tab::{self, Exit, PaneCommand, PaneIds, Tab, Under};
 use crate::tabs::{TabId, Tabs};
 use crate::throttle::Throttle;
@@ -45,10 +46,6 @@ use crate::{
     appearance, bindings, choice, clipboard, dividers, elevation, icon, keys, mouse, reload,
     tab_bar,
 };
-
-// Declared here rather than in `main.rs`: only the session uses it.
-#[path = "sync.rs"]
-mod sync;
 
 /// Events posted to the event loop from background threads.
 #[derive(Debug)]
@@ -148,7 +145,7 @@ struct Session {
     /// Left-button presses, for double and triple clicks.
     clicks: Clicks,
     /// The redraw held while an app on screen is mid-frame (mode 2026).
-    hold: sync::Hold,
+    hold: Hold,
 }
 
 pub struct App {
@@ -289,7 +286,7 @@ impl App {
             bar_pointer: None,
             palette: None,
             clicks: Clicks::default(),
-            hold: sync::Hold::default(),
+            hold: Hold::default(),
         };
         session.open_tab(config, self.start_dir.as_deref(), &self.proxy)?;
         if show_after_first_frame {

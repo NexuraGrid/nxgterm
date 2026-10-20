@@ -18,6 +18,7 @@ mod keys;
 mod mouse;
 mod panes;
 mod reload;
+mod sync;
 mod tab;
 mod tab_bar;
 mod tabs;
