@@ -2,7 +2,7 @@
 
 use std::env;
 use std::error::Error;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -37,6 +37,7 @@ use crate::command_palette::{self, CommandPalette, Outcome};
 use crate::crash::{self, Recoveries, Recovery};
 use crate::ime::Preedit;
 use crate::inbox::{Consumer, Producer, Push};
+use crate::input::Input;
 use crate::mouse::{Capture, Clicks, Drag, Pointer, ViewportScroll, Wheel, WheelAction};
 use crate::panes::{Axis, DividerPath, PaneId, SplitError};
 use crate::sync::Holds;
@@ -69,7 +70,11 @@ pub enum UserEvent {
 /// One pane: a child process on its own pty and the terminal it draws.
 struct Pane {
     terminal: Terminal,
+    /// Resizes the pty; input goes through `input`.
     pty: Box<dyn PtyControl>,
+    /// Keys, pastes and replies for the child, written by a thread of
+    /// their own so a child that stops reading freezes no tab.
+    input: Input,
     /// The program name: the label while the child sets no title of its
     /// own (see [`Pane::label`]).
     title: String,
@@ -1180,14 +1185,13 @@ impl Pane {
         }
     }
 
-    /// Writes input for the child, unless the pane was stopped.
+    /// Queues input for the child, unless the pane was stopped. Never
+    /// blocks (see [`Input`]).
     fn send(&mut self, bytes: &[u8]) {
         if self.stopped {
             return;
         }
-        if let Err(error) = self.pty.write_all(bytes) {
-            eprintln!("nxgterm: pty write failed: {error}");
-        }
+        self.input.send(bytes);
     }
 }
 
@@ -2169,7 +2173,8 @@ fn spawn_pane(
     {
         eprintln!("nxgterm: conpty {host}");
     }
-    let pty = pty.backend;
+    let mut pty = pty.backend;
+    let input = Input::spawn(format!("pty-writer-{}", id.raw()), pty.control.writer()?)?;
     let (producer, inbox) = inbox::channel(inbox::CAP);
     spawn_reader(id, pty.reader, producer, proxy.clone());
     spawn_waiter(id, pty.child, proxy.clone());
@@ -2183,6 +2188,7 @@ fn spawn_pane(
     Ok(Pane {
         terminal,
         pty: pty.control,
+        input,
         title: tab_bar::title(
             config.shell.program.as_deref(),
             shell_env.as_deref(),
@@ -2543,7 +2549,7 @@ fn dropped_text<'a>(paths: impl IntoIterator<Item = &'a Path>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
+    use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
 
     use nxg_core::ports::ClipboardError;
@@ -2572,6 +2578,13 @@ mod tests {
             self.resizes.lock().unwrap().push(size);
             Ok(())
         }
+
+        fn writer(&mut self) -> io::Result<Box<dyn Write + Send>> {
+            Ok(Box::new(FakePty {
+                resizes: self.resizes.clone(),
+                written: self.written.clone(),
+            }))
+        }
     }
 
     type Resizes = Arc<Mutex<Vec<WinSize>>>;
@@ -2584,12 +2597,15 @@ mod tests {
     fn pane(cols: u16, rows: u16) -> (Pane, Resizes, Written) {
         let resizes = Resizes::default();
         let written = Written::default();
+        let mut pty = FakePty {
+            resizes: resizes.clone(),
+            written: written.clone(),
+        };
+        let input = Input::spawn("test".into(), pty.writer().unwrap()).unwrap();
         let pane = Pane {
             terminal: Terminal::new(size(cols, rows)),
-            pty: Box::new(FakePty {
-                resizes: resizes.clone(),
-                written: written.clone(),
-            }),
+            pty: Box::new(pty),
+            input,
             title: "sh".into(),
             resize: Throttle::default(),
             inbox: inbox::channel(inbox::CAP).1,
@@ -2725,6 +2741,7 @@ mod tests {
         let (mut pane, _, written) = pane(20, 2);
         pane.stopped = true;
         pane.send(b"rm -rf\r");
+        flush_input(&mut pane);
         assert!(written.lock().unwrap().is_empty(), "no blind input");
     }
 
@@ -2914,10 +2931,28 @@ mod tests {
         assert_eq!(sent.len(), 3, "the superseded size is never sent");
     }
 
+    /// Waits until everything `pane` queued for its child was written.
+    fn flush_input(pane: &mut Pane) {
+        let sink = Input::spawn("sink".into(), Box::new(io::sink())).unwrap();
+        std::mem::replace(&mut pane.input, sink).close();
+    }
+
     #[test]
     fn send_writes_to_the_pty() {
         let (mut pane, _, written) = pane(80, 24);
         pane.send(b"ls\r");
+        flush_input(&mut pane);
         assert_eq!(*written.lock().unwrap(), b"ls\r");
+    }
+
+    #[test]
+    fn terminal_replies_are_written_after_earlier_input() {
+        let (mut pane, _, written) = pane(80, 24);
+        pane.send(b"typed");
+        pane.terminal.advance(b"\x1b[6n");
+        let replies = pane.terminal.take_responses();
+        pane.send(&replies);
+        flush_input(&mut pane);
+        assert_eq!(*written.lock().unwrap(), b"typed\x1b[1;1R");
     }
 }

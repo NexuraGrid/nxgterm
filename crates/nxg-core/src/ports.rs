@@ -13,6 +13,13 @@ pub trait PtyControl: Write + Send {
     /// Resizes the pty; the cell pixel size lets the child compute image
     /// sizes (`TIOCGWINSZ` pixel fields).
     fn resize(&mut self, size: WinSize) -> io::Result<()>;
+
+    /// Another handle on the child's input, for a writer thread: a child
+    /// that stops reading then blocks that thread instead of the one that
+    /// resizes. Bytes written through either handle reach the child in
+    /// the order they were written. It stays usable after this control is
+    /// dropped only until the child is gone, then writes fail.
+    fn writer(&mut self) -> io::Result<Box<dyn Write + Send>>;
 }
 
 /// The child process attached to a pseudo-terminal.

@@ -17,6 +17,7 @@ mod elevation;
 mod icon;
 mod ime;
 mod inbox;
+mod input;
 mod keys;
 mod mouse;
 mod panes;

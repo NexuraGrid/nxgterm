@@ -109,7 +109,7 @@ bounded scrollback, ~1,040 tests.
   before parsing it, so a glyph missing everywhere (e.g. Nerd Font icons) does
   not parse all fallbacks (~100 MiB on Windows); update README GL-fallback
   text; test fallback_families and the backend loop
-- [ ] T5 Phase 3 — keyboard and input (S3, S4, S5)
+- [x] T5 Phase 3 — keyboard and input (S3, S4, S5)
 - [ ] T6 Phase 4 — resize without losing content (S2)
 - [ ] T7 Phase 5 — per-frame CPU (R4, R6, R8)
 - [ ] T8 Phase 6 — sequences, ConPTY passthrough, notices, fuzzing (S7–S11, R5, R7)
@@ -270,6 +270,34 @@ bounded scrollback, ~1,040 tests.
   GREEN; fmt, clippy `-D warnings` (also x86_64-pc-windows-gnu),
   `cargo test --workspace` (1100) pass.
 
+- 2026-10-20: T5 done (delegated (writer trigger: 2+ non-trivial
+  files)), three commits. S3 keys: xterm PC-style modifier param
+  (1 + Shift 1, Alt 2, Ctrl 4; Super ignored on named keys, still
+  reserved for shortcuts on chars) on arrows/Home/End (`CSI 1 ; m X`,
+  DECCKM only for the unmodified form), Insert/Delete/PgUp/PgDn
+  (`CSI n ; m ~`), F1-F4 (SS3 P-S or `CSI 1 ; m P-S`) and F5-F12;
+  Ctrl+`@ [ \ ] ^ _ / ?`, Space and 2-8 like xterm; Backspace 0x7f,
+  Ctrl 0x08, Alt ESC prefix; Alt+Enter/Tab/Escape/Space ESC-prefixed.
+  AltGr: with Ctrl+Alt held, a printable `text_with_all_modifiers`
+  (winit's Windows ToUnicode result) is sent as typed; Ctrl+Alt+letter
+  without printable text still sends ESC + the Ctrl code. Bindings are
+  still resolved before encoding. S4 IME: `set_ime_allowed(true)`;
+  `Ime::Preedit` becomes an underlined one-row overlay terminal at the
+  focused pane's cursor (moved left to fit, caret shown as the
+  cursor; the command palette's overlay wins while open); `Commit`
+  types into the focused pane (or the palette); keys are not encoded
+  while a preedit shows; `set_ime_cursor_area` gets the cursor cell
+  after each redraw, only when it changed. S5: `PtyControl::writer`
+  gives a second input handle (native: the one portable-pty writer
+  shared behind a mutex; winpty: a cloned conin handle); each pane's
+  `Input` queues bytes in 64 KiB pieces on an mpsc channel to a
+  `pty-writer-<id>` thread (`write_all` + flush, ends quietly on
+  error or when the pane drops the sender). RED observed (7 key tests,
+  1 IME test, 3 writer tests with a stub `send`) then GREEN; fmt,
+  clippy `-D warnings` (also x86_64-pc-windows-gnu), `cargo test
+  --workspace` (1119) pass. Not run on a native window (WSLg): the
+  IME path, AltGr on Windows and macOS IME are untested by hand.
+
 ## Delivery
 
 Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
@@ -290,4 +318,4 @@ Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
 
 ## Next step
 
-Phase 3 (T5).
+Phase 4 (T6).
