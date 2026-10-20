@@ -215,14 +215,15 @@ impl Coverage {
         let cmap = match source {
             FaceSource::Data(data) => {
                 let data = (**data).as_ref();
-                cmap_table(index, |offset, len| {
+                cmap_table(index, data.len() as u64, |offset, len| {
                     let start = usize::try_from(offset).ok()?;
                     data.get(start..start.checked_add(len)?).map(<[u8]>::to_vec)
                 })
             }
             FaceSource::File(path) => {
                 let mut file = File::open(path).ok()?;
-                cmap_table(index, |offset, len| {
+                let size = file.metadata().ok()?.len();
+                cmap_table(index, size, |offset, len| {
                     let mut buf = vec![0; len];
                     file.seek(SeekFrom::Start(offset)).ok()?;
                     file.read_exact(&mut buf).ok()?;
@@ -264,9 +265,26 @@ impl Coverage {
     }
 }
 
+/// The largest cmap table read; real ones are far smaller (a few hundred
+/// KiB even for CJK and emoji faces).
+const MAX_CMAP: u64 = 16 * 1024 * 1024;
+
 /// The bytes of the cmap table of face `index` in an OpenType font or
-/// collection, through `read(offset, len)`.
-fn cmap_table(index: u32, mut read: impl FnMut(u64, usize) -> Option<Vec<u8>>) -> Option<Vec<u8>> {
+/// collection `size` bytes long, through `read(offset, len)`. Every range
+/// is checked against `size` (and the cmap against [`MAX_CMAP`]) before it
+/// is read, so a corrupt directory never makes a huge buffer.
+fn cmap_table(
+    index: u32,
+    size: u64,
+    mut read: impl FnMut(u64, usize) -> Option<Vec<u8>>,
+) -> Option<Vec<u8>> {
+    let mut read = |offset: u64, len: usize| {
+        let end = offset.checked_add(u64::try_from(len).ok()?)?;
+        if end > size {
+            return None;
+        }
+        read(offset, len)
+    };
     let be32 = |b: &[u8], at: usize| -> Option<u32> {
         Some(u32::from_be_bytes(b.get(at..at + 4)?.try_into().ok()?))
     };
@@ -290,6 +308,9 @@ fn cmap_table(index: u32, mut read: impl FnMut(u64, usize) -> Option<Vec<u8>>) -
         .chunks_exact(16)
         .find(|record| record.starts_with(b"cmap"))?;
     let (offset, len) = (be32(record, 8)?, be32(record, 12)?);
+    if u64::from(len) > MAX_CMAP {
+        return None;
+    }
     read(u64::from(offset), usize::try_from(len).ok()?)
 }
 
@@ -1181,6 +1202,49 @@ mod tests {
         let mut font = box_fonts(&['M'], &[]).with_fallbacks(vec![face].into());
         assert!(!inked(font.glyph(ICON, false, false)));
         assert!(font.fallbacks[0].failed());
+    }
+
+    /// A font whose table directory has one `cmap` record at `offset`,
+    /// `len` bytes long, followed by `body`.
+    fn forged_cmap(offset: u32, len: u32, body: &[u8]) -> Vec<u8> {
+        let mut data = vec![0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+        data.extend_from_slice(b"cmap");
+        data.extend_from_slice(&[0; 4]); // Checksum.
+        data.extend_from_slice(&offset.to_be_bytes());
+        data.extend_from_slice(&len.to_be_bytes());
+        data.extend_from_slice(body);
+        data
+    }
+
+    #[test]
+    fn a_cmap_past_the_end_of_the_file_is_never_read() {
+        for (offset, len) in [(28, 0x7fff_ffff), (28, 9), (0xffff_fff0, 4), (28, 64 << 20)] {
+            let data = forged_cmap(offset, len, &[0; 8]);
+            let mut largest = 0;
+            let cmap = cmap_table(0, data.len() as u64, |at, len| {
+                largest = largest.max(len);
+                let start = usize::try_from(at).ok()?;
+                data.get(start..start.checked_add(len)?).map(<[u8]>::to_vec)
+            });
+            assert!(cmap.is_none(), "{offset} {len}");
+            assert!(largest <= 16, "asked for {largest} bytes at {offset}");
+        }
+        // Past the sane maximum, even in a file that large.
+        let data = forged_cmap(28, 64 << 20, &[]);
+        let mut largest = 0;
+        let cmap = cmap_table(0, u64::MAX, |at, len| {
+            largest = largest.max(len);
+            let start = usize::try_from(at).ok()?;
+            data.get(start..start.checked_add(len)?).map(<[u8]>::to_vec)
+        });
+        assert!(cmap.is_none());
+        assert!(largest <= 16, "asked for {largest} bytes");
+        let data = forged_cmap(28, 8, &[7; 8]);
+        let cmap = cmap_table(0, data.len() as u64, |at, len| {
+            let start = usize::try_from(at).ok()?;
+            data.get(start..start.checked_add(len)?).map(<[u8]>::to_vec)
+        });
+        assert_eq!(cmap.unwrap(), [7; 8], "a cmap inside the file is read");
     }
 
     #[test]
