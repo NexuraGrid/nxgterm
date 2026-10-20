@@ -96,6 +96,10 @@ bounded scrollback, ~1,040 tests.
   remove unused recovery flag; assert scrollback wiring in tests
 - [x] T3 Coalesce PTY output: shared bounded buffer + "wakeup pending" flag,
   one event per drain, reader waits when the buffer is full + tests
+- [ ] T3b T3 review follow-ups (advisory): drain all pending output before
+  handling `Exited` (R1/R3/R4 exit-truncates-tail); make the budget re-post
+  actually yield to input (R4-repost-may-not-yield); release retained buffer
+  capacity when idle (R3-buffer-retention); avoid front-drain memmove
 - [ ] T4 Phase 2 — Windows RAM (R2, R3)
 - [ ] T5 Phase 3 — keyboard and input (S3, S4, S5)
 - [ ] T6 Phase 4 — resize without losing content (S2)
@@ -158,6 +162,8 @@ Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
   acknowledged (lineage review-9e61d80f714c3330). Reviewed boundary: efb1f0c.
 - T2 (ee43647): high risk, consent granted, 4 lenses, approved and
   acknowledged (lineage review-1d380fb9f63e5491). Reviewed boundary: ee43647.
+- T3 (564f8ed): high risk, consent granted, 4 lenses, approved and
+  acknowledged. Reviewed boundary: 564f8ed.
 
 ## Next step
 
