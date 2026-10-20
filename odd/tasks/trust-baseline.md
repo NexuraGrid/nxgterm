@@ -88,7 +88,7 @@ bounded scrollback, ~1,040 tests.
   reset inside the same chunk and set again (R3-hold-not-released-on-intra-chunk-frame-end,
   R4-sync-chunk-boundary-starvation); clear mode 2026 on the 1 s timeout like
   Ghostty; app-level hold test
-- [ ] T2 Panic hook writing a crash log (Windows `%LOCALAPPDATA%\nxgterm`,
+- [x] T2 Panic hook writing a crash log (Windows `%LOCALAPPDATA%\nxgterm`,
   others the state/cache dir) with a visible message on Windows + tests
 - [ ] T3 Coalesce PTY output: shared bounded buffer + "wakeup pending" flag,
   one event per drain, reader waits when the buffer is full + tests
@@ -119,6 +119,19 @@ bounded scrollback, ~1,040 tests.
   panes while 2026 is set, draws on reset or after 1 s via
   `ControlFlow::WaitUntil`. RED observed (4 core tests, 3 hold tests) then
   GREEN; fmt, clippy `-D warnings`, `cargo test --workspace` pass.
+- 2026-10-20: T2 done (delegated writer). New `crash` module: panic hook
+  keeps the default stderr output and appends a report (unix time, version,
+  OS/arch, thread, message, location, forced backtrace) to
+  `%LOCALAPPDATA%\nxgterm\crash.log`, `~/Library/Logs/nxgterm/crash.log` or
+  `$XDG_STATE_HOME`/`~/.local/state` `nxgterm/crash.log`; rotated to
+  `crash.log.old` past 1 MiB; IO errors ignored. `crash::guard` wraps `main`
+  and alone shows the Windows `MessageBoxW`, so panics caught elsewhere
+  (pane parser, renderer, pty setup) never pop a dialog. Fatal `run` and
+  elevation errors are logged and shown too. Each pane's `advance` runs under
+  `catch_unwind`; a panic swaps in a fresh terminal (same size, cell pixels,
+  scrollback limit) with a notice naming the log. RED observed (8 tests) then
+  GREEN; fmt, clippy `-D warnings` (also on x86_64-pc-windows-gnu),
+  `cargo test --workspace` pass.
 
 ## Delivery
 
@@ -131,4 +144,4 @@ Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
 
 ## Next step
 
-T2.
+T3.

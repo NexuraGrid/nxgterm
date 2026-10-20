@@ -11,6 +11,7 @@ mod choice;
 mod cli;
 mod clipboard;
 mod command_palette;
+mod crash;
 mod dividers;
 mod elevation;
 mod icon;
@@ -42,6 +43,11 @@ use crate::cli::Command;
 
 fn main() -> ExitCode {
     attach_parent_console();
+    crash::install();
+    crash::guard(run_command)
+}
+
+fn run_command() -> ExitCode {
     let command = match cli::parse(env::args_os().skip(1)) {
         Ok(command) => command,
         Err(error) => {
@@ -70,12 +76,14 @@ fn main() -> ExitCode {
                     elevation::relaunch_elevated(config.as_deref(), working_directory.as_ref());
                 if let Err(error) = relaunch {
                     eprintln!("nxgterm: {error}");
+                    crash::fatal(&error.to_string());
                     return ExitCode::FAILURE;
                 }
                 return ExitCode::SUCCESS;
             }
             if let Err(error) = run(config, working_directory) {
                 eprintln!("nxgterm: {error}");
+                crash::fatal(&error.to_string());
                 return ExitCode::FAILURE;
             }
         }

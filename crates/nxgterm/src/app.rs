@@ -845,7 +845,8 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::Output(id, bytes) => {
                 if let Some(session) = &mut self.session {
-                    session.output(id, &bytes, self.clipboard.as_mut());
+                    let scrollback = self.config.scrollback.lines;
+                    session.output(id, &bytes, self.clipboard.as_mut(), scrollback);
                 }
             }
             UserEvent::Exited(id) => {
@@ -1094,12 +1095,22 @@ impl Session {
     /// the queries in it and setting the clipboard it asks for (OSC 52, on
     /// screen or not); the window redraws only if the pane is on screen, and
     /// not while its app is mid-frame (synchronized output).
-    fn output(&mut self, id: PaneId, bytes: &[u8], clipboard: &mut dyn Clipboard) {
+    /// A parser panic resets only this pane (see [`advance_guarded`]),
+    /// whose fresh terminal keeps the `scrollback` limit.
+    fn output(
+        &mut self,
+        id: PaneId,
+        bytes: &[u8],
+        clipboard: &mut dyn Clipboard,
+        scrollback: usize,
+    ) {
         let visible = tab::shows(&self.tabs, id);
         let Some(pane) = tab::pane_mut(&mut self.tabs, id) else {
             return;
         };
-        pane.terminal.advance(bytes);
+        advance_guarded(&mut pane.terminal, scrollback, |terminal| {
+            terminal.advance(bytes);
+        });
         let responses = pane.terminal.take_responses();
         if !responses.is_empty() {
             pane.send(&responses);
@@ -1973,6 +1984,28 @@ fn spawn_pane(
     })
 }
 
+/// Runs `feed` on `terminal`. A panic in it (already logged by the crash
+/// hook) leaves the terminal in an unknown state, so it is replaced by a
+/// fresh one of the same size and cell pixels with the `scrollback` limit,
+/// showing a notice; the other panes and tabs live on. Returns whether it
+/// had to recover.
+fn advance_guarded(
+    terminal: &mut Terminal,
+    scrollback: usize,
+    feed: impl FnOnce(&mut Terminal),
+) -> bool {
+    let panicked = panic::catch_unwind(AssertUnwindSafe(|| feed(terminal))).is_err();
+    if panicked {
+        let cell = terminal.cell_pixels();
+        let mut fresh = Terminal::new(terminal.size());
+        fresh.set_cell_pixels(cell.width, cell.height);
+        fresh.set_scrollback_limit(scrollback);
+        fresh.advance(crate::crash::recovered_notice().as_bytes());
+        *terminal = fresh;
+    }
+    panicked
+}
+
 /// Writes the clipboard `requests` of an application (OSC 52), skipping
 /// PRIMARY where the system has none (`has_primary`); failures only warn.
 fn set_clipboard(
@@ -2375,6 +2408,32 @@ mod tests {
         let mut clipboard = RecordingClipboard::default();
         set_clipboard(&mut clipboard, requests, false);
         assert_eq!(clipboard.0, [(ClipboardKind::Clipboard, "hi".to_string())]);
+    }
+
+    #[test]
+    fn a_parser_panic_resets_only_the_terminal_and_says_so() {
+        let mut terminal = Terminal::new(size(60, 3));
+        terminal.set_cell_pixels(9, 18);
+        terminal.advance(b"old\x1b[?1049h\x1b[?2026h");
+        let recovered = advance_guarded(&mut terminal, 5, |terminal| {
+            terminal.advance(b"\x1b[1mhalf");
+            panic!("parser bug");
+        });
+        assert!(recovered);
+        assert_eq!(terminal.size(), size(60, 3));
+        assert_eq!(terminal.cell_pixels(), CellPixels::new(9, 18));
+        assert!(!terminal.synchronized(), "a fresh terminal holds no frame");
+        let screen: String = (0..3)
+            .flat_map(|row| terminal.row(row).iter().map(|cell| cell.ch))
+            .collect();
+        assert!(
+            screen.contains("recovered from an internal error"),
+            "{screen:?}"
+        );
+        assert!(!screen.contains("old") && !screen.contains("half"));
+        assert!(!advance_guarded(&mut terminal, 5, |terminal| {
+            terminal.advance(b"fine");
+        }));
     }
 
     #[test]
