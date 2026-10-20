@@ -16,8 +16,8 @@ pub const DEFAULT_SCROLLBACK: usize = 10_000;
 /// A bounded history of lines plus the viewport position over it.
 #[derive(Debug)]
 pub(super) struct Scrollback {
-    /// Oldest first. Each line keeps the width it had when it left the
-    /// screen; a resize does not rewrap it.
+    /// Oldest first. A line keeps the width it had when it left the
+    /// screen until a resize changes the width (see `resize`).
     lines: VecDeque<Box<[Cell]>>,
     limit: usize,
     /// Lines ever dropped from the front (or never kept, with a zero
@@ -48,6 +48,11 @@ impl Scrollback {
     }
 
     pub fn push(&mut self, line: &[Cell]) {
+        self.push_owned(line.into());
+    }
+
+    /// [`Scrollback::push`] for a line already boxed.
+    pub fn push_owned(&mut self, line: Box<[Cell]>) {
         if self.limit == 0 {
             self.dropped += 1;
             return;
@@ -56,7 +61,12 @@ impl Scrollback {
             self.lines.pop_front();
             self.dropped += 1;
         }
-        self.lines.push_back(line.into());
+        self.lines.push_back(line);
+    }
+
+    /// Takes the newest line back out (a resize that shows it again).
+    pub fn pop(&mut self) -> Option<Box<[Cell]>> {
+        self.lines.pop_back()
     }
 
     pub fn set_limit(&mut self, limit: usize) {

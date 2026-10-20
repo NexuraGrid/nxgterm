@@ -13,6 +13,7 @@ use unicode_width::UnicodeWidthChar;
 mod edit;
 mod modes;
 mod osc52;
+mod resize;
 mod screen;
 mod scrollback;
 mod selection;
@@ -1048,7 +1049,7 @@ mod tests {
     #[test]
     fn resize_keeps_content_and_clamps_cursor() {
         let mut t = term(10, 5);
-        t.advance(b"hello\x1b[5;10H");
+        t.advance(b"hello\x1b[2;10H");
         t.resize(TermSize::new(3, 2).unwrap());
         assert_eq!(t.size(), TermSize::new(3, 2).unwrap());
         assert_eq!(text(&t, 0), "hel");
