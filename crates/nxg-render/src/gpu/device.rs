@@ -35,6 +35,23 @@ pub fn backend_order(os: &str, env: Option<wgpu::Backends>) -> Vec<wgpu::Backend
     }
 }
 
+/// The result of `connect` on the first of `order` that succeeds; later
+/// backends are not tried. When all fail, the error lists each backend's
+/// failure, in order.
+pub fn first_connected<T, E: std::fmt::Display>(
+    order: impl IntoIterator<Item = wgpu::Backends>,
+    mut connect: impl FnMut(wgpu::Backends) -> Result<T, E>,
+) -> Result<T, String> {
+    let mut failures = Vec::new();
+    for backends in order {
+        match connect(backends) {
+            Ok(connected) => return Ok(connected),
+            Err(error) => failures.push(format!("{backends:?}: {error}")),
+        }
+    }
+    Err(failures.join("; "))
+}
+
 impl Gpu {
     /// Picks the best adapter (see [`adapter::pick`]) of `backends` that
     /// can present to `surface`, or any adapter when `surface` is `None`.
@@ -123,7 +140,7 @@ fn describe(info: &wgpu::AdapterInfo) -> String {
 mod order_tests {
     use wgpu::Backends;
 
-    use super::backend_order;
+    use super::{backend_order, first_connected};
 
     #[test]
     fn windows_tries_dx12_then_vulkan_then_gl() {
@@ -166,5 +183,32 @@ mod order_tests {
             backend_order("linux", Some(Backends::empty())),
             [Backends::VULKAN, Backends::GL]
         );
+    }
+
+    #[test]
+    fn the_first_backend_that_connects_wins_and_later_ones_are_not_tried() {
+        let mut tried = Vec::new();
+        let order = [Backends::DX12, Backends::VULKAN, Backends::GL];
+        let found = first_connected(order, |backends| {
+            tried.push(backends);
+            if backends == Backends::VULKAN {
+                Ok("vulkan")
+            } else {
+                Err("no adapter")
+            }
+        });
+        assert_eq!(found, Ok("vulkan"));
+        assert_eq!(tried, [Backends::DX12, Backends::VULKAN]);
+    }
+
+    #[test]
+    fn when_every_backend_fails_each_failure_is_reported_in_order() {
+        let order = [Backends::DX12, Backends::GL];
+        let found: Result<(), String> = first_connected(order, |backends| {
+            Err(if backends == Backends::DX12 { "a" } else { "b" })
+        });
+        let error = found.unwrap_err();
+        let expected = format!("{:?}: a; {:?}: b", Backends::DX12, Backends::GL);
+        assert_eq!(error, expected);
     }
 }

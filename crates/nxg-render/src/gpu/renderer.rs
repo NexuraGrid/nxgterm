@@ -47,20 +47,12 @@ impl GpuRenderer {
         // translucent keeps opaque windows exactly as they were.
         let translucent = style.background_opacity < 1.0;
         let order = device::backend_order(std::env::consts::OS, wgpu::Backends::from_env());
-        let mut failures = Vec::new();
-        let mut found = None;
-        for backends in order {
-            // A backend that fails is dropped, with its instance, before
-            // the next one loads.
-            match Self::connect(window.clone(), backends, translucent) {
-                Ok(connected) => {
-                    found = Some(connected);
-                    break;
-                }
-                Err(error) => failures.push(format!("{backends:?}: {error}")),
-            }
-        }
-        let (surface, gpu, caps, format) = found.ok_or_else(|| GpuError(failures.join("; ")))?;
+        // A backend that fails is dropped, with its instance, before the
+        // next one loads.
+        let (surface, gpu, caps, format) = device::first_connected(order, |backends| {
+            Self::connect(window.clone(), backends, translucent)
+        })
+        .map_err(GpuError)?;
         let alpha_mode = format::alpha_mode(&caps.alpha_modes, translucent);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

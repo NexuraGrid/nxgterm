@@ -105,7 +105,7 @@ bounded scrollback, ~1,040 tests.
   stopped state, misleading test name, tests for Exited full drain and
   stopped-pane drain, cap log growth when rotation keeps failing
 - [x] T4 Phase 2 — Windows RAM (R2, R3)
-- [ ] T4b Fallback coverage index: check each fallback's cmap (ttf-parser)
+- [x] T4b Fallback coverage index: check each fallback's cmap (ttf-parser)
   before parsing it, so a glyph missing everywhere (e.g. Nerd Font icons) does
   not parse all fallbacks (~100 MiB on Windows); update README GL-fallback
   text; test fallback_families and the backend loop
@@ -252,6 +252,23 @@ bounded scrollback, ~1,040 tests.
   28 px, style + clone + title font): 61.8 MiB to 16.3 MiB of heap.
   Inferred on Windows: Segoe UI Symbol and Emoji parse to ~38 and
   ~58 MiB (measured from the files), now deferred until needed.
+
+- 2026-10-20: T4b done (delegated (writer trigger: 2+ non-trivial
+  files)). Each `FallbackFace` first reads only its font header, table
+  directory and `cmap` table (seeking in the file, TTC index honored)
+  and keeps the mapped chars as sorted ranges (`Coverage`, the same
+  chars fontdue maps: every subtable, glyph 0 left out); a face is
+  parsed only when it maps the char, so a char no fallback has (e.g.
+  a Nerd Font icon without a Nerd Font) parses none. Order and
+  coverage are unchanged; an unreadable file or cmap is remembered as
+  failed. New dependency `ttf-parser` 0.25 (already in the tree via
+  fontdue/fontdb, default features off). The backend loop became
+  `device::first_connected` (tested: stops at the first success,
+  reports every failure in order). README describes the DX12, Vulkan,
+  OpenGL order. RED observed (compile: missing `first_connected`;
+  runtime: all three fallbacks parsed for an uncovered char) then
+  GREEN; fmt, clippy `-D warnings` (also x86_64-pc-windows-gnu),
+  `cargo test --workspace` (1100) pass.
 
 ## Delivery
 

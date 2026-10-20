@@ -379,9 +379,12 @@ the desktop show through, while text, the cursor, colored cells, the
 selection, the tab bar, the command palette and images stay opaque. It needs
 the GPU renderer and a surface that can blend: it works on macOS, on Wayland
 and on X11 with a compositor (Vulkan), and on Windows with the DX12 backend
-(the default there), which then presents through DirectComposition. With the
-OpenGL backend, usually with Vulkan on Windows, and with the CPU renderer the
-background stays opaque and a line on stderr says so. `blur = true` blurs what is behind the window on
+(the default there), which then presents through DirectComposition. On
+Windows the backends are tried in the order DX12, Vulkan, OpenGL, one at a
+time, so Vulkan or OpenGL is used only when DX12 has no usable adapter
+(`WGPU_BACKEND` picks one instead). With the OpenGL backend, usually with
+Vulkan on Windows, and with the CPU renderer the background stays opaque and
+a line on stderr says so. `blur = true` blurs what is behind the window on
 macOS, KDE Plasma (Wayland) and Windows 11 (Acrylic).
 
 The file is reloaded when saved, and so are its imports and its theme file
