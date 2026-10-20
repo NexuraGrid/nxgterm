@@ -100,6 +100,10 @@ bounded scrollback, ~1,040 tests.
   handling `Exited` (R1/R3/R4 exit-truncates-tail); make the budget re-post
   actually yield to input (R4-repost-may-not-yield); release retained buffer
   capacity when idle (R3-buffer-retention); avoid front-drain memmove
+- [ ] T3c Follow-up review leftovers (advisory, minor): stale flood comment
+  (app.rs:872), broken TIMEOUT doc link (app.rs:1196), output doc omits the
+  stopped state, misleading test name, tests for Exited full drain and
+  stopped-pane drain, cap log growth when rotation keeps failing
 - [ ] T4 Phase 2 — Windows RAM (R2, R3)
 - [ ] T5 Phase 3 — keyboard and input (S3, S4, S5)
 - [ ] T6 Phase 4 — resize without losing content (S2)
@@ -208,6 +212,8 @@ Strategy: `ask-on-risk`. Forecast for phase 1: ~400–600 authored lines.
   acknowledged (lineage review-1d380fb9f63e5491). Reviewed boundary: ee43647.
 - T3 (564f8ed): high risk, consent granted, 4 lenses, approved and
   acknowledged. Reviewed boundary: 564f8ed.
+- T1b/T2b/T3b (130f746..895907f): high risk, consent granted, 4 lenses,
+  approved and acknowledged. Reviewed boundary: 895907f.
 
 ## Next step
 
