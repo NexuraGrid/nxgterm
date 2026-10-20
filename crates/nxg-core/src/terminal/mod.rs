@@ -89,6 +89,9 @@ struct State {
     mouse: MouseModes,
     /// Bracketed paste (2004). Global like the mouse modes.
     bracketed_paste: bool,
+    /// Synchronized output (2026): the app is mid-frame and asks the window
+    /// not to draw until it resets the mode.
+    synchronized: bool,
     /// The text selection, in absolute lines; see the `selection` module.
     selection: Option<selection::Selected>,
     /// The window title set by OSC 0/2 and its XTWINOPS stack.
@@ -120,6 +123,7 @@ impl Terminal {
                 scrollback: Scrollback::new(DEFAULT_SCROLLBACK),
                 mouse: MouseModes::default(),
                 bracketed_paste: false,
+                synchronized: false,
                 selection: None,
                 titles: Titles::default(),
                 clipboard: osc52::Requests::default(),
@@ -606,11 +610,18 @@ impl vte::Perform for State {
         if ignore {
             return;
         }
+        let first = params.iter().next().map_or(0, |p| p[0]);
+        // DECRQM for a private mode: `CSI ? Ps $ p`.
+        if intermediates == b"?$" {
+            if action == 'p' {
+                self.report_private_mode(first);
+            }
+            return;
+        }
         let private = intermediates == b"?";
         if !intermediates.is_empty() && !private {
             return;
         }
-        let first = params.iter().next().map_or(0, |p| p[0]);
         let second = params.iter().nth(1).map_or(0, |p| p[0]);
         // Movement counts and positions treat 0 as 1.
         let n = first.max(1);

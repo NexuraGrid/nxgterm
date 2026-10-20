@@ -46,6 +46,10 @@ use crate::{
     tab_bar,
 };
 
+// Declared here rather than in `main.rs`: only the session uses it.
+#[path = "sync.rs"]
+mod sync;
+
 /// Events posted to the event loop from background threads.
 #[derive(Debug)]
 pub enum UserEvent {
@@ -143,6 +147,8 @@ struct Session {
     palette: Option<CommandPalette>,
     /// Left-button presses, for double and triple clicks.
     clicks: Clicks,
+    /// The redraw held while an app on screen is mid-frame (mode 2026).
+    hold: sync::Hold,
 }
 
 pub struct App {
@@ -283,6 +289,7 @@ impl App {
             bar_pointer: None,
             palette: None,
             clicks: Clicks::default(),
+            hold: sync::Hold::default(),
         };
         session.open_tab(config, self.start_dir.as_deref(), &self.proxy)?;
         if show_after_first_frame {
@@ -818,14 +825,20 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    /// Sends the pty sizes that waited out their interval and sleeps until
-    /// the next one is due.
+    /// Sends the pty sizes that waited out their interval, draws a frame
+    /// held too long by synchronized output, and sleeps until the next of
+    /// them is due.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let Some(session) = &mut self.session else {
             return;
         };
-        session.poll_resizes(Instant::now());
-        event_loop.set_control_flow(match session.next_resize() {
+        let now = Instant::now();
+        session.poll_resizes(now);
+        if session.hold.poll(now) {
+            session.window.request_redraw();
+        }
+        let due = [session.next_resize(), session.hold.deadline()];
+        event_loop.set_control_flow(match due.into_iter().flatten().min() {
             Some(due) => ControlFlow::WaitUntil(due),
             None => ControlFlow::Wait,
         });
@@ -1082,7 +1095,8 @@ impl Session {
 
     /// Feeds output to the pane `id` (ignored once it is closed), answering
     /// the queries in it and setting the clipboard it asks for (OSC 52, on
-    /// screen or not); the window redraws only if the pane is on screen.
+    /// screen or not); the window redraws only if the pane is on screen, and
+    /// not while its app is mid-frame (synchronized output).
     fn output(&mut self, id: PaneId, bytes: &[u8], clipboard: &mut dyn Clipboard) {
         let visible = tab::shows(&self.tabs, id);
         let Some(pane) = tab::pane_mut(&mut self.tabs, id) else {
@@ -1098,8 +1112,14 @@ impl Session {
             pane.terminal.take_clipboard_requests(),
             HAS_PRIMARY,
         );
-        // A new title shows on the tab bar even for a pane off screen.
-        if visible || pane.terminal.take_title_changed() {
+        let redraw = if visible {
+            self.hold
+                .output(pane.terminal.synchronized(), Instant::now())
+        } else {
+            // A new title shows on the tab bar even for a pane off screen.
+            pane.terminal.take_title_changed()
+        };
+        if redraw {
             self.window.request_redraw();
         }
     }

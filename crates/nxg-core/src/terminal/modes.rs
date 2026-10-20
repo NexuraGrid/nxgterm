@@ -81,6 +81,12 @@ impl Terminal {
             bracketed_paste: self.state.bracketed_paste,
         }
     }
+
+    /// Whether the app is in the middle of a synchronized update (2026):
+    /// the window should hold its redraws until this turns off.
+    pub fn synchronized(&self) -> bool {
+        self.state.synchronized
+    }
 }
 
 impl State {
@@ -127,8 +133,43 @@ impl State {
             1007 => self.mouse.alternate_scroll = on,
             1015 => self.mouse.urxvt = on,
             2004 => self.bracketed_paste = on,
+            2026 => self.synchronized = on,
             _ => {}
         }
+    }
+
+    /// Whether private `mode` is set; `None` for a mode not supported.
+    fn private_mode(&self, mode: u16) -> Option<bool> {
+        Some(match mode {
+            1 => self.app_cursor_keys,
+            6 => self.screen.origin,
+            7 => self.autowrap,
+            25 => self.cursor_visible,
+            80 => !self.sixel_scrolling,
+            47 | 1047 | 1049 => self.alt_active,
+            // Save/restore cursor holds no state to report.
+            1048 => false,
+            1000 => self.mouse.tracking == MouseTracking::Click,
+            1002 => self.mouse.tracking == MouseTracking::Drag,
+            1003 => self.mouse.tracking == MouseTracking::Motion,
+            1006 => self.mouse.sgr,
+            1007 => self.mouse.alternate_scroll,
+            1015 => self.mouse.urxvt,
+            2004 => self.bracketed_paste,
+            2026 => self.synchronized,
+            _ => return None,
+        })
+    }
+
+    /// DECRQM reply `CSI ? Ps ; Pm $ y`: Pm is 1 set, 2 reset, 0 unknown.
+    pub(super) fn report_private_mode(&mut self, mode: u16) {
+        let state = match self.private_mode(mode) {
+            Some(true) => 1,
+            Some(false) => 2,
+            None => 0,
+        };
+        let reply = format!("\x1b[?{mode};{state}$y");
+        self.responses.extend_from_slice(reply.as_bytes());
     }
 }
 
@@ -516,5 +557,69 @@ mod tests {
         let mut t = term(5, 2);
         t.advance(b"\x1b[?1003;1006;1015h\x1b[?1007l\x1bc");
         assert_eq!(t.modes(), Modes::default());
+    }
+
+    #[test]
+    fn synchronized_output_follows_set_and_reset() {
+        let mut t = term(5, 2);
+        assert!(!t.synchronized());
+        t.advance(b"\x1b[?2026h");
+        assert!(t.synchronized());
+        t.advance(b"\x1b[?2026l");
+        assert!(!t.synchronized());
+    }
+
+    #[test]
+    fn ris_ends_synchronized_output() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?2026h\x1bc");
+        assert!(!t.synchronized());
+    }
+
+    #[test]
+    fn screen_switches_end_synchronized_output() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?2026h\x1b[?1049h");
+        assert!(!t.synchronized(), "entering the alternate screen");
+        t.advance(b"\x1b[?2026h\x1b[?1049l");
+        assert!(!t.synchronized(), "leaving it");
+    }
+
+    #[test]
+    fn decrqm_reports_synchronized_output() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?2026$p");
+        assert_eq!(t.take_responses(), b"\x1b[?2026;2$y");
+        t.advance(b"\x1b[?2026h\x1b[?2026$p");
+        assert_eq!(t.take_responses(), b"\x1b[?2026;1$y");
+    }
+
+    #[test]
+    fn decrqm_reports_supported_modes() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?25$p\x1b[?2004$p\x1b[?1002h\x1b[?1002$p\x1b[?1000$p");
+        assert_eq!(
+            t.take_responses(),
+            b"\x1b[?25;1$y\x1b[?2004;2$y\x1b[?1002;1$y\x1b[?1000;2$y"
+        );
+        t.advance(b"\x1b[?1049h\x1b[?1049$p\x1b[?47$p\x1b[?80$p");
+        assert_eq!(
+            t.take_responses(),
+            b"\x1b[?1049;1$y\x1b[?47;1$y\x1b[?80;2$y"
+        );
+    }
+
+    #[test]
+    fn decrqm_reports_unknown_modes_as_not_recognized() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[?9999$p");
+        assert_eq!(t.take_responses(), b"\x1b[?9999;0$y");
+    }
+
+    #[test]
+    fn ansi_mode_requests_are_not_answered_as_private() {
+        let mut t = term(5, 2);
+        t.advance(b"\x1b[2026$p");
+        assert!(t.take_responses().is_empty());
     }
 }
