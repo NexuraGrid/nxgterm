@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           nxgterm
-Version:        0.11.0
+Version:        0.12.0
 Release:        1%{?dist}
 Summary:        Fast, configurable, cross-platform terminal emulator
 
@@ -79,6 +79,11 @@ cargo test --release --locked --workspace
 %{_datadir}/%{name}/
 
 %changelog
+* Tue Oct 20 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.12.0-1
+- Synchronized output, crash log and bounded pty output
+- Lower memory use: one GPU backend, shared and lazy fonts
+- xterm key encoding, IME and off-thread pty writes
+
 * Wed Oct 14 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.11.0-1
 - Add nxgterm update and one-line install scripts
 - Start shells in the launch directory or home
