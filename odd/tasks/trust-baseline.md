@@ -121,14 +121,14 @@ bounded scrollback, ~1,040 tests.
   pending-input counter can leak when the writer thread ends; image placements
   are not moved on reflow; redraw request ignored after some resizes; test
   image scroll on height change (inline; 21e1011, d596ef8)
-- [ ] T7 Phase 5 — per-frame CPU (R4, R6, R8), split after mapping (2026-10-20):
+- [x] T7 Phase 5 — per-frame CPU (R4, R6, R8), split after mapping (2026-10-20); closed with T7a only:
   - [x] T7a Title bar button masks built once per (button, size, stroke,
     maximized) instead of stroked and hashed every frame (inline)
-  - [ ] T7b Window icon as one cached mask set instead of ~1000 one-pixel
+  - [-] T7b (dropped: frame cost measured too small) Window icon as one cached mask set instead of ~1000 one-pixel
     shapes cloned per frame (inline)
-  - [ ] T7c Title text without a new atlas slot per title; atlas keeps
+  - [-] T7c (dropped: frame cost measured too small) Title text without a new atlas slot per title; atlas keeps
     working when full (R8) (inline)
-  - [ ] T7d Skip rebuilding an unchanged GPU frame; CPU renderer presents
+  - [-] T7d (dropped: frame cost measured too small) Skip rebuilding an unchanged GPU frame; CPU renderer presents
     only damaged rows (R4, R6) (inline)
 - [ ] T8 Phase 6 — sequences, ConPTY passthrough, notices, fuzzing (S7–S11, R5, R7)
 
@@ -402,6 +402,11 @@ bounded scrollback, ~1,040 tests.
   per-frame rebuilding (T7b-T7d) cannot explain 8% CPU at idle; that
   needs the user's per-process numbers first. T7b-T7d paused pending
   that evidence.
+- 2026-10-20: user, later: "ya no pasa eso que te pase en la imagen osea
+  ahora nxgterm consume mucho mucho menos que wezerm como unos 40mb y la
+  cpu no pasa de 0,5". Likely the first capture caught startup (WSL VM
+  boot, font load, GPU init). User approved closing T7 with T7a only and
+  moving to T8 ("Si").
 
 ## Delivery
 
@@ -412,7 +417,8 @@ Slices (local branches, not pushed):
 - `feat/trust-baseline-3-input`: 1ba2576..9fbc454 (T5)
 Slices 1–3 merged as #69, #70, #71; released as 0.12.0.
 - `feat/trust-baseline-4-resize`: 22eb1aa..HEAD (T5b, T6); merged as #73, released as 0.13.0.
-- `feat/trust-baseline-5-t6b`: main..d596ef8 (T6b) Forecast for phase 1: ~400–600 authored lines.
+- `feat/trust-baseline-5-t6b`: main..d596ef8 (T6b), PR #77
+- `feat/trust-baseline-6-frame`: d596ef8..HEAD (T7a), stacked on #77 Forecast for phase 1: ~400–600 authored lines.
 
 ## Review log
 
@@ -436,4 +442,4 @@ Slices 1–3 merged as #69, #70, #71; released as 0.12.0.
 
 ## Next step
 
-Phase 5 (T7).
+Phase 6 (T8).
