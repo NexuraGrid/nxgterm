@@ -393,6 +393,15 @@ bounded scrollback, ~1,040 tests.
   every frame. Asked the user which child process holds the CPU
   (nxgterm.exe vs OpenConsole.exe/wsl.exe) and whether it stays after
   30 s idle; not measurable here (no Xvfb, WSLg crashes).
+- 2026-10-20: T7a done inline (e3325fc): `title_bar::Masks` caches the
+  button glyph and disc masks per (button, maximized, side, stroke);
+  RED (compile, 2 cache tests) then GREEN; fmt, clippy (both targets),
+  1154 tests pass. Measured (temporary release timing test, not
+  committed): a full GPU instance rebuild of a 200x50 screen of colored
+  text takes ~135 us, i.e. under 1% of a core even at 60 redraws/s. So
+  per-frame rebuilding (T7b-T7d) cannot explain 8% CPU at idle; that
+  needs the user's per-process numbers first. T7b-T7d paused pending
+  that evidence.
 
 ## Delivery
 
