@@ -1057,11 +1057,16 @@ impl ApplicationHandler<UserEvent> for App {
                     session.hover_grid(self.modifiers);
                 }
             }
-            WindowEvent::Focused(false) => {
-                // A composition cannot outlive focus: it would eat keys.
-                session.preedit.clear();
-                session.flush_resizes();
-                session.pointer.reset();
+            WindowEvent::Focused(focused) => {
+                if let Some(pane) = tab::focused_mut(&mut session.tabs) {
+                    pane.focus_changed(focused);
+                }
+                if !focused {
+                    // A composition cannot outlive focus: it would eat keys.
+                    session.preedit.clear();
+                    session.flush_resizes();
+                    session.pointer.reset();
+                }
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let Some(button) = mouse::button(button) else {
@@ -1218,6 +1223,14 @@ impl Pane {
         Parsed {
             advanced: true,
             more,
+        }
+    }
+
+    /// The window gained (`focused`) or lost the focus while this pane had
+    /// it: tells the child when it asked for focus events (mode 1004).
+    fn focus_changed(&mut self, focused: bool) {
+        if self.terminal.modes().focus_events {
+            self.send(if focused { b"\x1b[I" } else { b"\x1b[O" });
         }
     }
 
@@ -3027,6 +3040,21 @@ mod tests {
     fn flush_input(pane: &mut Pane) {
         let sink = Input::spawn("sink".into(), Box::new(io::sink()), drop).unwrap();
         std::mem::replace(&mut pane.input, sink).close();
+    }
+
+    #[test]
+    fn focus_changes_are_sent_only_to_apps_that_asked() {
+        let (mut quiet, _, written) = pane(80, 24);
+        quiet.focus_changed(true);
+        quiet.focus_changed(false);
+        flush_input(&mut quiet);
+        assert!(written.lock().unwrap().is_empty(), "mode 1004 is off");
+        let (mut pane, _, written) = pane(80, 24);
+        pane.terminal.advance(b"\x1b[?1004h");
+        pane.focus_changed(false);
+        pane.focus_changed(true);
+        flush_input(&mut pane);
+        assert_eq!(*written.lock().unwrap(), b"\x1b[O\x1b[I");
     }
 
     #[test]

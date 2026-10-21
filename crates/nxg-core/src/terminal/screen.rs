@@ -137,12 +137,15 @@ impl State {
         self.dormant = None;
         self.alt_active = false;
         self.cursor_visible = true;
+        self.cursor_shape = Default::default();
         self.pen = Cell::default();
         self.sixel_scrolling = true;
         self.autowrap = true;
         self.app_cursor_keys = false;
         self.mouse = Default::default();
         self.bracketed_paste = false;
+        self.focus_events = false;
+        self.insert_mode = false;
         self.end_sync();
         self.selection = None;
         self.last_char = None;

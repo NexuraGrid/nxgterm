@@ -136,8 +136,8 @@ bounded scrollback, ~1,040 tests.
   - [x] T8a SGR attributes: `Flags` to u16; parse 2 (dim), 8 (hidden),
     9 (strike), 53 (overline), `4:x` underline styles; draw underline,
     strike and overline in both renderers
-  - [ ] T8b DECSCUSR cursor shapes (block, bar, underline) in both renderers
-  - [ ] T8c Focus events 1004, DA2, XTVERSION, ANSI DECRQM, IRM
+  - [x] T8b DECSCUSR cursor shapes (block, bar, underline) in both renderers
+  - [x] T8c Focus events 1004, DA2, XTVERSION, ANSI DECRQM, IRM
   - [ ] T8d ConPTY passthrough via our own `CreatePseudoConsole` (S8)
   - [ ] T8e OSC 10/11/12 color queries and OSC 7 cwd
   - [ ] T8f In-window notices for config errors and restart-only changes (S9)
@@ -437,6 +437,26 @@ bounded scrollback, ~1,040 tests.
   (compile, 3 core + 3 paint + 1 CPU + 1 GPU tests) then GREEN; fmt,
   clippy (both targets), 1162 tests pass. Not tried in a window.
 
+- 2026-10-20: T8b done inline. `Cursor.shape: CursorShape` (Block,
+  Underline, Bar; exported) set by `CSI Ps SP q` (0-2 block, 3-4
+  underline, 5-6 bar, others ignored; RIS resets). `paint::cursor_rects`
+  (bar w/5, underline h/10, outline only for an unfocused block) and
+  `paint::covers_glyph` (only a focused visible block inverts the glyph)
+  are shared by both renderers. RED (compile: core, paint, GPU tests)
+  then GREEN; fmt, clippy (both targets), 1165 tests pass. Blink not
+  drawn.
+
+- 2026-10-20: T8c done inline. Core: mode 1004 (`Modes::focus_events`,
+  DECRQM-able, RIS clears); DA2 `CSI > c` replies `CSI > 1 ; V ; 0 c`
+  with V = major*10000+minor*100+patch (1300 for 0.13.0); XTVERSION
+  `CSI > q` replies `DCS > | nxgterm <version> ST`; ANSI DECRQM
+  `CSI Ps $ p` answers mode 4 (1/2) and 0 otherwise (the old test that
+  pinned "no reply" now pins the ANSI-form 0 reply); IRM `CSI 4 h/l`
+  makes print insert cells (ICH) first. App: `WindowEvent::Focused`
+  sends `CSI I`/`CSI O` to the focused pane when 1004 is on. Not done:
+  focus reports on pane switches inside the window. RED (compile, 4 core
+  tests + 1 app test) then GREEN; fmt, clippy (both targets), 1170 tests.
+
 ## Delivery
 
 Strategy: `ask-on-risk`; chain strategy chosen 2026-10-20: `stacked-to-main`.
@@ -447,7 +467,11 @@ Slices (local branches, not pushed):
 Slices 1–3 merged as #69, #70, #71; released as 0.12.0.
 - `feat/trust-baseline-4-resize`: 22eb1aa..HEAD (T5b, T6); merged as #73, released as 0.13.0.
 - `feat/trust-baseline-5-t6b`: main..d596ef8 (T6b), PR #77
-- `feat/trust-baseline-6-frame`: d596ef8..HEAD (T7a), stacked on #77 Forecast for phase 1: ~400–600 authored lines.
+- `feat/trust-baseline-6-frame`: d596ef8..8eed4a1+ (T7a), PR #78, stacked on #77
+- `feat/trust-baseline-7-sgr`: feat/trust-baseline-6-frame..d3d653c (T8a,
+  390 lines), PR #79, stacked on #78
+- `feat/trust-baseline-8-cursor-modes`: d3d653c..HEAD (T8b, T8c, 352
+  lines), PR #80, stacked on #79 Forecast for phase 1: ~400–600 authored lines.
 
 ## Review log
 
@@ -468,6 +492,8 @@ Slices 1–3 merged as #69, #70, #71; released as 0.12.0.
   and acknowledged. Reviewed boundary: 16f37f8.
 - T6b (main..d596ef8): medium risk, under budget (241 lines), no review
   due; pending in the slice.
+- T8a slice (390 lines) and T8b/T8c slice (352 lines): medium risk,
+  under budget, no review due.
 
 ## Next step
 
