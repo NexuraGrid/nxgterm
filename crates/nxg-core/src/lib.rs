@@ -19,4 +19,4 @@ pub mod terminal;
 
 pub use cell::{Cell, Color, Flags, Underline};
 pub use size::{CellPixels, SizeError, TermSize, WinSize};
-pub use terminal::{Cursor, DEFAULT_SCROLLBACK, Modes, Terminal};
+pub use terminal::{Cursor, CursorShape, DEFAULT_SCROLLBACK, Modes, Terminal};

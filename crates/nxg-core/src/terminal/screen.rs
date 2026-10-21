@@ -137,6 +137,7 @@ impl State {
         self.dormant = None;
         self.alt_active = false;
         self.cursor_visible = true;
+        self.cursor_shape = Default::default();
         self.pen = Cell::default();
         self.sixel_scrolling = true;
         self.autowrap = true;

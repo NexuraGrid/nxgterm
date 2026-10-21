@@ -127,19 +127,12 @@ where
             ..cell
         };
         let [x, y] = cell_pos(usize::from(cursor.col), cursor.row);
-        if look.focused {
+        for (dx, dy, w, h) in paint::cursor_rects(cursor.shape, cursor_cell, look.focused) {
             instances.push(Instance {
-                size: [cursor_cell.width, cursor_cell.height],
-                ..solid([x, y], palette.cursor)
+                pos: [x + dx as i32, y + dy as i32],
+                size: [w, h],
+                ..solid([0, 0], palette.cursor)
             });
-        } else {
-            for (dx, dy, w, h) in paint::cursor_outline(cursor_cell) {
-                instances.push(Instance {
-                    pos: [x + dx as i32, y + dy as i32],
-                    size: [w, h],
-                    ..solid([0, 0], palette.cursor)
-                });
-            }
         }
     }
 
@@ -154,7 +147,7 @@ where
             let wide = paint::is_wide(cells, col);
             let selected = paint::is_selected(&selected, col);
             let (mut fg, bg) = paint::look_colors(c, selected, palette, look);
-            let on_block = look.focused && cursor.visible;
+            let on_block = paint::covers_glyph(cursor, look);
             if on_block && (usize::from(cursor.col), cursor.row) == (col, row) {
                 fg = bg;
             }
@@ -344,6 +337,21 @@ mod tests {
         let quad = instances[0];
         assert_eq!((quad.kind, quad.color), (KIND_SOLID, palette.foreground));
         assert!(quad.pos[1] >= BASELINE && quad.size[0] > 0);
+    }
+
+    #[test]
+    fn a_bar_cursor_is_a_thin_quad_and_keeps_the_glyph_color() {
+        let palette = Palette::default();
+        let term = term(3, 1, b"x\x1b[5 q\x1b[1G");
+        let instances = build(&term, &palette, FLUSH, BASELINE, false, slot)
+            .unwrap()
+            .instances;
+        assert_eq!(instances.len(), 2, "{instances:?}");
+        let (cursor, glyph) = (instances[0], instances[1]);
+        assert_eq!((cursor.kind, cursor.color), (KIND_SOLID, palette.cursor));
+        assert!(cursor.size[0] < FLUSH.cell.width, "thin: {:?}", cursor.size);
+        assert_eq!(cursor.size[1], FLUSH.cell.height);
+        assert_eq!(glyph.color, palette.foreground, "not inverted under a bar");
     }
 
     #[test]

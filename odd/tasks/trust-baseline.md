@@ -136,7 +136,7 @@ bounded scrollback, ~1,040 tests.
   - [x] T8a SGR attributes: `Flags` to u16; parse 2 (dim), 8 (hidden),
     9 (strike), 53 (overline), `4:x` underline styles; draw underline,
     strike and overline in both renderers
-  - [ ] T8b DECSCUSR cursor shapes (block, bar, underline) in both renderers
+  - [x] T8b DECSCUSR cursor shapes (block, bar, underline) in both renderers
   - [ ] T8c Focus events 1004, DA2, XTVERSION, ANSI DECRQM, IRM
   - [ ] T8d ConPTY passthrough via our own `CreatePseudoConsole` (S8)
   - [ ] T8e OSC 10/11/12 color queries and OSC 7 cwd
@@ -436,6 +436,15 @@ bounded scrollback, ~1,040 tests.
   more per cell or a side table), blink (5/6) still ignored. RED
   (compile, 3 core + 3 paint + 1 CPU + 1 GPU tests) then GREEN; fmt,
   clippy (both targets), 1162 tests pass. Not tried in a window.
+
+- 2026-10-20: T8b done inline. `Cursor.shape: CursorShape` (Block,
+  Underline, Bar; exported) set by `CSI Ps SP q` (0-2 block, 3-4
+  underline, 5-6 bar, others ignored; RIS resets). `paint::cursor_rects`
+  (bar w/5, underline h/10, outline only for an unfocused block) and
+  `paint::covers_glyph` (only a focused visible block inverts the glyph)
+  are shared by both renderers. RED (compile: core, paint, GPU tests)
+  then GREEN; fmt, clippy (both targets), 1165 tests pass. Blink not
+  drawn.
 
 ## Delivery
 

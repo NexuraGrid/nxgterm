@@ -28,12 +28,23 @@ pub use scrollback::DEFAULT_SCROLLBACK;
 use scrollback::Scrollback;
 use title::Titles;
 
-/// Cursor position (zero-based) and visibility.
+/// Cursor position (zero-based), visibility and shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cursor {
     pub col: u16,
     pub row: u16,
     pub visible: bool,
+    pub shape: CursorShape,
+}
+
+/// How the cursor is drawn, set by DECSCUSR (`CSI Ps SP q`). Blinking
+/// shapes are drawn steady.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CursorShape {
+    #[default]
+    Block,
+    Underline,
+    Bar,
 }
 
 /// Screen state driven by [`Terminal::advance`].
@@ -65,6 +76,7 @@ struct State {
     /// Global like in xterm: a full-screen app hiding the cursor must not
     /// leave the shell's hidden after it exits.
     cursor_visible: bool,
+    cursor_shape: CursorShape,
     pen: Cell,
     /// Replies to queries, waiting to be written to the child.
     responses: Vec<u8>,
@@ -114,6 +126,7 @@ impl Terminal {
                 dormant: None,
                 alt_active: false,
                 cursor_visible: true,
+                cursor_shape: CursorShape::Block,
                 pen: Cell::default(),
                 responses: Vec::new(),
                 cell: CellPixels::default(),
@@ -180,6 +193,7 @@ impl Terminal {
             col: screen.col,
             row: screen.row,
             visible: self.state.cursor_visible,
+            shape: self.state.cursor_shape,
         }
     }
 
@@ -670,6 +684,18 @@ impl vte::Perform for State {
             }
             return;
         }
+        // DECSCUSR: 0-2 block, 3-4 underline, 5-6 bar (odd ones blink).
+        if intermediates == b" " {
+            if action == 'q' {
+                self.cursor_shape = match first {
+                    0..=2 => CursorShape::Block,
+                    3 | 4 => CursorShape::Underline,
+                    5 | 6 => CursorShape::Bar,
+                    _ => return,
+                };
+            }
+            return;
+        }
         let private = intermediates == b"?";
         if !intermediates.is_empty() && !private {
             return;
@@ -1060,9 +1086,33 @@ mod tests {
             Cursor {
                 col: 2,
                 row: 1,
-                visible: false
+                visible: false,
+                shape: CursorShape::Block,
             }
         );
+    }
+
+    #[test]
+    fn decscusr_sets_the_cursor_shape() {
+        let mut t = term(10, 5);
+        let shape = |t: &Terminal| t.cursor().shape;
+        assert_eq!(shape(&t), CursorShape::Block);
+        for (sgr, want) in [
+            (&b"\x1b[5 q"[..], CursorShape::Bar),
+            (b"\x1b[6 q", CursorShape::Bar),
+            (b"\x1b[3 q", CursorShape::Underline),
+            (b"\x1b[4 q", CursorShape::Underline),
+            (b"\x1b[2 q", CursorShape::Block),
+            (b"\x1b[5 q\x1b[1 q", CursorShape::Block),
+            (b"\x1b[5 q\x1b[ q", CursorShape::Block),
+            (b"\x1b[3 q\x1b[9 q", CursorShape::Underline),
+            (b"\x1b[5 q\x1bc", CursorShape::Block),
+        ] {
+            t.advance(sgr);
+            assert_eq!(shape(&t), want, "{sgr:?}");
+        }
+        t.advance(b"\x1b[5q");
+        assert_eq!(shape(&t), CursorShape::Block, "no space: not DECSCUSR");
     }
 
     #[test]

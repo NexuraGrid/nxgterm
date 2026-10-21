@@ -93,7 +93,7 @@ impl CpuRenderer {
                 }
                 let selected = paint::is_selected(&selected, col);
                 let (mut fg, bg) = paint::look_colors(c, selected, &self.style.palette, look);
-                let on_block = look.focused && cursor.visible;
+                let on_block = paint::covers_glyph(cursor, look);
                 if on_block && (cursor.col as usize, cursor.row) == (col, row) {
                     fg = bg;
                 }

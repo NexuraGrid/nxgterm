@@ -251,6 +251,11 @@ DECSCUSR (`CSI n SP q`: block, underline, bar, blinking), a `[cursor]`
 config section, hollow cursor when unfocused, and focus reporting (`?1004`)
 used by vim and tmux.
 
+**Status: Partial.** DECSCUSR shapes (block, underline, bar; blinking ones
+drawn steady) and the hollow unfocused block are drawn by both renderers
+(T8b). Still open: blinking, a `[cursor]` config section, and focus
+reporting.
+
 ### 19. Glyph atlas growth
 
 The GPU atlas is a fixed 1024x1024 texture that is cleared and rebuilt when

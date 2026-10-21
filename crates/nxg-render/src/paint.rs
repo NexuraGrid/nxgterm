@@ -1,6 +1,6 @@
 //! Font-independent drawing: cell geometry, colors, backgrounds and cursor.
 
-use nxg_core::{Cell, Color, Cursor, Flags, TermSize, Terminal, Underline};
+use nxg_core::{Cell, Color, Cursor, CursorShape, Flags, TermSize, Terminal, Underline};
 
 use crate::frame::Frame;
 use crate::palette::{Palette, Rgb};
@@ -295,8 +295,35 @@ pub fn cursor_outline(cell: CellSize) -> [(u32, u32, u32, u32); 4] {
     ]
 }
 
-/// Draws the cursor when it is visible: a block, or an outline when the
-/// pane is not focused, over both cells of a wide char.
+/// The cursor of `shape` in a `cell` as `(x, y, width, height)` offsets: a
+/// block (an outline when the pane is not `focused`), a bar along the left
+/// edge `cell.width / 5` wide, or an underline along the bottom
+/// `cell.height / 10` tall (both at least 1 pixel).
+pub fn cursor_rects(
+    shape: CursorShape,
+    cell: CellSize,
+    focused: bool,
+) -> Vec<(u32, u32, u32, u32)> {
+    let (w, h) = (cell.width, cell.height);
+    match shape {
+        CursorShape::Block if focused => vec![(0, 0, w, h)],
+        CursorShape::Block => cursor_outline(cell).to_vec(),
+        CursorShape::Bar => vec![(0, 0, (w / 5).clamp(1, w.max(1)), h)],
+        CursorShape::Underline => {
+            let t = (h / 10).clamp(1, h.max(1));
+            vec![(0, h - t, w, t)]
+        }
+    }
+}
+
+/// Whether the glyph under `cursor` takes the background color: only under
+/// a visible focused block, which covers it.
+pub fn covers_glyph(cursor: Cursor, look: Look) -> bool {
+    cursor.visible && look.focused && cursor.shape == CursorShape::Block
+}
+
+/// Draws the cursor when it is visible in its shape (see
+/// [`cursor_rects`]), over both cells of a wide char.
 pub fn paint_cursor(
     term: &Terminal,
     frame: &mut Frame<'_>,
@@ -313,11 +340,7 @@ pub fn paint_cursor(
         width: layout.cell.width * cursor_cells(term, cursor),
         ..layout.cell
     };
-    if look.focused {
-        frame.fill_rect(x, y, cell.width, cell.height, palette.cursor);
-        return;
-    }
-    for (dx, dy, w, h) in cursor_outline(cell) {
+    for (dx, dy, w, h) in cursor_rects(cursor.shape, cell, look.focused) {
         frame.fill_rect(x + dx, y + dy, w, h, palette.cursor);
     }
 }
@@ -407,6 +430,25 @@ mod tests {
         assert_eq!(cell_colors(&hidden.row(0)[0], &palette), (bg, bg));
         let inverse = term(1, 1, b"\x1b[7;8mx");
         assert_eq!(cell_colors(&inverse.row(0)[0], &palette), (fg, fg));
+    }
+
+    #[test]
+    fn cursor_rects_follow_the_shape_and_the_focus() {
+        let cell = DECO_CELL;
+        assert_eq!(
+            cursor_rects(CursorShape::Block, cell, true),
+            [(0, 0, 10, 20)]
+        );
+        assert_eq!(
+            cursor_rects(CursorShape::Block, cell, false),
+            cursor_outline(cell)
+        );
+        assert_eq!(cursor_rects(CursorShape::Bar, cell, true), [(0, 0, 2, 20)]);
+        assert_eq!(cursor_rects(CursorShape::Bar, cell, false), [(0, 0, 2, 20)]);
+        assert_eq!(
+            cursor_rects(CursorShape::Underline, cell, true),
+            [(0, 18, 10, 2)]
+        );
     }
 
     #[test]
