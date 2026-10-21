@@ -130,7 +130,24 @@ bounded scrollback, ~1,040 tests.
     working when full (R8) (inline)
   - [-] T7d (dropped: frame cost measured too small) Skip rebuilding an unchanged GPU frame; CPU renderer presents
     only damaged rows (R4, R6) (inline)
-- [ ] T8 Phase 6 — sequences, ConPTY passthrough, notices, fuzzing (S7–S11, R5, R7)
+- [ ] T8 Phase 6 — sequences, ConPTY passthrough, notices, fuzzing (S7–S11, R5, R7),
+  split after mapping (2026-10-20), ordered by value for Claude Code, nvim,
+  yazi and WSL; each inline unless noted:
+  - [x] T8a SGR attributes: `Flags` to u16; parse 2 (dim), 8 (hidden),
+    9 (strike), 53 (overline), `4:x` underline styles; draw underline,
+    strike and overline in both renderers
+  - [ ] T8b DECSCUSR cursor shapes (block, bar, underline) in both renderers
+  - [ ] T8c Focus events 1004, DA2, XTVERSION, ANSI DECRQM, IRM
+  - [ ] T8d ConPTY passthrough via our own `CreatePseudoConsole` (S8)
+  - [ ] T8e OSC 10/11/12 color queries and OSC 7 cwd
+  - [ ] T8f In-window notices for config errors and restart-only changes (S9)
+  - [ ] T8g DEC special graphics and tab stops (HTS, TBC, CHT, CBT)
+  - [ ] T8h BEL (attention request), hold-on-exit and close confirmation (S10)
+  - [ ] T8i Italic face
+  - [ ] T8j OSC 133 prompt marks and jumps
+  - [ ] T8k OSC 8 hyperlinks
+  - [ ] T8l cargo-fuzz target (S11), trimmed scrollback rows (R5), shared
+    image budget (R7)
 
 ## Acceptance criteria
 
@@ -407,6 +424,18 @@ bounded scrollback, ~1,040 tests.
   cpu no pasa de 0,5". Likely the first capture caught startup (WSL VM
   boot, font load, GPU init). User approved closing T7 with T7a only and
   moving to T8 ("Si").
+
+- 2026-10-20: T8a done inline. `Flags` is u16 (Cell still 20 B):
+  DIM, HIDDEN, STRIKE, OVERLINE and a 3-bit underline style behind
+  `Flags::underline()/set_underline()` (`Underline` enum exported).
+  SGR 2/22, 8/28, 9/29, 53/55, 21, `4:0..5`, 24 parsed (unknown `4:x`
+  leaves the pen alone). `paint::decorations` gives the line rects per
+  cell (thickness h/14), shared by the CPU and GPU renderers; decorated
+  blank cells are drawn too. Dim mixes fg 50% toward bg, hidden draws fg
+  as bg (after inverse). Not done: SGR 58/59 underline color (needs 4 B
+  more per cell or a side table), blink (5/6) still ignored. RED
+  (compile, 3 core + 3 paint + 1 CPU + 1 GPU tests) then GREEN; fmt,
+  clippy (both targets), 1162 tests pass. Not tried in a window.
 
 ## Delivery
 
