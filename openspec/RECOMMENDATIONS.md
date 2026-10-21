@@ -172,6 +172,11 @@ new-window-in-cwd); OSC 8 hyperlinks (underline on hover, open on
 Ctrl+click); OSC 52 clipboard write (opt-in config; never read by default);
 OSC 4/10/11/12 color queries (some TUIs query the background color to pick a theme).
 
+**Status: Partial.** OSC 0/2 and OSC 52 shipped earlier. T8e added OSC 7 (new
+tabs and splits start in the reported directory when it exists locally) and
+OSC 10/11/12 queries (answered from the theme; setting colors is ignored).
+Still open: OSC 4 queries, OSC 8 hyperlinks.
+
 ### 11. Kitty unicode placeholders
 
 **Why.** `U=1` placements are stored but not displayed, so images do not work

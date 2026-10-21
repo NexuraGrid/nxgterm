@@ -483,9 +483,13 @@ reach the shell; its output keeps showing underneath.
 ### Tabs
 
 `Ctrl+Shift+T` opens a tab next to the current one. Every tab runs the
-configured `[shell]` (or the default shell) on its own pty, starting in the
-[working directory](#configuration) chosen at startup (the shell's current
-directory is not tracked yet), with its own history and modes; background tabs keep running.
+configured `[shell]` (or the default shell) on its own pty, with its own
+history and modes; background tabs keep running. A new tab or split starts
+in the directory the focused pane's shell last reported with OSC 7 (fish
+and most prompt tools send it; bash and zsh need a prompt hook), when that
+directory exists on this machine; otherwise, and always inside WSL on
+Windows, it starts in the [working directory](#configuration) chosen at
+startup.
 A tab closes when its program exits or with `Ctrl+Shift+W`, and nxgterm
 exits with the last one. `Alt+N` goes to tab N (`Alt+9` past the last tab
 goes to the last).
