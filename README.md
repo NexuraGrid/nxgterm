@@ -623,6 +623,7 @@ winpty (Windows Server 2016) does not pass images through either.
 20. 0.11.0: `nxgterm update`, one-line install scripts, and shells that start in the launch directory or home ✅
 21. 0.12.0: synchronized output, crash log, bounded pty output, lower memory use (one GPU backend, lazy fonts), xterm key encoding and IME ✅
 22. 0.13.0: resize keeps content in scrollback and reflows wrapped lines; bounded pty input ✅
+23. 0.14.0: underline styles, strikethrough, dim; cursor shapes; focus events; OSC 10/11/12 color queries and OSC 7 directory ✅
 
 Planned work is tracked in
 [`openspec/RECOMMENDATIONS.md`](openspec/RECOMMENDATIONS.md).
