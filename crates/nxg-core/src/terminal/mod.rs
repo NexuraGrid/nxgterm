@@ -158,6 +158,14 @@ impl Terminal {
         });
     }
 
+    /// Writes `text` (nxgterm's own message, not child output) at the
+    /// cursor. It goes through a parser of its own, so a sequence the child
+    /// is in the middle of writing is neither cut nor swallowed.
+    pub fn notice(&mut self, text: &str) {
+        self.scroll_display_to_bottom();
+        vte::Parser::new().advance(&mut self.state, text.as_bytes());
+    }
+
     pub fn resize(&mut self, size: TermSize) {
         self.state.resize(size);
     }
@@ -1047,6 +1055,16 @@ mod tests {
         assert_eq!(pos(&t), (0, 2), "kitty keyboard forms do not restore");
         t.advance(b"\x1b[1s\x1b[5;5H\x1b[u");
         assert_eq!(pos(&t), (2, 0), "CSI 1 s did not overwrite the save");
+    }
+
+    #[test]
+    fn a_notice_does_not_break_a_sequence_the_child_is_writing() {
+        let mut t = term(20, 3);
+        t.advance(b"\x1b[3"); // The child is mid-CSI...
+        t.notice("note");
+        t.advance(b"1mX"); // ...and finishes it: SGR 31, then X.
+        assert_eq!(text(&t, 0), "noteX");
+        assert_eq!(t.row(0)[4].fg, Color::Indexed(1), "the SGR still applied");
     }
 
     #[test]

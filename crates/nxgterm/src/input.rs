@@ -30,10 +30,7 @@ pub struct Input {
     /// Bytes queued and not yet written; only the sender adds to it.
     pending: Arc<AtomicUsize>,
     limit: usize,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "detached; only tests wait for it")
-    )]
+    /// Detached; only tests wait for it.
     thread: JoinHandle<()>,
 }
 
@@ -82,6 +79,12 @@ impl Input {
     /// a paste is never cut in the middle (its closing bracket kept) and a
     /// child that stops reading costs at most the limit in memory.
     pub fn send(&self, bytes: &[u8]) -> Result<(), Dropped> {
+        // A failed write ended the thread: the child is gone and nothing
+        // will be written, so the bytes still counted as pending (queued
+        // behind the failure) must not fill the queue.
+        if self.thread.is_finished() {
+            return Ok(());
+        }
         // Only this side adds, so the check holds until the add below.
         let pending = self.pending.load(Ordering::Relaxed);
         if bytes.len() > self.limit.saturating_sub(pending) {
@@ -218,6 +221,40 @@ mod tests {
         let _ = input.send(b"c"); // Dropped, no panic.
         input.close();
         assert_eq!(*failures.lock().unwrap(), [io::ErrorKind::BrokenPipe]);
+    }
+
+    /// Fails every write once the test lets it through.
+    struct FailingGate(Receiver<()>);
+
+    impl Write for FailingGate {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            let _ = self.0.recv();
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn input_queued_behind_a_failed_write_never_fills_the_queue() {
+        let (open, gate) = mpsc::channel();
+        let writer = Box::new(FailingGate(gate));
+        let input = Input::spawn_bounded("test".into(), writer, 10, drop).unwrap();
+        input.send(b"12345678").unwrap();
+        input.send(b"ab").unwrap(); // Queued behind the failing write.
+        open.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !input.thread.is_finished() {
+            assert!(Instant::now() < deadline, "the thread did not end");
+            thread::yield_now();
+        }
+        // The child is gone: input is discarded quietly, never "dropped"
+        // with a notice because of bytes nobody will write.
+        assert_eq!(input.send(b"123456789"), Ok(()));
+        assert_eq!(input.send(b"x"), Ok(()));
+        input.close();
     }
 
     #[test]

@@ -148,7 +148,7 @@ struct Session {
     bar_drag_press: Option<Instant>,
     /// Consecutive skipped frames; bounds retries so a surface that keeps
     /// failing (e.g. occluded) does not spin the event loop.
-    skipped_frames: u8,
+    frame_retries: FrameRetries,
     /// Wheel movement not yet worth a whole line.
     wheel: Wheel,
     /// What the pressed button holds the pointer for, and the cell last
@@ -312,7 +312,7 @@ impl App {
             bar_hover: None,
             bar_pressed: None,
             bar_drag_press: None,
-            skipped_frames: 0,
+            frame_retries: FrameRetries::default(),
             wheel: Wheel::default(),
             pointer: Pointer::default(),
             divider_hover: None,
@@ -998,6 +998,9 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Resized(pixels) => {
                 session.renderer.resize(pixels.width, pixels.height);
                 session.sync_grid_size();
+                // Retries spent on an occluded or minimized window must not
+                // leave the frame of the new size undrawn.
+                session.frame_retries.reset();
                 session.window.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -1138,6 +1141,24 @@ impl ApplicationHandler<UserEvent> for App {
 
 const MAX_FRAME_RETRIES: u8 = 3;
 
+/// Redraws asked again for frames the surface was not ready for (see
+/// [`MAX_FRAME_RETRIES`]); a drawn frame or a resize starts over.
+#[derive(Debug, Default)]
+struct FrameRetries(u8);
+
+impl FrameRetries {
+    /// Whether to ask for one more redraw after a skipped frame.
+    fn retry(&mut self) -> bool {
+        let retry = self.0 < MAX_FRAME_RETRIES;
+        self.0 += u8::from(retry);
+        retry
+    }
+
+    fn reset(&mut self) {
+        self.0 = 0;
+    }
+}
+
 /// How far a hovered Windows-style button's background moves from the
 /// title bar background toward its foreground.
 const WINDOWS_HOVER: f32 = 0.15;
@@ -1214,8 +1235,7 @@ impl Pane {
                 let first = !self.input_dropped;
                 if first {
                     self.input_dropped = true;
-                    self.terminal
-                        .advance(input::dropped_notice(bytes.len()).as_bytes());
+                    self.terminal.notice(&input::dropped_notice(bytes.len()));
                 }
                 first
             }
@@ -1950,13 +1970,12 @@ impl Session {
         };
         match self.renderer.draw_layers(header, &views, overlay, &shapes) {
             Ok(()) => {
-                self.skipped_frames = 0;
+                self.frame_retries.reset();
                 Ok(())
             }
             Err(RenderError::Transient(_)) => {
                 // Retry a few times, then wait for the next event to redraw.
-                if self.skipped_frames < MAX_FRAME_RETRIES {
-                    self.skipped_frames += 1;
+                if self.frame_retries.retry() {
                     self.window.request_redraw();
                 }
                 Ok(())
@@ -2660,6 +2679,17 @@ mod tests {
             input_dropped: false,
         };
         (pane, resizes, written)
+    }
+
+    #[test]
+    fn frame_retries_are_bounded_and_start_over_after_a_resize() {
+        let mut retries = FrameRetries::default();
+        for _ in 0..MAX_FRAME_RETRIES {
+            assert!(retries.retry());
+        }
+        assert!(!retries.retry(), "a surface that keeps failing stops");
+        retries.reset(); // The window was resized.
+        assert!(retries.retry(), "the resize's frame is retried again");
     }
 
     #[test]
