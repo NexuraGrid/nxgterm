@@ -147,8 +147,8 @@ where
         let selected = term.selected_cols(row);
         let cells = term.display_row(row);
         for (col, c) in cells.iter().enumerate() {
-            // Wide-char spacers are blank too: only their background.
-            if c.ch == ' ' && c.marks.is_empty() {
+            let blank = c.ch == ' ' && c.marks.is_empty();
+            if blank && !paint::is_decorated(c.flags) {
                 continue;
             }
             let wide = paint::is_wide(cells, col);
@@ -159,6 +159,17 @@ where
                 fg = bg;
             }
             let [x, y] = cell_pos(col, row);
+            for (dx, dy, w, h) in paint::decorations(c.flags, cell, baseline) {
+                instances.push(Instance {
+                    pos: [x + dx as i32, y + dy as i32],
+                    size: [w, h],
+                    ..solid([0, 0], fg)
+                });
+            }
+            // Wide-char spacers are blank too: only their background.
+            if blank {
+                continue;
+            }
             for ch in paint::glyph_chars(c) {
                 let Some(slot) = glyph(ch, c.flags.contains(Flags::BOLD), wide)? else {
                     continue;
@@ -320,6 +331,19 @@ mod tests {
             instances,
             [solid(0, 0, palette.ansi[1]), solid(0, 20, palette.cursor)]
         );
+    }
+
+    #[test]
+    fn an_underlined_space_gets_a_solid_quad_in_its_foreground() {
+        let palette = Palette::default();
+        let term = term(3, 2, b"\x1b[?25l\x1b[4m ");
+        let instances = build(&term, &palette, FLUSH, BASELINE, false, slot)
+            .unwrap()
+            .instances;
+        assert_eq!(instances.len(), 1, "{instances:?}");
+        let quad = instances[0];
+        assert_eq!((quad.kind, quad.color), (KIND_SOLID, palette.foreground));
+        assert!(quad.pos[1] >= BASELINE && quad.size[0] > 0);
     }
 
     #[test]

@@ -10,13 +10,15 @@ pub enum Color {
     Rgb(u8, u8, u8),
 }
 
-/// Text attributes as a small bit set.
+/// Text attributes as a small bit set; the underline style takes three
+/// bits of it (see [`Flags::underline`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Flags(u8);
+pub struct Flags(u16);
 
 impl Flags {
     pub const BOLD: Self = Self(1);
     pub const INVERSE: Self = Self(1 << 1);
+    /// Underlined in any style (see [`Flags::underline`]).
     pub const UNDERLINE: Self = Self(1 << 2);
     pub const ITALIC: Self = Self(1 << 3);
     /// Set on the last cell of a row that autowrap continued on the next
@@ -32,6 +34,47 @@ impl Flags {
     /// fit in (it went to the next row). Not part of the text: a reflow
     /// drops it.
     pub const WIDE_LEADER: Self = Self(1 << 7);
+    /// Faint: the foreground is drawn halfway to the background.
+    pub const DIM: Self = Self(1 << 8);
+    /// Concealed: the foreground is drawn in the background color.
+    pub const HIDDEN: Self = Self(1 << 9);
+    /// Crossed out.
+    pub const STRIKE: Self = Self(1 << 10);
+    pub const OVERLINE: Self = Self(1 << 11);
+    /// Bits 12-14: the underline style beyond [`Underline::Single`].
+    const STYLE_SHIFT: u16 = 12;
+    const STYLE_MASK: u16 = 0b111 << Self::STYLE_SHIFT;
+
+    /// The underline style, [`Underline::None`] without [`Flags::UNDERLINE`].
+    pub fn underline(self) -> Underline {
+        if !self.contains(Self::UNDERLINE) {
+            return Underline::None;
+        }
+        match (self.0 & Self::STYLE_MASK) >> Self::STYLE_SHIFT {
+            1 => Underline::Double,
+            2 => Underline::Curly,
+            3 => Underline::Dotted,
+            4 => Underline::Dashed,
+            _ => Underline::Single,
+        }
+    }
+
+    /// Sets the underline style ([`Underline::None`] removes it).
+    pub fn set_underline(&mut self, style: Underline) {
+        let bits = match style {
+            Underline::None | Underline::Single => 0,
+            Underline::Double => 1,
+            Underline::Curly => 2,
+            Underline::Dotted => 3,
+            Underline::Dashed => 4,
+        };
+        self.0 = (self.0 & !Self::STYLE_MASK) | (bits << Self::STYLE_SHIFT);
+        if style == Underline::None {
+            self.remove(Self::UNDERLINE);
+        } else {
+            self.insert(Self::UNDERLINE);
+        }
+    }
 
     pub fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
@@ -44,6 +87,18 @@ impl Flags {
     pub fn remove(&mut self, other: Self) {
         self.0 &= !other.0;
     }
+}
+
+/// How a cell is underlined (SGR 4, `4:x` and 21).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Underline {
+    #[default]
+    None,
+    Single,
+    Double,
+    Curly,
+    Dotted,
+    Dashed,
 }
 
 /// The zero-width chars (combining marks, ZWJ, variation selectors) that

@@ -1,7 +1,7 @@
 //! Terminal state machine: feeds child output through a VT parser into a grid.
 
 use crate::apc::{ApcFilter, Event};
-use crate::cell::{Cell, Color, Flags, Marks};
+use crate::cell::{Cell, Color, Flags, Marks, Underline};
 use crate::image::{ImageStore, Placement, SrcRect};
 use crate::kitty::{self, Graphics};
 use crate::ports::ClipboardKind;
@@ -424,13 +424,28 @@ impl State {
             match param[0] {
                 0 => self.pen = Cell::default(),
                 1 => self.pen.flags.insert(Flags::BOLD),
+                2 => self.pen.flags.insert(Flags::DIM),
                 3 => self.pen.flags.insert(Flags::ITALIC),
-                4 => self.pen.flags.insert(Flags::UNDERLINE),
+                4 => {
+                    if let Some(style) = underline_style(param.get(1).copied()) {
+                        self.pen.flags.set_underline(style);
+                    }
+                }
                 7 => self.pen.flags.insert(Flags::INVERSE),
-                22 => self.pen.flags.remove(Flags::BOLD),
+                8 => self.pen.flags.insert(Flags::HIDDEN),
+                9 => self.pen.flags.insert(Flags::STRIKE),
+                21 => self.pen.flags.set_underline(Underline::Double),
+                22 => {
+                    self.pen.flags.remove(Flags::BOLD);
+                    self.pen.flags.remove(Flags::DIM);
+                }
                 23 => self.pen.flags.remove(Flags::ITALIC),
-                24 => self.pen.flags.remove(Flags::UNDERLINE),
+                24 => self.pen.flags.set_underline(Underline::None),
                 27 => self.pen.flags.remove(Flags::INVERSE),
+                28 => self.pen.flags.remove(Flags::HIDDEN),
+                29 => self.pen.flags.remove(Flags::STRIKE),
+                53 => self.pen.flags.insert(Flags::OVERLINE),
+                55 => self.pen.flags.remove(Flags::OVERLINE),
                 n @ 30..=37 => self.pen.fg = Color::Indexed((n - 30) as u8),
                 n @ 40..=47 => self.pen.bg = Color::Indexed((n - 40) as u8),
                 n @ 90..=97 => self.pen.fg = Color::Indexed((n - 90 + 8) as u8),
@@ -457,6 +472,20 @@ impl State {
             }
         }
     }
+}
+
+/// The style of SGR 4 with sub-parameter `sub` (`4:x`; plain 4 is single),
+/// `None` for an unknown one, which leaves the pen alone.
+fn underline_style(sub: Option<u16>) -> Option<Underline> {
+    Some(match sub {
+        None | Some(1) => Underline::Single,
+        Some(0) => Underline::None,
+        Some(2) => Underline::Double,
+        Some(3) => Underline::Curly,
+        Some(4) => Underline::Dotted,
+        Some(5) => Underline::Dashed,
+        Some(_) => return None,
+    })
 }
 
 /// Parses `5:n` or `2[:colorspace]:r:g:b` sub-parameters.
@@ -886,6 +915,54 @@ mod tests {
         let mut t = term(5, 1);
         t.advance(b"abcde\x1b[3G\x1b[2K");
         assert_eq!(text(&t, 0), "");
+    }
+
+    /// The flags of the first cell after writing `sgr` then `x`.
+    fn flags_after(sgr: &[u8]) -> Flags {
+        let mut t = term(4, 1);
+        t.advance(sgr);
+        t.advance(b"x");
+        t.row(0)[0].flags
+    }
+
+    #[test]
+    fn sgr_sets_and_resets_dim_hidden_strike_and_overline() {
+        assert!(flags_after(b"\x1b[2m").contains(Flags::DIM));
+        assert!(flags_after(b"\x1b[8m").contains(Flags::HIDDEN));
+        assert!(flags_after(b"\x1b[9m").contains(Flags::STRIKE));
+        assert!(flags_after(b"\x1b[53m").contains(Flags::OVERLINE));
+        let reset = flags_after(b"\x1b[1;2;8;9;53m\x1b[22;28;29;55m");
+        assert_eq!(reset, Flags::default(), "22 ends bold and dim");
+    }
+
+    #[test]
+    fn sgr_underline_styles() {
+        let style = |sgr: &[u8]| flags_after(sgr).underline();
+        assert_eq!(style(b"\x1b[4m"), Underline::Single);
+        assert_eq!(style(b"\x1b[21m"), Underline::Double);
+        assert_eq!(style(b"\x1b[4:1m"), Underline::Single);
+        assert_eq!(style(b"\x1b[4:2m"), Underline::Double);
+        assert_eq!(style(b"\x1b[4:3m"), Underline::Curly);
+        assert_eq!(style(b"\x1b[4:4m"), Underline::Dotted);
+        assert_eq!(style(b"\x1b[4:5m"), Underline::Dashed);
+        assert_eq!(style(b"\x1b[4:3m\x1b[4:0m"), Underline::None);
+        assert_eq!(style(b"\x1b[4:3m\x1b[24m"), Underline::None);
+        assert_eq!(style(b"\x1b[4:3m\x1b[4m"), Underline::Single);
+        assert_eq!(
+            style(b"\x1b[4:9m"),
+            Underline::None,
+            "unknown style ignored"
+        );
+        assert!(flags_after(b"\x1b[4:3m").contains(Flags::UNDERLINE));
+    }
+
+    #[test]
+    fn sgr_keeps_bold_italic_inverse_and_underline() {
+        let flags = flags_after(b"\x1b[1;3;4;7m");
+        for flag in [Flags::BOLD, Flags::ITALIC, Flags::UNDERLINE, Flags::INVERSE] {
+            assert!(flags.contains(flag), "{flag:?}");
+        }
+        assert_eq!(flags_after(b"\x1b[1;3;4;7m\x1b[0m"), Flags::default());
     }
 
     #[test]

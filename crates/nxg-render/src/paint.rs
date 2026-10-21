@@ -1,6 +1,6 @@
 //! Font-independent drawing: cell geometry, colors, backgrounds and cursor.
 
-use nxg_core::{Cell, Color, Cursor, Flags, TermSize, Terminal};
+use nxg_core::{Cell, Color, Cursor, Flags, TermSize, Terminal, Underline};
 
 use crate::frame::Frame;
 use crate::palette::{Palette, Rgb};
@@ -87,20 +87,90 @@ impl Layout {
     }
 }
 
-/// Foreground and background pixels for `cell`, applying inverse video and
-/// bold-as-bright for the first eight ANSI colors.
+/// Foreground and background pixels for `cell`, applying bold-as-bright
+/// for the first eight ANSI colors, dim (the foreground halfway to the
+/// background), inverse video, then hidden (the foreground takes the
+/// background).
 pub fn cell_colors(cell: &Cell, palette: &Palette) -> (Rgb, Rgb) {
     let fg_color = match cell.fg {
         Color::Indexed(n @ 0..=7) if cell.flags.contains(Flags::BOLD) => Color::Indexed(n + 8),
         other => other,
     };
-    let fg = palette.resolve(fg_color, palette.foreground);
+    let mut fg = palette.resolve(fg_color, palette.foreground);
     let bg = palette.resolve(cell.bg, palette.background);
-    if cell.flags.contains(Flags::INVERSE) {
+    if cell.flags.contains(Flags::DIM) {
+        fg = dim(fg, bg, 0.5);
+    }
+    let (fg, bg) = if cell.flags.contains(Flags::INVERSE) {
         (bg, fg)
     } else {
         (fg, bg)
+    };
+    if cell.flags.contains(Flags::HIDDEN) {
+        (bg, bg)
+    } else {
+        (fg, bg)
     }
+}
+
+/// Whether `flags` draw a line over or under the cell (see
+/// [`decorations`]).
+pub fn is_decorated(flags: Flags) -> bool {
+    flags.contains(Flags::UNDERLINE)
+        || flags.contains(Flags::STRIKE)
+        || flags.contains(Flags::OVERLINE)
+}
+
+/// The lines `flags` draw in a `cell` whose text sits on `baseline`, as
+/// `(x, y, width, height)` offsets inside the cell, drawn in the
+/// foreground color: the underline in its style below the baseline, the
+/// strikethrough across the middle of the lowercase letters, the overline
+/// along the top. Lines are `cell.height / 14` pixels thick (at least 1).
+pub fn decorations(flags: Flags, cell: CellSize, baseline: i32) -> Vec<(u32, u32, u32, u32)> {
+    let mut rects = Vec::new();
+    let (w, h) = (cell.width, cell.height);
+    if w == 0 || h == 0 {
+        return rects;
+    }
+    let t = (h / 14).clamp(1, h);
+    let bottom = h - t;
+    let baseline = u32::try_from(baseline).unwrap_or(0).min(bottom);
+    let under = (baseline + 1).min(bottom);
+    match flags.underline() {
+        Underline::None => {}
+        Underline::Single => rects.push((0, under, w, t)),
+        Underline::Double => {
+            let second = (under + 2 * t).min(bottom);
+            rects.push((0, second.saturating_sub(2 * t), w, t));
+            rects.push((0, second, w, t));
+        }
+        Underline::Curly => {
+            // One wave per cell, `t` up and down around its middle row.
+            let middle = (under + t).min(bottom.saturating_sub(t)).max(t.min(bottom));
+            for x in 0..w {
+                let phase = std::f32::consts::TAU * (x as f32 + 0.5) / w as f32;
+                let y = middle as f32 - t as f32 * phase.sin();
+                rects.push((x, (y.round().max(0.0) as u32).min(bottom), 1, t));
+            }
+        }
+        Underline::Dotted => {
+            for x in (0..w).step_by(2 * t as usize) {
+                rects.push((x, under, t.min(w - x), t));
+            }
+        }
+        Underline::Dashed => {
+            let dash = (w * 3 / 8).max(1);
+            rects.push((0, under, dash, t));
+            rects.push((w / 2, under, dash.min(w - w / 2), t));
+        }
+    }
+    if flags.contains(Flags::STRIKE) {
+        rects.push((0, (baseline - baseline / 3).min(bottom), w, t));
+    }
+    if flags.contains(Flags::OVERLINE) {
+        rects.push((0, 0, w, t));
+    }
+    rects
 }
 
 /// [`cell_colors`] for a cell drawn `selected` or not. Selected cells take
@@ -272,6 +342,71 @@ mod tests {
         let mut term = Terminal::new(TermSize::new(cols, rows).unwrap());
         term.advance(input);
         term
+    }
+
+    const DECO_CELL: CellSize = CellSize {
+        width: 10,
+        height: 20,
+    };
+
+    fn lines(sgr: &str) -> Vec<(u32, u32, u32, u32)> {
+        let t = term(1, 1, format!("{sgr} ").as_bytes());
+        decorations(t.row(0)[0].flags, DECO_CELL, 15)
+    }
+
+    fn inside(rects: &[(u32, u32, u32, u32)]) -> bool {
+        rects.iter().all(|&(x, y, w, h)| {
+            w > 0 && h > 0 && x + w <= DECO_CELL.width && y + h <= DECO_CELL.height
+        })
+    }
+
+    #[test]
+    fn decorations_are_lines_inside_the_cell() {
+        assert!(lines("").is_empty(), "plain cells have none");
+        let single = lines("\x1b[4m");
+        assert_eq!(single.len(), 1);
+        let (x, y, w, _) = single[0];
+        assert_eq!((x, w), (0, 10), "full width");
+        assert!(y >= 15, "below the baseline: {y}");
+        let double = lines("\x1b[21m");
+        assert_eq!(double.len(), 2);
+        assert_ne!(double[0].1, double[1].1, "two rows");
+        let strike = lines("\x1b[9m");
+        assert!(strike.len() == 1 && strike[0].1 < 15 && strike[0].1 > 0);
+        assert_eq!(lines("\x1b[53m"), [(0, 0, 10, 1)], "overline on top");
+        for sgr in ["\x1b[4m", "\x1b[21m", "\x1b[4:3m", "\x1b[4:4m", "\x1b[4:5m"] {
+            assert!(inside(&lines(sgr)), "{sgr:?}: {:?}", lines(sgr));
+        }
+        assert_eq!(lines("\x1b[4;9;53m").len(), 3, "all three at once");
+    }
+
+    #[test]
+    fn styled_underlines_have_their_shape() {
+        let curly = lines("\x1b[4:3m");
+        let covered: u32 = curly.iter().map(|r| r.2).sum();
+        assert_eq!(covered, 10, "a wave across every column");
+        let rows: std::collections::HashSet<u32> = curly.iter().map(|r| r.1).collect();
+        assert!(rows.len() > 1, "it goes up and down: {curly:?}");
+        let dotted = lines("\x1b[4:4m");
+        assert!(dotted.len() > 1 && dotted.iter().map(|r| r.2).sum::<u32>() < 10);
+        let dashed = lines("\x1b[4:5m");
+        assert_eq!(dashed.len(), 2, "two dashes per cell: {dashed:?}");
+    }
+
+    #[test]
+    fn dim_mixes_the_foreground_halfway_and_hidden_hides_it() {
+        let palette = Palette::default();
+        let plain = term(1, 1, b"x");
+        let (fg, bg) = cell_colors(&plain.row(0)[0], &palette);
+        let dimmed = term(1, 1, b"\x1b[2mx");
+        assert_eq!(
+            cell_colors(&dimmed.row(0)[0], &palette),
+            (dim(fg, bg, 0.5), bg)
+        );
+        let hidden = term(1, 1, b"\x1b[8mx");
+        assert_eq!(cell_colors(&hidden.row(0)[0], &palette), (bg, bg));
+        let inverse = term(1, 1, b"\x1b[7;8mx");
+        assert_eq!(cell_colors(&inverse.row(0)[0], &palette), (fg, fg));
     }
 
     #[test]

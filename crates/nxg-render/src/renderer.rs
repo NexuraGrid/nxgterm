@@ -87,8 +87,8 @@ impl CpuRenderer {
             let selected = term.selected_cols(row);
             let cells = term.display_row(row);
             for (col, c) in cells.iter().enumerate() {
-                // Wide-char spacers are blank too: only their background.
-                if c.ch == ' ' && c.marks.is_empty() {
+                let blank = c.ch == ' ' && c.marks.is_empty();
+                if blank && !paint::is_decorated(c.flags) {
                     continue;
                 }
                 let selected = paint::is_selected(&selected, col);
@@ -98,6 +98,14 @@ impl CpuRenderer {
                     fg = bg;
                 }
                 let (x, y) = layout.origin(col as u32, u32::from(row));
+                let baseline = self.style.font.baseline();
+                for (dx, dy, w, h) in paint::decorations(c.flags, layout.cell, baseline) {
+                    frame.fill_rect(x + dx, y + dy, w, h, fg);
+                }
+                // Wide-char spacers are blank too: only their background.
+                if blank {
+                    continue;
+                }
                 let (x, y) = (i64::from(x), i64::from(y));
                 let bold = c.flags.contains(Flags::BOLD);
                 let wide = paint::is_wide(cells, col);
@@ -194,6 +202,30 @@ mod tests {
         assert_eq!(ink(primary()), 0, "the primary font has no icon");
         let with_fallback = primary().with_fallbacks(vec![fallback].into());
         assert!(ink(with_fallback) > 0, "the fallback face draws it");
+    }
+
+    #[test]
+    fn an_underlined_space_draws_its_line() {
+        use crate::test_font::box_font;
+        let font = Font::from_bytes(box_font(&['M'], 600), 0, None, 20.0).unwrap();
+        let mut renderer = CpuRenderer::new(Style {
+            font,
+            palette: Palette::default(),
+            padding: 0,
+            background_opacity: 1.0,
+        });
+        let cell = renderer.cell_size();
+        let mut term = Terminal::new(TermSize::new(2, 1).unwrap());
+        term.advance(b"\x1b[?25l\x1b[4m \x1b[24m ");
+        let (w, h) = (cell.width * 2, cell.height);
+        let mut pixels = vec![0; (w * h) as usize];
+        let mut frame = Frame::new(&mut pixels, w, h).unwrap();
+        renderer.render(&term, &mut frame);
+        let fg = Palette::default().foreground;
+        let inked =
+            |x0: u32, x1: u32| (x0..x1).any(|x| (0..h).any(|y| frame.pixel(x, y) == Some(fg)));
+        assert!(inked(0, cell.width), "the underline");
+        assert!(!inked(cell.width, w), "the plain space stays blank");
     }
 
     #[test]

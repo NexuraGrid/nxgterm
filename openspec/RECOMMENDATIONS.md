@@ -19,7 +19,7 @@ Each item is meant to become its own OpenSpec change
 | 5 | P1 | ~~Scrollback with mouse wheel~~ Done in 0.2.0 | terminal-core, rendering |
 | 6 | P1 | ~~Selection, copy/paste and bracketed paste~~ Done in 0.3.0 | terminal-core, configuration |
 | 7 | P1 | Wide characters and emoji (unicode-width) | terminal-core, rendering |
-| 8 | P1 | ~~Font fallback for missing glyphs~~ (0.2.0); italic and underline still open | rendering |
+| 8 | P1 | ~~Font fallback for missing glyphs~~ (0.2.0); ~~underline styles, strikethrough, overline, dim, hidden~~ (T8a); italic still open | rendering |
 | 9 | P1 | ~~Mouse reporting~~ (0.2.0); full key encoding still open | terminal-core |
 | 10 | P1 | OSC support: title, OSC 7, OSC 8, OSC 52 | terminal-core |
 | 11 | P1 | Kitty unicode placeholders (images inside ngmux/tmux) | inline-images |
@@ -144,7 +144,7 @@ the previous cell.
 
 ### 8. Font fallback for missing glyphs; italic and underline
 
-**Status: Partial.** Per-glyph font fallback shipped in 0.2.0 (PR #9); italic and underline are still not drawn.
+**Status: Partial.** Per-glyph font fallback shipped in 0.2.0 (PR #9). Underline (single, double, curly, dotted, dashed: SGR 4, `4:x`, 21), strikethrough (9), overline (53), dim (2) and hidden (8) are drawn by both renderers since the trust baseline (T8a); the underline color (SGR 58/59) is not stored yet and underlines take the text color. Italic is still not drawn.
 
 **Why.** Characters missing from the chosen font (Nerd Font icons used by
 Yazi, CJK, emoji) render as `.notdef`; italic and underline are parsed
