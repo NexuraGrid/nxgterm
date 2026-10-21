@@ -284,6 +284,23 @@ impl ImageStore {
         });
     }
 
+    /// Moves every placement down `lines` rows (history rows came back on
+    /// screen), those anchored above the screen included, dropping the
+    /// ones whose anchor passes the last of `rows`.
+    pub fn scroll_down(&mut self, lines: u32, rows: u16) {
+        let lines = i32::try_from(lines).unwrap_or(i32::MAX);
+        self.placements.retain_mut(|p| {
+            p.row = p.row.saturating_add(lines);
+            p.row < i32::from(rows)
+        });
+    }
+
+    /// The placements, for a reflow that moves them with their cells; the
+    /// caller drops the ones that left the screen (see [`Self::scroll_up`]).
+    pub(crate) fn placements_mut(&mut self) -> &mut [Placement] {
+        &mut self.placements
+    }
+
     /// Moves placements up `lines` rows as the grid scrolls, dropping the
     /// ones that leave the screen entirely.
     pub fn scroll_up(&mut self, lines: u32, cell: CellPixels) {

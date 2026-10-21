@@ -7,14 +7,15 @@
 //! A reflow touches only rows that need it: a history line that was not
 //! wrapped and fits the new width keeps its box (and its old width; the
 //! viewport cuts or pads it), so widening costs the wrapped lines and
-//! narrowing the lines longer than the new width. Image placements stay
-//! where they were on a reflow (they move with their rows otherwise).
+//! narrowing the lines longer than the new width. Image placements move
+//! with their rows, and on a reflow with the cell they are anchored on.
 
 use super::screen::Screen;
 use super::scrollback::Scrollback;
 use crate::TermSize;
 use crate::cell::{Cell, Color, Flags, repair_wide, wraps};
 use crate::grid::{Grid, Region};
+use crate::image::Placement;
 
 /// Whether `cell` shows nothing: a plain space on the default background.
 /// Blank rows below the cursor are the first to go when the screen
@@ -208,11 +209,13 @@ fn copy_row(dst: &mut [Cell], src: &[Cell]) {
 
 /// Resizes the main screen, moving rows between it and `scrollback` (see
 /// [`first_shown`]). Returns how many rows moved up into the history
-/// (negative: came back down from it), for the images on screen.
+/// (negative: came back down from it), for the images on screen; a reflow
+/// moves `placements` itself and returns 0.
 pub(super) fn resize_main(
     screen: &mut Screen,
     scrollback: &mut Scrollback,
     size: TermSize,
+    placements: &mut [Placement],
 ) -> isize {
     let old = screen.grid.size();
     screen.region = Region::full(size.rows());
@@ -220,7 +223,7 @@ pub(super) fn resize_main(
         return 0;
     }
     if old.cols() != size.cols() {
-        reflow_main(screen, scrollback, size);
+        reflow_main(screen, scrollback, size, placements);
         return 0;
     }
     let history = scrollback.len();
@@ -266,8 +269,15 @@ pub(super) fn resize_main(
 
 /// [`resize_main`] for a width change: the history and the used screen
 /// rows are rewrapped (see [`rewrap`]); the line of the cursor keeps its
-/// first screen row when it can.
-fn reflow_main(screen: &mut Screen, scrollback: &mut Scrollback, size: TermSize) {
+/// first screen row when it can. A placement anchored on those rows moves
+/// with its cell; one below them (or above the history) keeps its distance
+/// to the cursor.
+fn reflow_main(
+    screen: &mut Screen,
+    scrollback: &mut Scrollback,
+    size: TermSize,
+    placements: &mut [Placement],
+) {
     let old = screen.grid.size();
     let history = scrollback.len();
     let used = used_rows(screen);
@@ -290,6 +300,22 @@ fn reflow_main(screen: &mut Screen, scrollback: &mut Scrollback, size: TermSize)
     if let Some(saved) = saved {
         points.push(point(saved.row, saved.col));
     }
+    let laid_out = rows.len() as i64;
+    // Absolute rows of the placements; those on the laid-out rows are
+    // points from `anchored` on.
+    let rows_of: Vec<i64> = placements
+        .iter()
+        .map(|p| history as i64 + i64::from(p.row))
+        .collect();
+    let anchored = points.len();
+    for (p, &row) in placements.iter().zip(&rows_of) {
+        if (0..laid_out).contains(&row) {
+            points.push(Point {
+                row: row as usize,
+                col: p.col as usize,
+            });
+        }
+    }
     let laid = rewrap(rows, size.cols(), &mut points);
     let (new_start, new_cursor) = (points[0].row, points[1].row);
     let top = (new_start + history).saturating_sub(start);
@@ -304,6 +330,18 @@ fn reflow_main(screen: &mut Screen, scrollback: &mut Scrollback, size: TermSize)
     }
     screen.grid = grid;
     let (last_row, last_col) = (usize::from(size.rows()) - 1, size.cols() - 1);
+    let mut moved = points[anchored..].iter();
+    for (p, &row) in placements.iter_mut().zip(&rows_of) {
+        let (row, col) = match (0..laid_out).contains(&row) {
+            true => {
+                let point = moved.next().expect("one point per anchored placement");
+                (point.row as i64, point.col as u32)
+            }
+            false => (new_cursor as i64 + row - cursor as i64, p.col),
+        };
+        p.row = i32::try_from(row - first as i64).unwrap_or(i32::MIN);
+        p.col = col.min(u32::from(last_col));
+    }
     let place = |point: Point| {
         let row = point.row.saturating_sub(first).min(last_row) as u16;
         (row, (point.col.min(usize::from(last_col))) as u16)
@@ -352,6 +390,62 @@ mod tests {
 
     fn screen(t: &Terminal) -> Vec<String> {
         (0..t.size().rows()).map(|r| text(t, r)).collect()
+    }
+
+    /// (col, row) of every image placement.
+    fn anchors(t: &Terminal) -> Vec<(u32, i32)> {
+        t.images()
+            .placements()
+            .iter()
+            .map(|p| (p.col, p.row))
+            .collect()
+    }
+
+    #[test]
+    fn shrinking_moves_images_up_with_their_rows() {
+        let mut t = sized(10, 4);
+        t.advance(b"a\r\nb\r\nc\r\n");
+        t.advance(&kitty_rgba(1, 10, 20, ",C=1"));
+        assert_eq!(anchors(&t), [(0, 3)]);
+        resize(&mut t, 10, 2);
+        assert_eq!(screen(&t), ["c", ""]);
+        assert_eq!(anchors(&t), [(0, 1)], "still on its row");
+    }
+
+    #[test]
+    fn growing_brings_images_back_down_with_the_history() {
+        let mut t = sized(4, 3);
+        t.advance(b"x\r\n");
+        // Two rows tall, anchored on row 1, then scrolled half out.
+        t.advance(&kitty_rgba(1, 10, 40, ",C=1"));
+        t.advance(b"\x1b[3;1H\n\n");
+        assert_eq!(anchors(&t), [(0, -1)], "partly visible");
+        resize(&mut t, 4, 5);
+        assert_eq!(text(&t, 0), "x");
+        assert_eq!(anchors(&t), [(0, 1)], "back on its row");
+    }
+
+    #[test]
+    fn a_reflow_moves_images_with_their_cells() {
+        let mut t = sized(10, 3);
+        t.advance(b"abcdefgh");
+        t.advance(&kitty_rgba(1, 10, 20, ",C=1"));
+        assert_eq!(anchors(&t), [(8, 0)]);
+        resize(&mut t, 4, 3);
+        assert_eq!(screen(&t), ["abcd", "efgh", ""]);
+        assert_eq!(anchors(&t), [(0, 2)], "after the h, like the cursor");
+        resize(&mut t, 10, 3);
+        assert_eq!(anchors(&t), [(8, 0)]);
+    }
+
+    #[test]
+    fn a_reflow_drops_images_pushed_off_the_top() {
+        let mut t = sized(4, 2);
+        t.advance(&kitty_rgba(1, 10, 20, ",C=1"));
+        t.advance(b"abcd\r\nef");
+        // Narrowing to 2 columns pushes "ab" into the history.
+        resize(&mut t, 2, 2);
+        assert!(t.images().placements().is_empty());
     }
 
     #[test]
