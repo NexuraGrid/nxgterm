@@ -7,11 +7,13 @@ use crate::kitty::{self, Graphics};
 use crate::ports::ClipboardKind;
 use crate::sixel::{self, SixelDecoder};
 use crate::{CellPixels, TermSize};
+pub use osc::ReportedColors;
 use unicode_normalization::char::compose;
 use unicode_width::UnicodeWidthChar;
 
 mod edit;
 mod modes;
+mod osc;
 mod osc52;
 mod resize;
 mod screen;
@@ -118,6 +120,10 @@ struct State {
     titles: Titles,
     /// Clipboard writes requested with OSC 52, waiting for the app.
     clipboard: osc52::Requests,
+    /// What OSC 10/11/12 queries report (set by the window).
+    reported_colors: ReportedColors,
+    /// The directory the shell last reported with OSC 7.
+    working_dir: Option<String>,
 }
 
 impl Terminal {
@@ -151,6 +157,8 @@ impl Terminal {
                 selection: None,
                 titles: Titles::default(),
                 clipboard: osc52::Requests::default(),
+                reported_colors: ReportedColors::default(),
+                working_dir: None,
             },
         }
     }
@@ -232,6 +240,22 @@ impl Terminal {
 
     /// Sets the pixel size of a cell; the app calls this whenever the
     /// renderer's font or scale changes. Zero is treated as one.
+    /// The colors OSC 10/11/12 queries report: the window's default
+    /// foreground, background and cursor.
+    pub fn set_reported_colors(&mut self, colors: ReportedColors) {
+        self.state.reported_colors = colors;
+    }
+
+    pub fn reported_colors(&self) -> ReportedColors {
+        self.state.reported_colors
+    }
+
+    /// The directory the shell last reported with OSC 7 (a local path;
+    /// it may not exist on this machine, e.g. inside WSL).
+    pub fn working_dir(&self) -> Option<&str> {
+        self.state.working_dir.as_deref()
+    }
+
     pub fn set_cell_pixels(&mut self, width: u32, height: u32) {
         self.state.cell = CellPixels::new(width, height);
     }
@@ -639,9 +663,25 @@ impl vte::Perform for State {
     /// OSC 0 and OSC 2 set the window title (vte splits it on `;`, so the
     /// pieces are joined back). OSC 52 asks to set the clipboard. OSC 1
     /// (icon name) and the rest are ignored.
-    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+    fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
         match params {
             [b"0" | b"2", text @ ..] => self.titles.set(&text.join(&b';')),
+            [b"7", url] => {
+                if let Some(path) = osc::file_url_path(url) {
+                    self.working_dir = Some(path);
+                }
+            }
+            [code @ (b"10" | b"11" | b"12"), specs @ ..] => {
+                let code = if *code == b"10" {
+                    10
+                } else if *code == b"11" {
+                    11
+                } else {
+                    12
+                };
+                let reply = self.reported_colors.replies(code, specs, bell_terminated);
+                self.responses.extend_from_slice(&reply);
+            }
             [b"52", selection, data] => self.clipboard.handle(selection, data),
             _ => {}
         }
@@ -1139,6 +1179,59 @@ mod tests {
                 shape: CursorShape::Block,
             }
         );
+    }
+
+    #[test]
+    fn color_queries_report_the_default_colors_with_the_same_terminator() {
+        let mut t = term(4, 1);
+        t.set_reported_colors(ReportedColors {
+            foreground: [0xcd, 0xd6, 0xf4],
+            background: [0x1e, 0x1e, 0x2e],
+            cursor: [0xf5, 0xe0, 0xdc],
+        });
+        t.advance(b"\x1b]11;?\x07");
+        assert_eq!(t.take_responses(), b"\x1b]11;rgb:1e1e/1e1e/2e2e\x07");
+        t.advance(b"\x1b]10;?\x1b\\");
+        assert_eq!(t.take_responses(), b"\x1b]10;rgb:cdcd/d6d6/f4f4\x1b\\");
+        t.advance(b"\x1b]12;?\x07");
+        assert_eq!(t.take_responses(), b"\x1b]12;rgb:f5f5/e0e0/dcdc\x07");
+        // One OSC 10 can ask for the next ones too, as in xterm.
+        t.advance(b"\x1b]10;?;?\x07");
+        assert_eq!(
+            t.take_responses(),
+            b"\x1b]10;rgb:cdcd/d6d6/f4f4\x07\x1b]11;rgb:1e1e/1e1e/2e2e\x07"
+        );
+        t.advance(b"\x1b]11;#ff0000\x07");
+        assert!(t.take_responses().is_empty(), "setting a color is ignored");
+        t.advance(b"\x1b]11;?\x07");
+        assert_eq!(t.take_responses(), b"\x1b]11;rgb:1e1e/1e1e/2e2e\x07");
+    }
+
+    #[test]
+    fn osc_7_records_the_working_directory() {
+        let mut t = term(4, 1);
+        assert_eq!(t.working_dir(), None);
+        t.advance(b"\x1b]7;file://box/home/me/My%20Dir\x07");
+        assert_eq!(t.working_dir(), Some("/home/me/My Dir"));
+        t.advance(b"\x1b]7;file:///C:/Users/me\x1b\\");
+        assert_eq!(t.working_dir(), Some("C:/Users/me"), "a Windows drive path");
+        t.advance(b"\x1b]7;https://example.com/x\x07");
+        assert_eq!(t.working_dir(), Some("C:/Users/me"), "only file URLs");
+        t.advance(b"\x1b]7;file://box/bad%zz\x07");
+        assert_eq!(
+            t.working_dir(),
+            Some("C:/Users/me"),
+            "a bad escape is ignored"
+        );
+        t.advance(b"\x1bc");
+        assert_eq!(t.working_dir(), None, "RIS forgets it");
+    }
+
+    #[test]
+    fn osc_title_and_clipboard_still_work() {
+        let mut t = term(4, 1);
+        t.advance(b"\x1b]2;hello\x07");
+        assert_eq!(t.title(), Some("hello"));
     }
 
     #[test]

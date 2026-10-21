@@ -139,7 +139,7 @@ bounded scrollback, ~1,040 tests.
   - [x] T8b DECSCUSR cursor shapes (block, bar, underline) in both renderers
   - [x] T8c Focus events 1004, DA2, XTVERSION, ANSI DECRQM, IRM
   - [-] T8d (dropped: obsolete, see Log 2026-10-20) ConPTY passthrough via our own `CreatePseudoConsole` (S8)
-  - [ ] T8e OSC 10/11/12 color queries and OSC 7 cwd
+  - [x] T8e OSC 10/11/12 color queries and OSC 7 cwd
   - [ ] T8f In-window notices for config errors and restart-only changes (S9)
   - [ ] T8g DEC special graphics and tab stops (HTS, TBC, CHT, CBT)
   - [ ] T8h BEL (attention request), hold-on-exit and close confirmation (S10)
@@ -469,6 +469,20 @@ bounded scrollback, ~1,040 tests.
   already passes through, and setting 0x08 would change width
   measurement instead. Possible follow-up (not requested): pass
   GLYPH_WIDTH_WCSWIDTH so ConPTY measures widths like nxg-core.
+
+- 2026-10-20: T8e done inline. Core: new `terminal/osc.rs`;
+  `ReportedColors` (exported) set by the app with
+  `Terminal::set_reported_colors`; OSC 10/11/12 `?` replies
+  `OSC n;rgb:rrrr/gggg/bbbb` with the query's terminator (BEL or ST),
+  several `?` ask for the next codes (xterm); setting colors still
+  ignored. OSC 7 `file://host/path` percent-decoded into
+  `Terminal::working_dir()` (drive paths lose the leading slash; other
+  schemes and bad escapes ignored; RIS clears). App: palette colors set
+  on spawn, kept on panic recovery, updated on color reload; new tabs and
+  splits use `pane_dir(reported, start_dir)`: the reported dir only if
+  `is_dir()` here (WSL Linux paths fall back). README tabs paragraph
+  updated. RED (compile: 3 core + 2 osc unit + 3 app tests) then GREEN;
+  fmt, clippy (both targets), 1177 tests.
 
 ## Delivery
 

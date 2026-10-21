@@ -16,12 +16,12 @@ use nxg_config::{
 use nxg_core::fallback::{self, Init};
 use nxg_core::mouse::{MouseAction, MouseButton, MouseEvent};
 use nxg_core::ports::{ChildProcess, Clipboard, ClipboardKind, PtyControl, RenderError, Renderer};
-use nxg_core::{CellPixels, TermSize, Terminal, WinSize};
+use nxg_core::{CellPixels, ReportedColors, TermSize, Terminal, WinSize};
 use nxg_pty::ShellCommand;
 use nxg_render::paint::dim;
 use nxg_render::{
     CellSize, CpuWindowRenderer, Font, FontError, FontFaces, GpuRenderer, Header, Layout, Mask,
-    Overlay, PaneView, Shape, Style, WindowRenderer,
+    Overlay, Palette, PaneView, Shape, Style, WindowRenderer,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -342,7 +342,8 @@ impl App {
         let Some(session) = &mut self.session else {
             return;
         };
-        match session.open_tab(&self.config, self.start_dir.as_deref(), &self.proxy) {
+        let dir = session.new_pane_dir(self.start_dir.as_deref());
+        match session.open_tab(&self.config, dir.as_deref(), &self.proxy) {
             Ok(_) => session.window.request_redraw(),
             Err(error) => eprintln!("nxgterm: cannot open a tab: {error}"),
         }
@@ -727,7 +728,8 @@ impl App {
         let area = session.content_size();
         match command {
             PaneCommand::Split(axis) => {
-                session.split(axis, &self.config, self.start_dir.as_deref(), &self.proxy)
+                let dir = session.new_pane_dir(self.start_dir.as_deref());
+                session.split(axis, &self.config, dir.as_deref(), &self.proxy)
             }
             PaneCommand::Focus(dir) => {
                 if tab::focus_active(&mut session.tabs, dir, area) {
@@ -862,6 +864,10 @@ impl App {
             if self.config.colors != new.colors {
                 let theme = appearance::window_theme(&new.colors.resolve());
                 session.window.set_theme(Some(theme));
+                let colors = reported_colors(&appearance::palette(&new.colors.resolve()));
+                for tab in session.tabs.iter_mut() {
+                    tab.each_mut(|pane| pane.terminal.set_reported_colors(colors));
+                }
             }
             if self.config.window.opacity != new.window.opacity {
                 report_opacity(&new, session.transparent, session.renderer.as_ref());
@@ -1260,6 +1266,16 @@ impl Pane {
 }
 
 impl Session {
+    /// Where a new tab or split starts: the directory the focused pane's
+    /// shell reported (OSC 7) when it exists here, else `start`.
+    fn new_pane_dir(&self, start: Option<&Path>) -> Option<PathBuf> {
+        let reported = self
+            .tabs
+            .active()
+            .and_then(|tab| tab.focused().terminal.working_dir());
+        pane_dir(reported, start)
+    }
+
     /// Writes input for the child of the focused pane.
     fn send(&mut self, bytes: &[u8]) {
         if let Some(pane) = tab::focused_mut(&mut self.tabs) {
@@ -2276,6 +2292,8 @@ fn spawn_pane(
         terminal.set_cell_pixels(cell.width, cell.height);
     }
     terminal.set_scrollback_limit(config.scrollback.lines);
+    let palette = appearance::palette(&config.colors.resolve());
+    terminal.set_reported_colors(reported_colors(&palette));
     let shell_env = env::var("SHELL").ok();
     Ok(Pane {
         terminal,
@@ -2353,9 +2371,31 @@ fn advance_guarded(
     let mut fresh = Terminal::new(terminal.size());
     fresh.set_cell_pixels(cell.width, cell.height);
     fresh.set_scrollback_limit(scrollback);
+    fresh.set_reported_colors(terminal.reported_colors());
     fresh.advance(notice.as_bytes());
     *terminal = fresh;
     outcome
+}
+
+/// What OSC 10/11/12 report for `palette`: its default foreground,
+/// background and cursor.
+fn reported_colors(palette: &Palette) -> ReportedColors {
+    let rgb = |color: u32| [(color >> 16) as u8, (color >> 8) as u8, color as u8];
+    ReportedColors {
+        foreground: rgb(palette.foreground),
+        background: rgb(palette.background),
+        cursor: rgb(palette.cursor),
+    }
+}
+
+/// The `reported` directory (OSC 7) when it exists on this machine (a
+/// Linux path reported from inside WSL does not on Windows), else
+/// `fallback`.
+fn pane_dir(reported: Option<&str>, fallback: Option<&Path>) -> Option<PathBuf> {
+    reported
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_dir())
+        .or_else(|| fallback.map(Path::to_path_buf))
 }
 
 /// Writes the clipboard `requests` of an application (OSC 52), skipping
@@ -2800,6 +2840,8 @@ mod tests {
     fn a_parser_panic_resets_only_the_terminal_and_says_so() {
         let mut terminal = Terminal::new(size(60, 3));
         terminal.set_cell_pixels(9, 18);
+        let colors = reported_colors(&Palette::default());
+        terminal.set_reported_colors(colors);
         terminal.advance(b"old\x1b[?1049h\x1b[?2026h");
         let mut recoveries = Recoveries::default();
         let now = Instant::now();
@@ -2810,6 +2852,11 @@ mod tests {
         assert_eq!(outcome, Guarded::Reset);
         assert_eq!(terminal.size(), size(60, 3));
         assert_eq!(terminal.cell_pixels(), CellPixels::new(9, 18));
+        assert_eq!(
+            terminal.reported_colors(),
+            colors,
+            "the window's colors stay"
+        );
         assert!(!terminal.synchronized(), "a fresh terminal holds no frame");
         let screen = screen_text(&terminal, 3);
         assert!(
@@ -3055,6 +3102,39 @@ mod tests {
         pane.focus_changed(true);
         flush_input(&mut pane);
         assert_eq!(*written.lock().unwrap(), b"\x1b[O\x1b[I");
+    }
+
+    #[test]
+    fn reported_colors_come_from_the_palette() {
+        let palette = Palette {
+            foreground: 0x00cd_d6f4,
+            background: 0x001e_1e2e,
+            cursor: 0x00f5_e0dc,
+            ..Palette::default()
+        };
+        assert_eq!(
+            reported_colors(&palette),
+            ReportedColors {
+                foreground: [0xcd, 0xd6, 0xf4],
+                background: [0x1e, 0x1e, 0x2e],
+                cursor: [0xf5, 0xe0, 0xdc],
+            }
+        );
+    }
+
+    #[test]
+    fn new_panes_start_where_the_shell_said_it_is_when_that_exists_here() {
+        let here = env::temp_dir();
+        let fallback = Path::new("/fallback");
+        let reported = here.to_str().unwrap();
+        assert_eq!(pane_dir(Some(reported), Some(fallback)), Some(here.clone()));
+        assert_eq!(
+            pane_dir(Some("/no/such/dir/nxgterm"), Some(fallback)),
+            Some(fallback.to_path_buf()),
+            "e.g. a Linux path from inside WSL"
+        );
+        assert_eq!(pane_dir(None, Some(fallback)), Some(fallback.to_path_buf()));
+        assert_eq!(pane_dir(None, None), None);
     }
 
     #[test]

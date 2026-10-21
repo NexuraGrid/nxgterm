@@ -146,6 +146,7 @@ impl State {
         self.bracketed_paste = false;
         self.focus_events = false;
         self.insert_mode = false;
+        self.working_dir = None;
         self.end_sync();
         self.selection = None;
         self.last_char = None;
