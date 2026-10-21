@@ -17,6 +17,6 @@ pub mod sixel;
 pub mod size;
 pub mod terminal;
 
-pub use cell::{Cell, Color, Flags};
+pub use cell::{Cell, Color, Flags, Underline};
 pub use size::{CellPixels, SizeError, TermSize, WinSize};
 pub use terminal::{Cursor, DEFAULT_SCROLLBACK, Modes, Terminal};
