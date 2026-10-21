@@ -467,7 +467,11 @@ Slices (local branches, not pushed):
 Slices 1–3 merged as #69, #70, #71; released as 0.12.0.
 - `feat/trust-baseline-4-resize`: 22eb1aa..HEAD (T5b, T6); merged as #73, released as 0.13.0.
 - `feat/trust-baseline-5-t6b`: main..d596ef8 (T6b), PR #77
-- `feat/trust-baseline-6-frame`: d596ef8..HEAD (T7a), stacked on #77 Forecast for phase 1: ~400–600 authored lines.
+- `feat/trust-baseline-6-frame`: d596ef8..8eed4a1+ (T7a), PR #78, stacked on #77
+- `feat/trust-baseline-7-sgr`: feat/trust-baseline-6-frame..d3d653c (T8a,
+  390 lines), stacked on #78; not pushed
+- `feat/trust-baseline-8-cursor-modes`: d3d653c..HEAD (T8b, T8c, 352
+  lines), stacked on the T8a slice; not pushed Forecast for phase 1: ~400–600 authored lines.
 
 ## Review log
 
@@ -488,6 +492,8 @@ Slices 1–3 merged as #69, #70, #71; released as 0.12.0.
   and acknowledged. Reviewed boundary: 16f37f8.
 - T6b (main..d596ef8): medium risk, under budget (241 lines), no review
   due; pending in the slice.
+- T8a slice (390 lines) and T8b/T8c slice (352 lines): medium risk,
+  under budget, no review due.
 
 ## Next step
 
