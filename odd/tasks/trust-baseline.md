@@ -469,9 +469,9 @@ Slices 1–3 merged as #69, #70, #71; released as 0.12.0.
 - `feat/trust-baseline-5-t6b`: main..d596ef8 (T6b), PR #77
 - `feat/trust-baseline-6-frame`: d596ef8..8eed4a1+ (T7a), PR #78, stacked on #77
 - `feat/trust-baseline-7-sgr`: feat/trust-baseline-6-frame..d3d653c (T8a,
-  390 lines), stacked on #78; not pushed
+  390 lines), PR #79, stacked on #78
 - `feat/trust-baseline-8-cursor-modes`: d3d653c..HEAD (T8b, T8c, 352
-  lines), stacked on the T8a slice; not pushed Forecast for phase 1: ~400–600 authored lines.
+  lines), PR #80, stacked on #79 Forecast for phase 1: ~400–600 authored lines.
 
 ## Review log
 
