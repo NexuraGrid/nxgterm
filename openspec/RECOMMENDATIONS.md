@@ -253,8 +253,9 @@ used by vim and tmux.
 
 **Status: Partial.** DECSCUSR shapes (block, underline, bar; blinking ones
 drawn steady) and the hollow unfocused block are drawn by both renderers
-(T8b). Still open: blinking, a `[cursor]` config section, and focus
-reporting.
+(T8b). Focus reporting (`?1004`, window focus to the focused pane) shipped
+with T8c. Still open: blinking, a `[cursor]` config section, and focus
+reports when switching panes inside a window.
 
 ### 19. Glyph atlas growth
 

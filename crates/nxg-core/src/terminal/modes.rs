@@ -21,6 +21,9 @@ pub struct Modes {
     pub alternate_scroll: bool,
     /// 2004: pasted text is wrapped in `ESC [ 200 ~` ... `ESC [ 201 ~`.
     pub bracketed_paste: bool,
+    /// 1004: the window gaining and losing focus is sent as `ESC [ I` and
+    /// `ESC [ O`.
+    pub focus_events: bool,
 }
 
 impl Default for Modes {
@@ -32,6 +35,7 @@ impl Default for Modes {
             mouse_encoding: MouseEncoding::X10,
             alternate_scroll: true,
             bracketed_paste: false,
+            focus_events: false,
         }
     }
 }
@@ -79,6 +83,7 @@ impl Terminal {
             mouse_encoding: self.state.mouse.encoding(),
             alternate_scroll: self.state.mouse.alternate_scroll,
             bracketed_paste: self.state.bracketed_paste,
+            focus_events: self.state.focus_events,
         }
     }
 
@@ -146,6 +151,7 @@ impl State {
             1006 => self.mouse.sgr = on,
             1007 => self.mouse.alternate_scroll = on,
             1015 => self.mouse.urxvt = on,
+            1004 => self.focus_events = on,
             2004 => self.bracketed_paste = on,
             2026 if on => self.synchronized = true,
             2026 => self.end_sync(),
@@ -175,6 +181,7 @@ impl State {
             1006 => self.mouse.sgr,
             1007 => self.mouse.alternate_scroll,
             1015 => self.mouse.urxvt,
+            1004 => self.focus_events,
             2004 => self.bracketed_paste,
             2026 => self.synchronized,
             _ => return None,
@@ -189,6 +196,24 @@ impl State {
             None => 0,
         };
         let reply = format!("\x1b[?{mode};{state}$y");
+        self.responses.extend_from_slice(reply.as_bytes());
+    }
+
+    /// SM/RM for ANSI `mode`; only IRM (4) is supported.
+    pub(super) fn set_ansi_mode(&mut self, mode: u16, on: bool) {
+        if mode == 4 {
+            self.insert_mode = on;
+        }
+    }
+
+    /// DECRQM reply for ANSI `mode`: `CSI Ps ; Pm $ y`.
+    pub(super) fn report_ansi_mode(&mut self, mode: u16) {
+        let state = match mode {
+            4 if self.insert_mode => 1,
+            4 => 2,
+            _ => 0,
+        };
+        let reply = format!("\x1b[{mode};{state}$y");
         self.responses.extend_from_slice(reply.as_bytes());
     }
 }
@@ -452,6 +477,7 @@ mod tests {
                 mouse_encoding: MouseEncoding::X10,
                 alternate_scroll: true,
                 bracketed_paste: false,
+                focus_events: false,
             }
         );
         assert_eq!(t.modes(), Modes::default());
@@ -677,6 +703,6 @@ mod tests {
     fn ansi_mode_requests_are_not_answered_as_private() {
         let mut t = term(5, 2);
         t.advance(b"\x1b[2026$p");
-        assert!(t.take_responses().is_empty());
+        assert_eq!(t.take_responses(), b"\x1b[2026;0$y", "ANSI form, unknown");
     }
 }

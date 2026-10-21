@@ -102,6 +102,10 @@ struct State {
     mouse: MouseModes,
     /// Bracketed paste (2004). Global like the mouse modes.
     bracketed_paste: bool,
+    /// 1004: report focus changes.
+    focus_events: bool,
+    /// IRM: printing pushes the rest of the line right.
+    insert_mode: bool,
     /// Synchronized output (2026): the app is mid-frame and asks the window
     /// not to draw until it resets the mode.
     synchronized: bool,
@@ -140,6 +144,8 @@ impl Terminal {
                 scrollback: Scrollback::new(DEFAULT_SCROLLBACK),
                 mouse: MouseModes::default(),
                 bracketed_paste: false,
+                focus_events: false,
+                insert_mode: false,
                 synchronized: false,
                 frame_ended: false,
                 selection: None,
@@ -488,6 +494,19 @@ impl State {
     }
 }
 
+/// The version DA2 and XTVERSION report.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// [`VERSION`] as one number, `major * 10000 + minor * 100 + patch` (0.13.0
+/// is 1300), as xterm reports its patch level in DA2.
+fn version_number() -> u32 {
+    VERSION
+        .split('.')
+        .take(3)
+        .map(|part| part.parse::<u32>().unwrap_or(0))
+        .fold(0, |number, part| number * 100 + part)
+}
+
 /// The style of SGR 4 with sub-parameter `sub` (`4:x`; plain 4 is single),
 /// `None` for an unknown one, which leaves the pen alone.
 fn underline_style(sub: Option<u16>) -> Option<Underline> {
@@ -565,6 +584,9 @@ impl vte::Perform for State {
             } else {
                 self.screen.col -= 1;
             }
+        }
+        if self.insert_mode {
+            self.insert_chars(1 + u16::from(wide));
         }
         let (col, row) = (self.screen.col, self.screen.row);
         let end = col + u16::from(wide);
@@ -684,6 +706,28 @@ impl vte::Perform for State {
             }
             return;
         }
+        // DECRQM for an ANSI mode: `CSI Ps $ p`.
+        if intermediates == b"$" {
+            if action == 'p' {
+                self.report_ansi_mode(first);
+            }
+            return;
+        }
+        // DA2 (`CSI > c`) and XTVERSION (`CSI > q`).
+        if intermediates == b">" {
+            match action {
+                'c' if first == 0 => {
+                    let reply = format!("\x1b[>1;{};0c", version_number());
+                    self.responses.extend_from_slice(reply.as_bytes());
+                }
+                'q' if first == 0 => {
+                    let reply = format!("\x1bP>|nxgterm {VERSION}\x1b\\");
+                    self.responses.extend_from_slice(reply.as_bytes());
+                }
+                _ => {}
+            }
+            return;
+        }
         // DECSCUSR: 0-2 block, 3-4 underline, 5-6 bar (odd ones blink).
         if intermediates == b" " {
             if action == 'q' {
@@ -715,6 +759,11 @@ impl vte::Perform for State {
             }
             (true, 'S') => self.graphics_attributes(first),
             (true, _) => {}
+            (false, 'h' | 'l') => {
+                for p in params.iter() {
+                    self.set_ansi_mode(p[0], action == 'h');
+                }
+            }
             (false, 'A') => self.cursor_up(n),
             (false, 'B') => self.cursor_down(n),
             (false, 'C') => self.goto(col.saturating_add(n), row),
@@ -1090,6 +1139,62 @@ mod tests {
                 shape: CursorShape::Block,
             }
         );
+    }
+
+    #[test]
+    fn focus_event_mode_is_set_reported_and_reset() {
+        let mut t = term(4, 1);
+        assert!(!t.modes().focus_events);
+        t.advance(b"\x1b[?1004h\x1b[?1004$p");
+        assert!(t.modes().focus_events);
+        assert_eq!(t.take_responses(), b"\x1b[?1004;1$y");
+        t.advance(b"\x1b[?1004l");
+        assert!(!t.modes().focus_events);
+        t.advance(b"\x1b[?1004h\x1bc");
+        assert!(!t.modes().focus_events, "RIS turns it off");
+    }
+
+    /// The version as DA2 reports it: 0.13.0 is 1300.
+    fn version_number() -> u32 {
+        let mut parts = env!("CARGO_PKG_VERSION")
+            .split('.')
+            .map(|p| p.parse::<u32>().unwrap());
+        let mut next = || parts.next().unwrap();
+        next() * 10000 + next() * 100 + next()
+    }
+
+    #[test]
+    fn da2_and_xtversion_name_the_terminal_and_its_version() {
+        let mut t = term(4, 1);
+        t.advance(b"\x1b[>c\x1b[>0c");
+        let da2 = format!("\x1b[>1;{};0c", version_number());
+        assert_eq!(t.take_responses(), format!("{da2}{da2}").as_bytes());
+        t.advance(b"\x1b[>q");
+        let version = format!("\x1bP>|nxgterm {}\x1b\\", env!("CARGO_PKG_VERSION"));
+        assert_eq!(t.take_responses(), version.as_bytes());
+        t.advance(b"\x1b[c");
+        assert_eq!(t.take_responses(), b"\x1b[?62;4;22c", "DA1 unchanged");
+    }
+
+    #[test]
+    fn ansi_decrqm_reports_insert_mode() {
+        let mut t = term(4, 1);
+        t.advance(b"\x1b[4$p\x1b[4h\x1b[4$p\x1b[20$p");
+        assert_eq!(t.take_responses(), b"\x1b[4;2$y\x1b[4;1$y\x1b[20;0$y");
+    }
+
+    #[test]
+    fn insert_mode_pushes_the_rest_of_the_line_right() {
+        let mut t = term(4, 1);
+        t.advance(b"abc\r\x1b[4hX");
+        assert_eq!(text(&t, 0), "Xabc");
+        t.advance(b"\x1b[4lY");
+        assert_eq!(text(&t, 0), "XYbc", "replace mode again");
+        t.advance(b"\r\x1b[4hZ");
+        assert_eq!(text(&t, 0), "ZXYb", "the last char falls off the edge");
+        t.advance(b"\x1bc");
+        t.advance(b"ab\rc");
+        assert_eq!(text(&t, 0), "cb", "RIS ends insert mode");
     }
 
     #[test]

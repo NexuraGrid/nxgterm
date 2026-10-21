@@ -137,7 +137,7 @@ bounded scrollback, ~1,040 tests.
     9 (strike), 53 (overline), `4:x` underline styles; draw underline,
     strike and overline in both renderers
   - [x] T8b DECSCUSR cursor shapes (block, bar, underline) in both renderers
-  - [ ] T8c Focus events 1004, DA2, XTVERSION, ANSI DECRQM, IRM
+  - [x] T8c Focus events 1004, DA2, XTVERSION, ANSI DECRQM, IRM
   - [ ] T8d ConPTY passthrough via our own `CreatePseudoConsole` (S8)
   - [ ] T8e OSC 10/11/12 color queries and OSC 7 cwd
   - [ ] T8f In-window notices for config errors and restart-only changes (S9)
@@ -445,6 +445,17 @@ bounded scrollback, ~1,040 tests.
   are shared by both renderers. RED (compile: core, paint, GPU tests)
   then GREEN; fmt, clippy (both targets), 1165 tests pass. Blink not
   drawn.
+
+- 2026-10-20: T8c done inline. Core: mode 1004 (`Modes::focus_events`,
+  DECRQM-able, RIS clears); DA2 `CSI > c` replies `CSI > 1 ; V ; 0 c`
+  with V = major*10000+minor*100+patch (1300 for 0.13.0); XTVERSION
+  `CSI > q` replies `DCS > | nxgterm <version> ST`; ANSI DECRQM
+  `CSI Ps $ p` answers mode 4 (1/2) and 0 otherwise (the old test that
+  pinned "no reply" now pins the ANSI-form 0 reply); IRM `CSI 4 h/l`
+  makes print insert cells (ICH) first. App: `WindowEvent::Focused`
+  sends `CSI I`/`CSI O` to the focused pane when 1004 is on. Not done:
+  focus reports on pane switches inside the window. RED (compile, 4 core
+  tests + 1 app test) then GREEN; fmt, clippy (both targets), 1170 tests.
 
 ## Delivery
 
