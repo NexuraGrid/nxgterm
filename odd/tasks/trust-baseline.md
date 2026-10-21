@@ -524,7 +524,12 @@ Slices 1–3 merged as #69, #70, #71; released as 0.12.0.
 - T8a slice (390 lines) and T8b/T8c slice (352 lines): medium risk,
   under budget, no review due.
 - T8e slice (337 lines): medium risk, under budget, no review due.
+- 2026-10-20: #77-#81 merged into main in order (merge commits); released
+  as 0.14.0 (#82, tag v0.14.0). User: "merguea todo y genera la release
+  para probar las cosas por favor hehcas hasta ahora y por favor guarda
+  todo".
 
 ## Next step
 
-Phase 6 (T8).
+T8f (in-window notices for config errors and restart-only changes), then
+T8g-T8l. 0.14.0 waits for the user's test on native Windows.
