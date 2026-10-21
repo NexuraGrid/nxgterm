@@ -108,18 +108,19 @@ impl State {
             self.screen.resize(size);
             if let Some(main) = &mut self.dormant {
                 // Its placements are stashed; they stay where they were.
-                resize_main(main, &mut self.scrollback, size);
+                resize_main(main, &mut self.scrollback, size, &mut []);
             }
             return;
         }
-        let moved = resize_main(&mut self.screen, &mut self.scrollback, size);
-        // Placements move with their rows, like a scroll.
+        let placements = self.images.placements_mut();
+        let moved = resize_main(&mut self.screen, &mut self.scrollback, size, placements);
+        // Placements move with their rows, like a scroll; up by 0 drops the
+        // ones a reflow pushed off the screen.
         match u32::try_from(moved) {
-            Ok(0) => {}
             Ok(up) => self.images.scroll_up(up, self.cell),
             Err(_) => {
                 let down = u32::try_from(moved.unsigned_abs()).unwrap_or(u32::MAX);
-                self.images.scroll_region_down(0, size.rows() - 1, down);
+                self.images.scroll_down(down, size.rows());
             }
         }
         if let Some(alt) = &mut self.dormant {

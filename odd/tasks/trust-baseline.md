@@ -116,11 +116,11 @@ bounded scrollback, ~1,040 tests.
   cmap table length against file size before allocating; scope AltGr
   detection to Windows (or document); fix Ctrl-code doc
 - [x] T6 Phase 4 — resize without losing content (S2)
-- [ ] T6b Phase 4 review follow-ups (advisory): the dropped-input notice is
+- [x] T6b Phase 4 review follow-ups (advisory): the dropped-input notice is
   injected into the parse stream (may land inside an app escape sequence);
   pending-input counter can leak when the writer thread ends; image placements
   are not moved on reflow; redraw request ignored after some resizes; test
-  image scroll on height change
+  image scroll on height change (inline; 21e1011, d596ef8)
 - [ ] T7 Phase 5 — per-frame CPU (R4, R6, R8)
 - [ ] T8 Phase 6 — sequences, ConPTY passthrough, notices, fuzzing (S7–S11, R5, R7)
 
@@ -355,6 +355,27 @@ bounded scrollback, ~1,040 tests.
   x86_64-pc-windows-gnu), `cargo test --workspace` (1145, replay
   fixtures included) pass. Not tried in a window (WSLg).
 
+- 2026-10-20: T6b done (inline: understood follow-ups, no writer
+  trigger), two commits on `feat/trust-baseline-5-t6b`. Notice:
+  `Terminal::notice` writes nxgterm's message through a fresh
+  `vte::Parser`, so the child's half-written sequence survives. Input:
+  `Input::send` returns Ok without queueing once the writer thread
+  finished (bytes queued behind a failed write no longer fill the queue
+  and trigger a false "dropped" notice). Images: a reflow moves each
+  placement with its anchor cell (a point in `rewrap`), keeps the
+  distance to the cursor below the used rows, and drops those pushed
+  off screen; growing the height moves every placement down
+  (`ImageStore::scroll_down`), history-anchored ones included. Redraw:
+  the frame retry counter (`FrameRetries`) only reset on a drawn frame,
+  so after 3 transient failures (occluded window) the redraw of the next
+  resize was never retried; it now resets on `Resized` too. RED observed
+  (writer-end test, notice test, 3 image tests; a shrink test pins the
+  existing height-scroll behavior; compile RED for `FrameRetries`) then
+  GREEN; fmt, clippy `-D warnings` (also x86_64-pc-windows-gnu),
+  `cargo test --workspace` (1152) pass. The redraw finding's original
+  wording was not on record; the retry counter is the matching cause
+  found. Not tried in a window (WSLg).
+
 ## Delivery
 
 Strategy: `ask-on-risk`; chain strategy chosen 2026-10-20: `stacked-to-main`.
@@ -363,7 +384,8 @@ Slices (local branches, not pushed):
 - `feat/trust-baseline-2-memory`: b5163ad..1ba2576 (T4, T4b)
 - `feat/trust-baseline-3-input`: 1ba2576..9fbc454 (T5)
 Slices 1–3 merged as #69, #70, #71; released as 0.12.0.
-- `feat/trust-baseline-4-resize`: 22eb1aa..HEAD (T5b, T6) Forecast for phase 1: ~400–600 authored lines.
+- `feat/trust-baseline-4-resize`: 22eb1aa..HEAD (T5b, T6); merged as #73, released as 0.13.0.
+- `feat/trust-baseline-5-t6b`: main..d596ef8 (T6b) Forecast for phase 1: ~400–600 authored lines.
 
 ## Review log
 
@@ -382,6 +404,8 @@ Slices 1–3 merged as #69, #70, #71; released as 0.12.0.
   and acknowledged. Reviewed boundary: 6bc7840.
 - T5b/T6 (737db6e..16f37f8): medium risk, consent granted, 1 lens, approved
   and acknowledged. Reviewed boundary: 16f37f8.
+- T6b (main..d596ef8): medium risk, under budget (241 lines), no review
+  due; pending in the slice.
 
 ## Next step
 
