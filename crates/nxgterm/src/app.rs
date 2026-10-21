@@ -149,6 +149,8 @@ struct Session {
     /// Consecutive skipped frames; bounds retries so a surface that keeps
     /// failing (e.g. occluded) does not spin the event loop.
     frame_retries: FrameRetries,
+    /// The window button masks, drawn once per size.
+    button_masks: title_bar::Masks,
     /// Wheel movement not yet worth a whole line.
     wheel: Wheel,
     /// What the pressed button holds the pointer for, and the cell last
@@ -313,6 +315,7 @@ impl App {
             bar_pressed: None,
             bar_drag_press: None,
             frame_retries: FrameRetries::default(),
+            button_masks: title_bar::Masks::default(),
             wheel: Wheel::default(),
             pointer: Pointer::default(),
             divider_hover: None,
@@ -2067,15 +2070,27 @@ impl Session {
         };
         let maximized = self.window.is_maximized();
         shapes.extend(match self.title_bar.button_style {
-            ButtonStyle::Circles => {
-                title_bar::circle_shapes(&buttons, hover, maximized, self.scale, &colors)
-            }
+            ButtonStyle::Circles => title_bar::circle_shapes(
+                &mut self.button_masks,
+                &buttons,
+                hover,
+                maximized,
+                self.scale,
+                &colors,
+            ),
             ButtonStyle::Windows => {
                 let colors = ButtonColors {
                     glyph: colors.foreground,
                     hover: dim(colors.background, colors.foreground, WINDOWS_HOVER),
                 };
-                title_bar::button_shapes(&buttons, hover, maximized, self.scale, colors)
+                title_bar::button_shapes(
+                    &mut self.button_masks,
+                    &buttons,
+                    hover,
+                    maximized,
+                    self.scale,
+                    colors,
+                )
             }
         });
         shapes

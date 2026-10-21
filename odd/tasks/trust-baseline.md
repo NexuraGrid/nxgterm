@@ -121,7 +121,15 @@ bounded scrollback, ~1,040 tests.
   pending-input counter can leak when the writer thread ends; image placements
   are not moved on reflow; redraw request ignored after some resizes; test
   image scroll on height change (inline; 21e1011, d596ef8)
-- [ ] T7 Phase 5 — per-frame CPU (R4, R6, R8)
+- [ ] T7 Phase 5 — per-frame CPU (R4, R6, R8), split after mapping (2026-10-20):
+  - [x] T7a Title bar button masks built once per (button, size, stroke,
+    maximized) instead of stroked and hashed every frame (inline)
+  - [ ] T7b Window icon as one cached mask set instead of ~1000 one-pixel
+    shapes cloned per frame (inline)
+  - [ ] T7c Title text without a new atlas slot per title; atlas keeps
+    working when full (R8) (inline)
+  - [ ] T7d Skip rebuilding an unchanged GPU frame; CPU renderer presents
+    only damaged rows (R4, R6) (inline)
 - [ ] T8 Phase 6 — sequences, ConPTY passthrough, notices, fuzzing (S7–S11, R5, R7)
 
 ## Acceptance criteria
@@ -375,6 +383,16 @@ bounded scrollback, ~1,040 tests.
   `cargo test --workspace` (1152) pass. The redraw finding's original
   wording was not on record; the retry counter is the matching cause
   found. Not tried in a window (WSLg).
+
+- 2026-10-20: user report (v0.13.0, Windows, WSL just opened): nxgterm
+  8.2% CPU / 167.1 MB vs WezTerm 1.2% / 88.5 MB in Task Manager. User:
+  "quiero saber porque el nxgterm consume mas que wezerm cuando abri en
+  los 2 wsl osea solo abri wsl y ya". Mapping found no idle wakeup
+  (`Wait` control flow, no blink, blocking threads); each redraw rebuilds
+  everything, and title bar button masks are re-stroked and SipHashed
+  every frame. Asked the user which child process holds the CPU
+  (nxgterm.exe vs OpenConsole.exe/wsl.exe) and whether it stays after
+  30 s idle; not measurable here (no Xvfb, WSLg crashes).
 
 ## Delivery
 

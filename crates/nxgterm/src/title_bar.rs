@@ -15,6 +15,7 @@
 //! text mask), so it scales with the display and the configured height
 //! rather than with the font's glyphs.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Instant;
@@ -85,7 +86,7 @@ impl Chrome {
 }
 
 /// A window button.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Button {
     Minimize,
     Maximize,
@@ -327,6 +328,7 @@ pub struct ButtonColors {
 /// (see [`glyph`]) centered in its button. `maximized` picks the restore
 /// glyph.
 pub fn button_shapes(
+    masks: &mut Masks,
     buttons: &[(Button, Rect)],
     hover: Option<Button>,
     maximized: bool,
@@ -351,17 +353,7 @@ pub fn button_shapes(
             });
         }
         let (side, stroke) = glyph_metrics(rect.height, scale);
-        // A margin as wide as the stroke keeps the caps of the `X` inside.
-        let margin = stroke as f32;
-        let segments: Vec<Segment> = glyph(button, maximized, side, stroke)
-            .into_iter()
-            .map(|Segment { from, to }| Segment {
-                from: (from.0 + margin, from.1 + margin),
-                to: (to.0 + margin, to.1 + margin),
-            })
-            .collect();
-        let size = side + 2 * stroke;
-        let mask = Mask::stroke(size, size, &segments, stroke as f32);
+        let mask = masks.glyph(button, maximized, side, stroke);
         let (box_x, box_y) = (
             rect.x + rect.width.saturating_sub(side) as i32 / 2,
             rect.y + rect.height.saturating_sub(side) as i32 / 2,
@@ -369,11 +361,69 @@ pub fn button_shapes(
         shapes.push(Shape::Mask {
             x: box_x - stroke as i32,
             y: box_y - stroke as i32,
-            mask: Arc::new(mask),
+            mask,
             color,
         });
     }
     shapes
+}
+
+/// The masks of the window buttons, drawn once for each size and kept:
+/// stroking them anew every frame costs a distance per pixel per segment.
+#[derive(Debug, Default)]
+pub struct Masks(HashMap<MaskKey, Arc<Mask>>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum MaskKey {
+    Glyph {
+        button: Button,
+        maximized: bool,
+        side: u32,
+        stroke: u32,
+    },
+    Disc(u32),
+}
+
+impl Masks {
+    /// More than the sizes a window goes through between scale changes;
+    /// past it the cache starts over.
+    const MAX: usize = 64;
+
+    /// The symbol of `button` (see [`glyph`]) `side` pixels square, drawn
+    /// `stroke` pixels wide with a margin as wide as the stroke, which
+    /// keeps the caps of the `X` inside.
+    fn glyph(&mut self, button: Button, maximized: bool, side: u32, stroke: u32) -> Arc<Mask> {
+        let key = MaskKey::Glyph {
+            button,
+            maximized,
+            side,
+            stroke,
+        };
+        self.get_or_draw(key, || {
+            let margin = stroke as f32;
+            let segments: Vec<Segment> = glyph(button, maximized, side, stroke)
+                .into_iter()
+                .map(|Segment { from, to }| Segment {
+                    from: (from.0 + margin, from.1 + margin),
+                    to: (to.0 + margin, to.1 + margin),
+                })
+                .collect();
+            let size = side + 2 * stroke;
+            Mask::stroke(size, size, &segments, stroke as f32)
+        })
+    }
+
+    /// A disc `side` pixels across.
+    fn disc(&mut self, side: u32) -> Arc<Mask> {
+        self.get_or_draw(MaskKey::Disc(side), || Mask::disc(side))
+    }
+
+    fn get_or_draw(&mut self, key: MaskKey, draw: impl FnOnce() -> Mask) -> Arc<Mask> {
+        if !self.0.contains_key(&key) && self.0.len() >= Self::MAX {
+            self.0.clear();
+        }
+        Arc::clone(self.0.entry(key).or_insert_with(|| Arc::new(draw())))
+    }
 }
 
 /// The window edge a press at `x`, `y` pixels resizes in a `width` x
@@ -533,6 +583,7 @@ pub fn brighten(color: Rgb) -> Rgb {
 /// shows its symbol (see [`glyph`]), as on macOS, in a darker shade of its
 /// color. `maximized` picks the restore symbol.
 pub fn circle_shapes(
+    masks: &mut Masks,
     buttons: &[(Button, Rect)],
     hover: Option<Button>,
     maximized: bool,
@@ -551,7 +602,7 @@ pub fn circle_shapes(
             Shape::Mask {
                 x: rect.x,
                 y: rect.y,
-                mask: Arc::new(Mask::disc(rect.width)),
+                mask: masks.disc(rect.width),
                 color: if hover == Some(button) {
                     brighten(color)
                 } else {
@@ -566,19 +617,11 @@ pub fn circle_shapes(
     let stroke = appearance::valid_scale(scale).round().max(1.0) as u32;
     for &(button, rect) in buttons {
         let side = (f64::from(rect.width) * 0.5).round().max(3.0) as u32;
-        let segments: Vec<Segment> = glyph(button, maximized, side, stroke)
-            .into_iter()
-            .map(|Segment { from, to }| Segment {
-                from: (from.0 + stroke as f32, from.1 + stroke as f32),
-                to: (to.0 + stroke as f32, to.1 + stroke as f32),
-            })
-            .collect();
-        let size = side + 2 * stroke;
         let inset = rect.width.saturating_sub(side) as i32 / 2 - stroke as i32;
         shapes.push(Shape::Mask {
             x: rect.x + inset,
             y: rect.y + inset,
-            mask: Arc::new(Mask::stroke(size, size, &segments, stroke as f32)),
+            mask: masks.glyph(button, maximized, side, stroke),
             color: dim(color_of(button), rgb(0, 0, 0), SYMBOL_DARKEN),
         });
     }
@@ -905,10 +948,58 @@ mod tests {
         hover: rgb(60, 60, 60),
     };
 
+    /// The masks of `shapes`, in order.
+    fn masks(shapes: &[Shape]) -> Vec<Arc<Mask>> {
+        shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Mask { mask, .. } => Some(Arc::clone(mask)),
+                Shape::Rect { .. } => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn button_masks_are_drawn_once_and_reused_every_frame() {
+        let mut cache = Masks::default();
+        let buttons = button_rects(1000, 32, 1.0);
+        let first = masks(&button_shapes(
+            &mut cache, &buttons, None, false, 1.0, COLORS,
+        ));
+        let hover = Some(Button::Close);
+        let second = masks(&button_shapes(
+            &mut cache, &buttons, hover, false, 1.0, COLORS,
+        ));
+        assert_eq!(first.len(), 3);
+        assert!(first.iter().zip(&second).all(|(a, b)| Arc::ptr_eq(a, b)));
+        let restore = masks(&button_shapes(
+            &mut cache, &buttons, None, true, 1.0, COLORS,
+        ));
+        assert!(
+            !Arc::ptr_eq(&first[1], &restore[1]),
+            "maximized: restore glyph"
+        );
+    }
+
+    #[test]
+    fn circle_masks_are_drawn_once_and_reused_every_frame() {
+        let mut cache = Masks::default();
+        let circles = circle_rects(1000, 34, 1.0);
+        let hover = Some(Button::Maximize);
+        let first = masks(&circle_shapes(
+            &mut cache, &circles, hover, false, 1.0, &BAR,
+        ));
+        let second = masks(&circle_shapes(
+            &mut cache, &circles, hover, false, 1.0, &BAR,
+        ));
+        assert_eq!(first.len(), 6, "discs and symbols");
+        assert!(first.iter().zip(&second).all(|(a, b)| Arc::ptr_eq(a, b)));
+    }
+
     #[test]
     fn button_shapes_center_the_glyphs_and_show_the_hover() {
         let buttons = button_rects(1000, 32, 1.0);
-        let shapes = button_shapes(&buttons, None, false, 1.0, COLORS);
+        let shapes = button_shapes(&mut Masks::default(), &buttons, None, false, 1.0, COLORS);
         assert_eq!(shapes.len(), 3, "glyphs only");
         let Shape::Mask { x, y, mask, color } = &shapes[2] else {
             panic!("close glyph: {shapes:?}");
@@ -917,7 +1008,14 @@ mod tests {
         assert_eq!((*x, *y, mask.width(), mask.height()), (971, 10, 12, 12));
         assert_eq!(*color, COLORS.glyph);
 
-        let hovered = button_shapes(&buttons, Some(Button::Close), false, 1.0, COLORS);
+        let hovered = button_shapes(
+            &mut Masks::default(),
+            &buttons,
+            Some(Button::Close),
+            false,
+            1.0,
+            COLORS,
+        );
         assert_eq!(
             hovered[2],
             Shape::Rect {
@@ -932,7 +1030,14 @@ mod tests {
             panic!("close glyph: {hovered:?}");
         };
         assert_eq!(*color, CLOSE_HOVER_GLYPH);
-        let minimize = button_shapes(&buttons, Some(Button::Minimize), false, 1.0, COLORS);
+        let minimize = button_shapes(
+            &mut Masks::default(),
+            &buttons,
+            Some(Button::Minimize),
+            false,
+            1.0,
+            COLORS,
+        );
         assert!(matches!(minimize[0], Shape::Rect { x: 862, color, .. } if color == COLORS.hover));
     }
 
@@ -940,7 +1045,14 @@ mod tests {
     fn button_shapes_scale_with_the_display() {
         let at = |scale: f64, bar: u32, maximized: bool| {
             let buttons = button_rects(2000, bar, scale);
-            let shapes = button_shapes(&buttons, None, maximized, scale, COLORS);
+            let shapes = button_shapes(
+                &mut Masks::default(),
+                &buttons,
+                None,
+                maximized,
+                scale,
+                COLORS,
+            );
             match &shapes[1] {
                 Shape::Mask { x, y, mask, .. } => (*x, *y, mask.width()),
                 other => panic!("maximize glyph: {other:?}"),
@@ -1067,7 +1179,7 @@ mod tests {
     #[test]
     fn circles_are_colored_discs_with_symbols_under_the_pointer() {
         let circles = circle_rects(1000, 34, 1.0);
-        let plain = circle_shapes(&circles, None, false, 1.0, &BAR);
+        let plain = circle_shapes(&mut Masks::default(), &circles, None, false, 1.0, &BAR);
         assert_eq!(plain.len(), 3, "discs only");
         let colors: Vec<Rgb> = plain
             .iter()
@@ -1082,7 +1194,14 @@ mod tests {
             .collect();
         assert_eq!(colors, [BAR.minimize, BAR.maximize, BAR.close]);
 
-        let hovered = circle_shapes(&circles, Some(Button::Maximize), false, 1.0, &BAR);
+        let hovered = circle_shapes(
+            &mut Masks::default(),
+            &circles,
+            Some(Button::Maximize),
+            false,
+            1.0,
+            &BAR,
+        );
         assert_eq!(hovered.len(), 6, "discs, then every symbol");
         let Shape::Mask { color, .. } = &hovered[1] else {
             panic!("maximize disc: {hovered:?}");
