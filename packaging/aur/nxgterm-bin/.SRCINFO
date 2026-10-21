@@ -1,6 +1,6 @@
 pkgbase = nxgterm-bin
 	pkgdesc = Fast, configurable, cross-platform terminal emulator (prebuilt binary)
-	pkgver = 0.13.0
+	pkgver = 0.14.0
 	pkgrel = 1
 	url = https://github.com/NexuraGrid/nxgterm
 	arch = x86_64
@@ -20,9 +20,9 @@ pkgbase = nxgterm-bin
 	optdepends = libglvnd: GPU renderer (OpenGL ES)
 	provides = nxgterm
 	conflicts = nxgterm
-	source_x86_64 = https://github.com/NexuraGrid/nxgterm/releases/download/v0.13.0/nxgterm-0.13.0-x86_64-linux.tar.gz
-	sha256sums_x86_64 = da515bcff04c9608fc25a299dc3c35467967882e9414720315b37798c0d58c40
-	source_aarch64 = https://github.com/NexuraGrid/nxgterm/releases/download/v0.13.0/nxgterm-0.13.0-aarch64-linux.tar.gz
-	sha256sums_aarch64 = ef5b6a7d595911cd3756acb79c0a5e7f9f89707f627b082acbafc7018bb11a29
+	source_x86_64 = https://github.com/NexuraGrid/nxgterm/releases/download/v0.14.0/nxgterm-0.14.0-x86_64-linux.tar.gz
+	sha256sums_x86_64 = 0fb4fd9c162d6bfad7a80fecb404cc2e098300e44d9f857a5bd6a95ea83d9fdd
+	source_aarch64 = https://github.com/NexuraGrid/nxgterm/releases/download/v0.14.0/nxgterm-0.14.0-aarch64-linux.tar.gz
+	sha256sums_aarch64 = 584bcfb423aace4f7ea646bbbea05e7f5dfebb275479c3b7a293ba75923db1b2
 
 pkgname = nxgterm-bin
