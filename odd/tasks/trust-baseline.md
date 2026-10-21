@@ -138,7 +138,7 @@ bounded scrollback, ~1,040 tests.
     strike and overline in both renderers
   - [x] T8b DECSCUSR cursor shapes (block, bar, underline) in both renderers
   - [x] T8c Focus events 1004, DA2, XTVERSION, ANSI DECRQM, IRM
-  - [ ] T8d ConPTY passthrough via our own `CreatePseudoConsole` (S8)
+  - [-] T8d (dropped: obsolete, see Log 2026-10-20) ConPTY passthrough via our own `CreatePseudoConsole` (S8)
   - [ ] T8e OSC 10/11/12 color queries and OSC 7 cwd
   - [ ] T8f In-window notices for config errors and restart-only changes (S9)
   - [ ] T8g DEC special graphics and tab stops (HTS, TBC, CHT, CBT)
@@ -456,6 +456,19 @@ bounded scrollback, ~1,040 tests.
   sends `CSI I`/`CSI O` to the focused pane when 1004 is on. Not done:
   focus reports on pane switches inside the window. RED (compile, 4 core
   tests + 1 app test) then GREEN; fmt, clippy (both targets), 1170 tests.
+
+- 2026-10-20: T8d dropped before any code. Evidence: microsoft/terminal
+  PR #17510 ("Goodbye VtEngine Edition", merged 2024-08-01, shipped in
+  ConPTY 1.22+) translates Console API calls straight to VT, so "any VT
+  output that an application generates will now be given to the
+  terminal unmodified". Current `src/winconpty/winconpty.cpp` maps only
+  INHERIT_CURSOR, AMBIGUOUS_IS_WIDE and the GLYPH_WIDTH flags;
+  `src/inc/conpty-static.h` now defines 0x08 (the old
+  PSEUDOCONSOLE_PASSTHROUGH_MODE value) as
+  PSEUDOCONSOLE_GLYPH_WIDTH_GRAPHEMES. We bundle ConPTY 1.25, so VT
+  already passes through, and setting 0x08 would change width
+  measurement instead. Possible follow-up (not requested): pass
+  GLYPH_WIDTH_WCSWIDTH so ConPTY measures widths like nxg-core.
 
 ## Delivery
 
