@@ -138,7 +138,8 @@ theme = "catppuccin-mocha"
 
 [shell]
 # Program to run instead of the platform default ($SHELL on Unix; PowerShell 7,
-# then Windows PowerShell, then cmd.exe on Windows), and its arguments.
+# then Windows PowerShell, then cmd.exe on Windows), and its arguments. args
+# apply only with program, since the default shell may not accept them.
 # program = "pwsh.exe"
 # args = ["-NoLogo"]
 # Where shells start: "auto" (the directory nxgterm was started from, or the
@@ -433,6 +434,16 @@ pub struct ShellConfig {
     /// Where shells start; see [`WorkingDirectory::resolve`].
     #[serde(deserialize_with = "working_dir::deserialize")]
     pub working_directory: WorkingDirectory,
+}
+
+impl ShellConfig {
+    /// Why part of `[shell]` is ignored, to log: `args` without `program`,
+    /// since the default shell differs per machine and may reject them.
+    pub fn warning(&self) -> Option<&'static str> {
+        (self.program.is_none() && !self.args.is_empty()).then_some(
+            "[shell] args are ignored without [shell] program; set program to the shell they are for",
+        )
+    }
 }
 
 /// `[renderer]`
@@ -1150,6 +1161,19 @@ mod tests {
         let config = parse("[font]\nfamily = \"  \"\n[shell]\nprogram = \"\"\n").unwrap();
         assert!(config.font.family.is_empty());
         assert_eq!(config.shell.program, None);
+    }
+
+    #[test]
+    fn shell_args_without_a_program_warn() {
+        let shell = |text: &str| parse(text).unwrap().shell;
+        let warning = shell("[shell]\nargs = [\"-NoLogo\"]\n").warning().unwrap();
+        assert!(warning.contains("program"), "{warning}");
+        assert_eq!(
+            shell("[shell]\nprogram = \"pwsh.exe\"\nargs = [\"-NoLogo\"]\n").warning(),
+            None
+        );
+        assert_eq!(shell("[shell]\nprogram = \"pwsh.exe\"\n").warning(), None);
+        assert_eq!(Config::default().shell.warning(), None);
     }
 
     #[test]
