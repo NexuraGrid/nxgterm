@@ -1,6 +1,6 @@
 pkgbase = nxgterm
 	pkgdesc = Fast, configurable, cross-platform terminal emulator
-	pkgver = 0.15.0
+	pkgver = 0.16.0
 	pkgrel = 1
 	url = https://github.com/NexuraGrid/nxgterm
 	arch = x86_64
@@ -19,7 +19,7 @@ pkgbase = nxgterm
 	optdepends = libxkbcommon-x11: X11 keyboard layouts
 	optdepends = vulkan-icd-loader: GPU renderer (Vulkan)
 	optdepends = libglvnd: GPU renderer (OpenGL ES)
-	source = https://github.com/NexuraGrid/nxgterm/releases/download/v0.15.0/nxgterm-0.15.0-source.tar.gz
-	sha256sums = b05b66712a7c4d15cb0e8fd69f6d6b464552e4d374a79aeaf5bbe49bf1c73233
+	source = https://github.com/NexuraGrid/nxgterm/releases/download/v0.16.0/nxgterm-0.16.0-source.tar.gz
+	sha256sums = a0d3ce53c11f5af818cc5779fb008a910ca6c0db148de93f66be833a69f27a64
 
 pkgname = nxgterm
