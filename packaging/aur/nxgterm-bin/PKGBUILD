@@ -3,7 +3,7 @@
 # packaging/update-manifests.sh, then regenerate .SRCINFO.
 
 pkgname=nxgterm-bin
-pkgver=0.14.0
+pkgver=0.15.0
 pkgrel=1
 pkgdesc="Fast, configurable, cross-platform terminal emulator (prebuilt binary)"
 arch=('x86_64' 'aarch64')
@@ -25,8 +25,8 @@ provides=('nxgterm')
 conflicts=('nxgterm')
 source_x86_64=("$url/releases/download/v$pkgver/nxgterm-$pkgver-x86_64-linux.tar.gz")
 source_aarch64=("$url/releases/download/v$pkgver/nxgterm-$pkgver-aarch64-linux.tar.gz")
-sha256sums_x86_64=('0fb4fd9c162d6bfad7a80fecb404cc2e098300e44d9f857a5bd6a95ea83d9fdd')
-sha256sums_aarch64=('584bcfb423aace4f7ea646bbbea05e7f5dfebb275479c3b7a293ba75923db1b2')
+sha256sums_x86_64=('ed4e5a8f7e4c7e683f4de87a1714b2513c68dd42404b1eb1696b7cf05ac04890')
+sha256sums_aarch64=('f934ac8e5959554f6a1c82b39ff98390c7693224fc8392a54841e4162e00850d')
 
 package() {
   cd "nxgterm-$pkgver-$CARCH-linux"
