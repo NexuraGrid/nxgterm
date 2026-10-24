@@ -444,6 +444,28 @@ impl ShellConfig {
             "[shell] args are ignored without [shell] program; set program to the shell they are for",
         )
     }
+
+    /// What to add to the error when `program` cannot be started and was
+    /// written with its arguments in one string, which runs as a single
+    /// program name: the same setting split into `program` and `args`.
+    /// It is never split for real, since paths can contain spaces.
+    pub fn spawn_hint(&self) -> Option<String> {
+        let program = self.program.as_deref()?;
+        let mut words = program.split_whitespace();
+        let (name, args) = (words.next()?, words.collect::<Vec<_>>());
+        if !self.args.is_empty() || args.is_empty() {
+            return None;
+        }
+        let args = args
+            .iter()
+            .map(|arg| format!("{arg:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!(
+            "[shell] program {program:?} could not be started; if it includes arguments, \
+             put them in args: program = {name:?}, args = [{args}]"
+        ))
+    }
 }
 
 /// `[renderer]`
@@ -1174,6 +1196,40 @@ mod tests {
         );
         assert_eq!(shell("[shell]\nprogram = \"pwsh.exe\"\n").warning(), None);
         assert_eq!(Config::default().shell.warning(), None);
+    }
+
+    #[test]
+    fn a_program_with_its_arguments_in_one_string_gets_a_hint() {
+        let shell = |text: &str| parse(text).unwrap().shell;
+        assert_eq!(
+            shell("[shell]\nprogram = \"powershell -NoLogo\"\n")
+                .spawn_hint()
+                .as_deref(),
+            Some(
+                "[shell] program \"powershell -NoLogo\" could not be started; if it \
+                 includes arguments, put them in args: program = \"powershell\", \
+                 args = [\"-NoLogo\"]"
+            )
+        );
+        assert_eq!(
+            shell("[shell]\nprogram = \"pwsh -NoLogo -NoProfile\"\n")
+                .spawn_hint()
+                .unwrap()
+                .rsplit_once(": ")
+                .unwrap()
+                .1,
+            "program = \"pwsh\", args = [\"-NoLogo\", \"-NoProfile\"]"
+        );
+        // Already split, or a single name: nothing to hint.
+        assert_eq!(
+            shell("[shell]\nprogram = \"pwsh.exe\"\nargs = [\"-NoLogo\"]\n").spawn_hint(),
+            None
+        );
+        assert_eq!(
+            shell("[shell]\nprogram = \"pwsh.exe\"\n").spawn_hint(),
+            None
+        );
+        assert_eq!(Config::default().shell.spawn_hint(), None);
     }
 
     #[test]

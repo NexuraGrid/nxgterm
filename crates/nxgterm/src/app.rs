@@ -2260,7 +2260,14 @@ fn spawn_pane(
         args: config.shell.args.clone(),
     });
     let backends = nxg_pty::backends_from_env(env::var(nxg_pty::ENV_VAR).ok().as_deref());
-    let pty = nxg_pty::spawn_shell_with(win_size, shell.as_ref(), cwd, backends)?;
+    let pty = nxg_pty::spawn_shell_with(win_size, shell.as_ref(), cwd, backends).map_err(
+        |error| -> Box<dyn Error> {
+            match config.shell.spawn_hint() {
+                Some(hint) => format!("{error}\n{hint}").into(),
+                None => error.into(),
+            }
+        },
+    )?;
     for attempt in &pty.skipped {
         eprintln!("nxgterm: skipped {}: {}", attempt.name, attempt.error);
     }
