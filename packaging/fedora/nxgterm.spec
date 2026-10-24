@@ -7,7 +7,7 @@
 %global debug_package %{nil}
 
 Name:           nxgterm
-Version:        0.14.0
+Version:        0.15.0
 Release:        1%{?dist}
 Summary:        Fast, configurable, cross-platform terminal emulator
 
@@ -79,6 +79,9 @@ cargo test --release --locked --workspace
 %{_datadir}/%{name}/
 
 %changelog
+* Sat Oct 24 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.15.0-1
+- Warn when [shell] args are set without [shell] program
+
 * Tue Oct 20 2026 NexuraGrid <https://github.com/NexuraGrid> - 0.14.0-1
 - Draw underline styles, strikethrough, overline, dim and hidden text
 - Cursor shapes (DECSCUSR), focus events, DA2, XTVERSION, insert mode
