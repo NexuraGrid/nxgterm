@@ -633,6 +633,7 @@ winpty (Windows Server 2016) does not pass images through either.
 22. 0.13.0: resize keeps content in scrollback and reflows wrapped lines; bounded pty input ✅
 23. 0.14.0: underline styles, strikethrough, dim; cursor shapes; focus events; OSC 10/11/12 color queries and OSC 7 directory ✅
 24. 0.15.0: a warning for `[shell] args` set without `[shell] program` ✅
+25. 0.16.0: a hint showing `[shell] program` split into `program` and `args` when a program written with its arguments cannot start ✅
 
 Planned work is tracked in
 [`openspec/RECOMMENDATIONS.md`](openspec/RECOMMENDATIONS.md).
