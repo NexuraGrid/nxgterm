@@ -331,6 +331,11 @@ copy_on_select = "primary"  # "primary" (Linux only), "clipboard", "both" or "of
 "ctrl+tab" = "none"               # free a default chord for the shell
 ```
 
+Shell arguments: `[shell] args` are passed to `[shell] program`, so set both,
+e.g. `program = "pwsh.exe"` with `args = ["-NoLogo"]` to hide the PowerShell
+banner. Without `program`, `args` are ignored (the default shell differs per
+machine and may not accept them) and nxgterm logs a warning.
+
 Built-in themes: `catppuccin-mocha` (default), `nxg-dark` (xterm colors),
 `nxg-light`, `tokyo-night`, `gruvbox-dark`, `dracula`, `nord`, `one-dark`.
 

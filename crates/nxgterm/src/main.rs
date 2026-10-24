@@ -109,6 +109,9 @@ fn run(
         }
     }
     let (config, files) = path.as_deref().map(load_config).unwrap_or_default();
+    if let Some(warning) = config.shell.warning() {
+        eprintln!("nxgterm: {warning}");
+    }
     let start_dir = start_directory(
         working_directory
             .as_ref()
