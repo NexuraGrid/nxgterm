@@ -334,7 +334,10 @@ copy_on_select = "primary"  # "primary" (Linux only), "clipboard", "both" or "of
 Shell arguments: `[shell] args` are passed to `[shell] program`, so set both,
 e.g. `program = "pwsh.exe"` with `args = ["-NoLogo"]` to hide the PowerShell
 banner. Without `program`, `args` are ignored (the default shell differs per
-machine and may not accept them) and nxgterm logs a warning.
+machine and may not accept them) and nxgterm logs a warning. Arguments go in
+`args`, not in `program`: `program = "powershell -NoLogo"` runs a program
+named `powershell -NoLogo`, and when it cannot start, the error shows the
+same setting split into `program` and `args`.
 
 Built-in themes: `catppuccin-mocha` (default), `nxg-dark` (xterm colors),
 `nxg-light`, `tokyo-night`, `gruvbox-dark`, `dracula`, `nord`, `one-dark`.
